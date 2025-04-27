@@ -218,7 +218,7 @@ func (h *GameHandlers) handleCreateRoom(message *Message) error {
 
 	room, err := h.gameManager.GetRoomSystem().CreateRoom(userID, options)
 	if err != nil {
-		return fmt.Errorf("创建房间失败: %w", err)
+		return fmt.Errorf("创建房间失败2: %w", err)
 	}
 
 	// 确保为每个房间创建一个游戏系统
@@ -812,7 +812,7 @@ func (h *GameHandlers) handleEnterRoom(message *Message) error {
 		}
 		room, err = h.gameManager.GetRoomSystem().CreateRoom(userID, options)
 		if err != nil {
-			return fmt.Errorf("创建房间失败: %w", err)
+			return fmt.Errorf("创建房间失败3: %w", err)
 		}
 
 		// 确保为房间创建游戏系统

@@ -349,7 +349,7 @@ func (s *RoomSystem) CreateRoom(ownerID int64, options RoomCreateOptions) (*Room
 
 	// 添加创建者到房间
 	if err := room.AddPlayer(owner); err != nil {
-		return nil, fmt.Errorf("创建房间失败: %v", err)
+		return nil, fmt.Errorf("创建房间失败1: %v", err)
 	}
 
 	// 添加房间到系统
