@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ddz-postgres
+    environment:
+      POSTGRES_DB: ddz
+      POSTGRES_USER: ddz
+      POSTGRES_PASSWORD: ddz
+    ports:
+      - "5432:5432"
+    volumes:
+      - ddz-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ddz -d ddz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ddz-postgres-data:

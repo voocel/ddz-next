@@ -1,0 +1,24 @@
+{
+  "name": "@ddz/smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "preflight": "tsx src/preflight.ts",
+    "smoke": "tsx src/full-stack-smoke.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@colyseus/sdk": "^0.17.42",
+    "@ddz/domain": "workspace:*",
+    "@ddz/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "vitest": "^4.0.14"
+  }
+}

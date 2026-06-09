@@ -1,0 +1,26 @@
+{
+  "name": "ddz-next",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A full TypeScript rewrite of the Dou Dizhu game with an authoritative server and Phaser client.",
+  "type": "module",
+  "packageManager": "pnpm@10.21.0",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "lint": "turbo lint",
+    "smoke:preflight": "pnpm --filter @ddz/smoke preflight",
+    "smoke:full-stack": "pnpm --filter @ddz/smoke smoke",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "prettier": "^3.6.2",
+    "turbo": "^2.6.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.3"
+  }
+}

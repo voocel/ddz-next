@@ -1,0 +1,33 @@
+{
+  "name": "@ddz/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "db:deploy": "node ../../scripts/with-root-env.mjs prisma migrate deploy --schema prisma/schema.prisma",
+    "db:generate": "node ../../scripts/with-root-env.mjs prisma generate --schema prisma/schema.prisma",
+    "db:migrate": "node ../../scripts/with-root-env.mjs prisma migrate dev --schema prisma/schema.prisma",
+    "db:studio": "node ../../scripts/with-root-env.mjs prisma studio --schema prisma/schema.prisma",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ddz/auth": "workspace:*",
+    "@ddz/protocol": "workspace:*",
+    "@fastify/cors": "^11.1.0",
+    "@prisma/client": "^6.19.0",
+    "fastify": "^5.6.2",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "prisma": "^6.19.0",
+    "tsx": "^4.20.6",
+    "vitest": "^4.0.14"
+  }
+}

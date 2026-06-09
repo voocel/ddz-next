@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  username     String        @unique
+  nickname     String
+  passwordHash String
+  coin         Int           @default(1000)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  coinLedgers  CoinLedger[]
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  status    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  rounds    Round[]
+  events    RoomEvent[]
+  mutations GameActionMutation[]
+}
+
+model RoomEvent {
+  id         String   @id @default(cuid())
+  roomId     String
+  room       Room     @relation(fields: [roomId], references: [id])
+  playerId   String?
+  playerKind String?
+  type       String
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@index([roomId, createdAt])
+}
+
+model Round {
+  id         String        @id @default(cuid())
+  roomId     String
+  room       Room          @relation(fields: [roomId], references: [id])
+  landlordId String?
+  startedAt  DateTime      @default(now())
+  endedAt    DateTime?
+  players    RoundPlayer[]
+  actions    GameAction[]
+  coinLedgers CoinLedger[]
+}
+
+model RoundPlayer {
+  id         String @id @default(cuid())
+  roundId    String
+  round      Round  @relation(fields: [roundId], references: [id])
+  playerId   String
+  playerKind String
+  seat       Int
+  score      Int    @default(0)
+  coinDelta  Int    @default(0)
+
+  @@unique([roundId, seat])
+  @@unique([roundId, playerId])
+}
+
+model GameAction {
+  id        String   @id @default(cuid())
+  roundId   String
+  round     Round    @relation(fields: [roundId], references: [id])
+  playerId  String?
+  playerKind String?
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([roundId, createdAt])
+}
+
+model GameActionMutation {
+  id                String   @id @default(cuid())
+  roomId            String
+  room              Room     @relation(fields: [roomId], references: [id])
+  mutationId        String
+  actionFingerprint String
+  roomEventIds      String[] @default([])
+  actionIds         String[] @default([])
+  roundId           String?
+  createdAt         DateTime @default(now())
+
+  @@unique([roomId, mutationId])
+  @@index([roomId, createdAt])
+}
+
+model CoinLedger {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  roundId   String
+  round     Round    @relation(fields: [roundId], references: [id])
+  delta     Int
+  balance   Int
+  reason    String
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([roundId])
+}
