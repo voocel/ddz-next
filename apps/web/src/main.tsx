@@ -1,14 +1,6 @@
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  formatActionType,
-  formatDateTime,
-  formatDelta,
-  formatReplayAction,
-  formatRoundDelta,
-  formatTurnTimer,
-  formatUser
-} from "./app/formatters";
+import { formatDateTime, formatDelta, formatRoundDelta, formatTurnTimer } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
 import "./styles.css";
 
@@ -19,7 +11,32 @@ const PhaserTable = lazy(async () => {
   };
 });
 
+type LobbyModalKind = "history" | "ledger" | "replay";
+
+function LobbyModal({
+  title,
+  onClose,
+  children
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <section className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <header className="modal-ribbon">{title}</header>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">
+          ×
+        </button>
+        <div className="modal-body">{children}</div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
+  const [lobbyModal, setLobbyModal] = useState<LobbyModalKind | null>(null);
   const {
     authMode,
     authStatus,
@@ -27,6 +44,7 @@ function App() {
     client,
     coinLedgers,
     createRoom,
+    enterRoom,
     events,
     handlePass,
     handlePlay,
@@ -47,7 +65,6 @@ function App() {
     roundHistory,
     selectedReplay,
     selectedRoom,
-    selectRoom,
     session,
     setAuthMode,
     setNickname,
@@ -66,15 +83,20 @@ function App() {
   if (!session) {
     return (
       <main className="auth-screen">
+        <img className="auth-mascot mascot-left" src="/assets/images/hall_user2.png" alt="" />
+        <img className="auth-mascot mascot-right" src="/assets/images/hall_user.png" alt="" />
         <section className="auth-card">
-          <div>
-            <p className="eyebrow">DDZ Next</p>
-            <h1>斗地主</h1>
-          </div>
+          <img className="auth-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
           <form className="auth-form" onSubmit={submitAuth}>
             <label>
               用户名
-              <input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} />
+              <input
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="例如 alice"
+                minLength={3}
+                maxLength={32}
+              />
             </label>
             {authMode === "register" ? (
               <label>
@@ -82,6 +104,7 @@ function App() {
                 <input
                   value={nickname}
                   onChange={(event) => setNickname(event.target.value)}
+                  placeholder="例如 Alice"
                   minLength={1}
                   maxLength={32}
                 />
@@ -93,15 +116,18 @@ function App() {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type="password"
+                placeholder="至少 6 位"
                 minLength={6}
                 maxLength={128}
               />
             </label>
             <div className="auth-actions">
-              <button type="submit">{authMode === "login" ? "登录" : "注册并登录"}</button>
+              <button type="submit" className="btn-jelly btn-orange btn-lg">
+                {authMode === "login" ? "开始游戏" : "注册并登录"}
+              </button>
               <button
                 type="button"
-                className="secondary-button"
+                className="btn-jelly btn-green"
                 onClick={() => setAuthMode((mode) => (mode === "login" ? "register" : "login"))}
               >
                 {authMode === "login" ? "注册新账号" : "返回登录"}
@@ -114,386 +140,162 @@ function App() {
     );
   }
 
-  if (!selectedRoom) {
+  if (!selectedRoom && !selectedReplay) {
+    // 选中回放（无房间）时也进入牌桌屏，走 table-replay-dock 回放控制
+    const historyRows = (
+      <div className="round-history">
+        {roundHistory.length ? (
+          roundHistory.map((round) => (
+            <button
+              key={round.id}
+              type="button"
+              className="history-row"
+              onClick={() => {
+                void loadReplay(round.id);
+              }}
+            >
+              <div>
+                <strong>{round.roomCode}</strong>
+                <span>{round.endedAt ? formatDateTime(round.endedAt) : "进行中"}</span>
+              </div>
+              <em>{formatRoundDelta(round, session.user.id)}</em>
+            </button>
+          ))
+        ) : (
+          <p className="empty-state">{historyStatus}</p>
+        )}
+      </div>
+    );
+
     return (
       <main className="lobby-screen">
         <header className="lobby-hud">
-          <div className="lobby-brand">
-            <img src="/assets/images/hall_logo_pic.png" alt="斗地主" />
-            <div>
-              <p className="eyebrow">DDZ Next</p>
-              <h1>牌局大厅</h1>
-            </div>
-          </div>
-          <div className="player-hud">
+          <div className="player-plate">
             <img src="/assets/images/avatar/1.png" alt="" />
             <div>
               <strong>{session.user.nickname}</strong>
               <span>{session.user.username}</span>
             </div>
-            <span className="coin-chip">
-              <img src="/assets/images/generated/coin.png" alt="" />
-              {coinLedgers[0]?.balance ?? 1000}
-            </span>
-            <button type="button" className="hud-button" onClick={logout}>
-              退出
-            </button>
           </div>
+          <span className="coin-chip">
+            <img src="/assets/images/coin.png" alt="" />
+            {coinLedgers[0]?.balance ?? "-"}
+          </span>
+          <span className="hud-spacer" />
+          <button type="button" className="hud-button" onClick={logout}>
+            退出
+          </button>
         </header>
 
-        <section className="lobby-game-layout">
-          <section className="lobby-play-stage">
-            <img className="lobby-attendant" src="/assets/images/hall_user.png" alt="" />
-            <img className="lobby-table-art" src="/assets/images/generated/table_surface.png" alt="" />
-            <div className="lobby-stage-ribbon">
-              <p className="eyebrow">Ready</p>
-              <h2>选一张牌桌，马上开局</h2>
-            </div>
-            <div className="lobby-action-ring">
-              <button type="button" className="lobby-image-action create-room-action" onClick={createRoom} aria-label="创建房间">
-                <img src="/assets/images/button/create_room.png" alt="" />
-              </button>
-              <button type="button" className="lobby-image-action match-room-action" onClick={matchRoom} aria-label="快速匹配">
-                <img src="/assets/images/button/match_room.png" alt="" />
-              </button>
-            </div>
-            <div className="lobby-status-strip">
-              <span>{roomStatus}</span>
-              <button type="button" className="hud-button" onClick={refreshRooms}>
-                刷新牌桌
-              </button>
-            </div>
-          </section>
+        <section className="lobby-stage">
+          <img className="stage-mascot mascot-left" src="/assets/images/hall_user2.png" alt="" />
+          <img className="stage-mascot mascot-right" src="/assets/images/hall_user.png" alt="" />
+          <div className="stage-center">
+            <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
+            <button type="button" className="btn-jelly btn-orange btn-xl" onClick={matchRoom}>
+              快速开始
+            </button>
+            <button type="button" className="btn-jelly btn-green btn-lg" onClick={createRoom}>
+              创建房间
+            </button>
+            <p className="stage-status">{roomStatus}</p>
+          </div>
+          <nav className="feature-bar">
+            <button type="button" onClick={() => setLobbyModal("history")}>
+              <span className="feature-icon">
+                <img src="/assets/images/generated/lobby/icon_history.png" alt="" />
+              </span>
+              <span>战绩</span>
+            </button>
+            <button type="button" onClick={() => setLobbyModal("ledger")}>
+              <span className="feature-icon">
+                <img src="/assets/images/generated/lobby/icon_ledger.png" alt="" />
+              </span>
+              <span>流水</span>
+            </button>
+            <button type="button" onClick={() => setLobbyModal("replay")}>
+              <span className="feature-icon">
+                <img src="/assets/images/generated/lobby/icon_replay.png" alt="" />
+              </span>
+              <span>回放</span>
+            </button>
+          </nav>
+        </section>
 
-          <aside className="lobby-room-dock">
+        <aside className="room-dock">
+          <div className="section-heading">
+            <h2>牌桌选择</h2>
+            <button type="button" className="hud-button" onClick={refreshRooms}>
+              刷新
+            </button>
+          </div>
+          <div className="room-list">
+            {rooms.length ? (
+              rooms.slice(0, 7).map((room, index) => (
+                <button type="button" key={room.id} className="room-row" onClick={() => enterRoom(room)}>
+                  <span className="room-medal">{index + 1}</span>
+                  <span className="room-copy">
+                    <strong>{room.code}</strong>
+                    <span>{room.status === "open" ? "等待入座" : room.status}</span>
+                  </span>
+                  <span className="room-enter">进入</span>
+                </button>
+              ))
+            ) : (
+              <p className="empty-state">{roomStatus}</p>
+            )}
+          </div>
+        </aside>
+
+        {lobbyModal === "history" ? (
+          <LobbyModal title="最近战绩" onClose={() => setLobbyModal(null)}>
             <div className="section-heading">
-              <h2>开放牌桌</h2>
-              <button type="button" className="hud-button" onClick={refreshRooms}>
+              <span className="modal-hint">点击一局进入回放</span>
+              <button type="button" className="hud-button" onClick={refreshHistory}>
                 刷新
               </button>
             </div>
-            <div className="room-list game-room-list">
-              {rooms.length ? (
-                rooms.slice(0, 7).map((room) => (
-                  <button
-                    type="button"
-                    key={room.id}
-                    className="room-row game-room-row"
-                    onClick={() => selectRoom(room)}
-                  >
-                    <span className="room-medal">桌</span>
-                    <strong>{room.code}</strong>
-                    <span>{room.status}</span>
-                    <em>入座</em>
-                  </button>
+            {historyRows}
+          </LobbyModal>
+        ) : null}
+
+        {lobbyModal === "ledger" ? (
+          <LobbyModal title="金币流水" onClose={() => setLobbyModal(null)}>
+            <div className="ledger-list">
+              {coinLedgers.length ? (
+                coinLedgers.map((ledger) => (
+                  <div key={ledger.id} className="ledger-row">
+                    <div>
+                      <strong>{formatDelta(ledger.delta)}</strong>
+                      <span>{ledger.roomCode}</span>
+                    </div>
+                    <em>{ledger.balance}</em>
+                  </div>
                 ))
               ) : (
-                <p className="empty-state">{roomStatus}</p>
+                <p className="empty-state">{historyStatus}</p>
               )}
             </div>
-          </aside>
+          </LobbyModal>
+        ) : null}
 
-          <aside className="lobby-side-stack">
-            <section className="history-panel game-info-panel">
-              <div className="section-heading">
-                <h2>最近战绩</h2>
-                <button type="button" className="hud-button" onClick={refreshHistory}>
-                  刷新
-                </button>
-              </div>
-              <div className="round-history">
-                {roundHistory.length ? (
-                  roundHistory.slice(0, 4).map((round) => (
-                    <button
-                      key={round.id}
-                      type="button"
-                      className="history-row"
-                      data-selected={selectedReplay?.id === round.id}
-                      onClick={() => void loadReplay(round.id)}
-                    >
-                      <div>
-                        <strong>{round.roomCode}</strong>
-                        <span>{round.endedAt ? formatDateTime(round.endedAt) : "进行中"}</span>
-                      </div>
-                      <em>{formatRoundDelta(round, session.user.id)}</em>
-                    </button>
-                  ))
-                ) : (
-                  <p className="empty-state">{historyStatus}</p>
-                )}
-              </div>
-            </section>
-
-            <section className="ledger-panel game-info-panel">
-              <h2>金币流水</h2>
-              <div className="ledger-list">
-                {coinLedgers.length ? (
-                  coinLedgers.slice(0, 4).map((ledger) => (
-                    <div key={ledger.id} className="ledger-row">
-                      <div>
-                        <strong>{formatDelta(ledger.delta)}</strong>
-                        <span>{ledger.roomCode}</span>
-                      </div>
-                      <em>{ledger.balance}</em>
-                    </div>
-                  ))
-                ) : (
-                  <p className="empty-state">{historyStatus}</p>
-                )}
-              </div>
-            </section>
-
-            <section className="replay-panel game-info-panel">
-              <div className="section-heading">
-                <h2>回放</h2>
-                <span className="step-counter">
-                  {selectedReplay
-                    ? `${Math.min(replayStep + 1, selectedReplay.actions.length)}/${selectedReplay.actions.length}`
-                    : "-"}
-                </span>
-              </div>
-              <div className="replay-controls">
-                <button
-                  type="button"
-                  disabled={!selectedReplay || selectedReplay.actions.length <= 1}
-                  onClick={() => setReplayPlaying((playing) => !playing)}
-                >
-                  {replayPlaying ? "暂停" : "播放"}
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedReplay || replayStep <= 0}
-                  onClick={() => {
-                    setReplayPlaying(false);
-                    setReplayStep((step) => Math.max(0, step - 1));
-                  }}
-                >
-                  上一步
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedReplay || replayStep >= selectedReplay.actions.length - 1}
-                  onClick={() => {
-                    setReplayPlaying(false);
-                    setReplayStep((step) => Math.min((selectedReplay?.actions.length ?? 1) - 1, step + 1));
-                  }}
-                >
-                  下一步
-                </button>
-              </div>
-              {selectedReplay ? (
-                <div className="replay-list">
-                  {selectedReplay.actions.map((action, index) => (
-                    <button
-                      key={action.id}
-                      type="button"
-                      className="replay-row"
-                      data-selected={index === replayStep}
-                      onClick={() => {
-                        setReplayPlaying(false);
-                        setReplayStep(index);
-                      }}
-                    >
-                      <strong>{formatActionType(action.type)}</strong>
-                      <span>{formatReplayAction(action)}</span>
-                      <em>{formatDateTime(action.createdAt)}</em>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty-state">{replayStatus}</p>
-              )}
-            </section>
-          </aside>
-        </section>
+        {lobbyModal === "replay" ? (
+          <LobbyModal title="对局回放" onClose={() => setLobbyModal(null)}>
+            <div className="section-heading">
+              <span className="modal-hint">{replayStatus}</span>
+              <button type="button" className="hud-button" onClick={refreshHistory}>
+                刷新
+              </button>
+            </div>
+            {historyRows}
+          </LobbyModal>
+        ) : null}
       </main>
     );
   }
 
   return (
-    <main className="app-shell">
-      <aside className="side-panel">
-        <div>
-          <p className="eyebrow">DDZ Next</p>
-          <h1>斗地主重构版</h1>
-        </div>
-        <dl className="status-list">
-          <div>
-            <dt>连接</dt>
-            <dd>{status}</dd>
-          </div>
-          <div>
-            <dt>玩家</dt>
-            <dd>{session.user.id}</dd>
-          </div>
-          <div>
-            <dt>账号</dt>
-            <dd>{formatUser(session.user)}</dd>
-          </div>
-          <div>
-            <dt>房间</dt>
-            <dd>{selectedRoom.code}</dd>
-          </div>
-          <div>
-            <dt>回合</dt>
-            <dd>{turnTimer ? formatTurnTimer(turnTimer, session.user.id) : "-"}</dd>
-          </div>
-        </dl>
-        <section className="players">
-          <h2>座位</h2>
-          {snapshot?.players.length ? (
-            <div className="player-list">
-              {snapshot.players.map((player) => (
-                <div key={player.id} className="player-row">
-                  <span>#{player.seat + 1}</span>
-                  <strong>{player.id}</strong>
-                  <em data-online={player.connected}>{player.connected ? "在线" : "离线"}</em>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="empty-state">等待玩家入座</p>
-          )}
-        </section>
-        <section className="history-panel">
-          <div className="section-heading">
-            <h2>战绩</h2>
-            <button type="button" onClick={refreshHistory}>
-              刷新
-            </button>
-          </div>
-          <div className="round-history">
-            {roundHistory.length ? (
-              roundHistory.slice(0, 4).map((round) => (
-                <button
-                  key={round.id}
-                  type="button"
-                  className="history-row"
-                  data-selected={selectedReplay?.id === round.id}
-                  onClick={() => void loadReplay(round.id)}
-                >
-                  <div>
-                    <strong>{round.roomCode}</strong>
-                    <span>{round.endedAt ? formatDateTime(round.endedAt) : "进行中"}</span>
-                  </div>
-                  <em>{formatRoundDelta(round, session.user.id)}</em>
-                </button>
-              ))
-            ) : (
-              <p className="empty-state">{historyStatus}</p>
-            )}
-          </div>
-        </section>
-        <section className="replay-panel">
-          <div className="section-heading">
-            <h2>回放</h2>
-            <span className="step-counter">
-              {selectedReplay ? `${Math.min(replayStep + 1, selectedReplay.actions.length)}/${selectedReplay.actions.length}` : "-"}
-            </span>
-          </div>
-          <div className="replay-controls">
-            <button
-              type="button"
-              disabled={!selectedReplay || selectedReplay.actions.length <= 1}
-              onClick={() => setReplayPlaying((playing) => !playing)}
-            >
-              {replayPlaying ? "暂停" : "播放"}
-            </button>
-            <button
-              type="button"
-              disabled={!selectedReplay || replayStep <= 0}
-              onClick={() => {
-                setReplayPlaying(false);
-                setReplayStep((step) => Math.max(0, step - 1));
-              }}
-            >
-              上一步
-            </button>
-            <button
-              type="button"
-              disabled={!selectedReplay || replayStep >= selectedReplay.actions.length - 1}
-              onClick={() => {
-                setReplayPlaying(false);
-                setReplayStep((step) => Math.min((selectedReplay?.actions.length ?? 1) - 1, step + 1));
-              }}
-            >
-              下一步
-            </button>
-            <button type="button" disabled={!selectedReplay} onClick={clearReplay}>
-              返回牌桌
-            </button>
-          </div>
-          {selectedReplay ? (
-            <div className="replay-list">
-              {selectedReplay.actions.map((action, index) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  className="replay-row"
-                  data-selected={index === replayStep}
-                  onClick={() => {
-                    setReplayPlaying(false);
-                    setReplayStep(index);
-                  }}
-                >
-                  <strong>{formatActionType(action.type)}</strong>
-                  <span>{formatReplayAction(action)}</span>
-                  <em>{formatDateTime(action.createdAt)}</em>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="empty-state">{replayStatus}</p>
-          )}
-        </section>
-        <section className="ledger-panel">
-          <h2>金币流水</h2>
-          <div className="ledger-list">
-            {coinLedgers.length ? (
-              coinLedgers.slice(0, 5).map((ledger) => (
-                <div key={ledger.id} className="ledger-row">
-                  <div>
-                    <strong>{formatDelta(ledger.delta)}</strong>
-                    <span>{ledger.roomCode}</span>
-                  </div>
-                  <em>{ledger.balance}</em>
-                </div>
-              ))
-            ) : (
-              <p className="empty-state">{historyStatus}</p>
-            )}
-          </div>
-        </section>
-        <div className="controls">
-          <button type="button" onClick={() => client.ready()} disabled={!tableControls.ready}>
-            准备
-          </button>
-          <button type="button" onClick={() => client.bidLandlord(true)} disabled={!tableControls.bid}>
-            叫地主
-          </button>
-          <button type="button" onClick={() => client.bidLandlord(false)} disabled={!tableControls.bid}>
-            不叫
-          </button>
-          <button type="button" onClick={() => client.robLandlord(true)} disabled={!tableControls.rob}>
-            抢地主
-          </button>
-          <button type="button" onClick={() => client.robLandlord(false)} disabled={!tableControls.rob}>
-            不抢
-          </button>
-          <button type="button" onClick={() => client.pass()} disabled={!tableControls.pass}>
-            过牌
-          </button>
-          <button type="button" onClick={leaveRoom} disabled={!tableControls.leave}>
-            离开房间
-          </button>
-        </div>
-        <section className="events">
-          <h2>事件</h2>
-          {events.map((event, index) => (
-            <pre key={`${event.type}-${index}`}>{JSON.stringify(event, null, 2)}</pre>
-          ))}
-        </section>
-      </aside>
+    <main className="table-screen">
       <Suspense fallback={<section className="game-host loading-host">加载牌桌</section>}>
         <PhaserTable
           events={events}
@@ -504,6 +306,99 @@ function App() {
           onPlay={handlePlay}
         />
       </Suspense>
+
+      <header className="table-hud">
+        <button
+          type="button"
+          className="hud-button"
+          onClick={selectedRoom ? leaveRoom : clearReplay}
+          disabled={selectedRoom ? !tableControls.leave : false}
+        >
+          ← 离开
+        </button>
+        <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
+        <span className="hud-spacer" />
+        <span className="table-chip timer-chip">{turnTimer ? formatTurnTimer(turnTimer, session.user.id) : ""}</span>
+      </header>
+
+      {tableControls.ready || tableControls.bid || tableControls.rob ? (
+        <div className="table-action-dock">
+          {tableControls.ready ? (
+            <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.ready()}>
+              准备
+            </button>
+          ) : null}
+          {tableControls.bid ? (
+            <>
+              <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.bidLandlord(true)}>
+                叫地主
+              </button>
+              <button type="button" className="btn-jelly btn-green btn-lg" onClick={() => client.bidLandlord(false)}>
+                不叫
+              </button>
+            </>
+          ) : null}
+          {tableControls.rob ? (
+            <>
+              <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.robLandlord(true)}>
+                抢地主
+              </button>
+              <button type="button" className="btn-jelly btn-green btn-lg" onClick={() => client.robLandlord(false)}>
+                不抢
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!selectedReplay && snapshot?.phase === "settled" ? (
+        <div className="table-settled-dock">
+          <button type="button" className="btn-jelly btn-orange btn-lg" onClick={leaveRoom}>
+            返回大厅
+          </button>
+        </div>
+      ) : null}
+
+      {selectedReplay ? (
+        <div className="table-replay-dock">
+          <span className="table-chip">
+            回放 {Math.min(replayStep + 1, selectedReplay.actions.length)}/{selectedReplay.actions.length}
+          </span>
+          <button
+            type="button"
+            className="hud-button"
+            disabled={selectedReplay.actions.length <= 1}
+            onClick={() => setReplayPlaying((playing) => !playing)}
+          >
+            {replayPlaying ? "暂停" : "播放"}
+          </button>
+          <button
+            type="button"
+            className="hud-button"
+            disabled={replayStep <= 0}
+            onClick={() => {
+              setReplayPlaying(false);
+              setReplayStep((step) => Math.max(0, step - 1));
+            }}
+          >
+            上一步
+          </button>
+          <button
+            type="button"
+            className="hud-button"
+            disabled={replayStep >= selectedReplay.actions.length - 1}
+            onClick={() => {
+              setReplayPlaying(false);
+              setReplayStep((step) => Math.min(selectedReplay.actions.length - 1, step + 1));
+            }}
+          >
+            下一步
+          </button>
+          <button type="button" className="hud-button" onClick={clearReplay}>
+            {selectedRoom ? "返回牌桌" : "返回大厅"}
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  GameActionService,
-  type GameActionMutationRecord,
-  type GameActionRecord,
-  type GameActionRepository,
-  type RoomEventInput,
-  type RoomEventRecord,
-  type RoundActionInput,
-  type RoundRecord
-} from "../../src/actions/service";
-import type { RoomActionType, RoundActionType } from "@ddz/protocol";
+import { GameActionService } from "../../src/actions/service";
+import { InMemoryGameActionRepository } from "../helpers";
 
 describe("GameActionService", () => {
   it("records room events without creating a round", async () => {
@@ -285,131 +276,8 @@ describe("GameActionService", () => {
   });
 });
 
-export class InMemoryGameActionRepository implements GameActionRepository {
-  readonly rooms = new Map<string, string>();
-  readonly rounds: RoundRecord[] = [];
-  readonly roomEvents: RoomEventRecord[] = [];
-  readonly actions: GameActionRecord[] = [];
-  readonly mutations = new Map<string, GameActionMutationRecord>();
-  readonly settlements: Array<{
-    roundId: string;
-    landlordId: string;
-    players: Array<{ playerId: string; playerKind: "human" | "bot"; seat: number; scoreDelta: number }>;
-  }> = [];
-  readonly coinLedgerPlayerIds: string[] = [];
-
-  async findRoomIdByCode(code: string): Promise<string | null> {
-    return this.rooms.get(code) ?? null;
-  }
-
-  async findOpenRoundByRoomId(roomId: string): Promise<RoundRecord | null> {
-    return this.rounds.find((round) => round.roomId === roomId && !round.endedAt) ?? null;
-  }
-
-  async findMutation(roomId: string, mutationId: string): Promise<GameActionMutationRecord | null> {
-    return this.mutations.get(mutationKey(roomId, mutationId)) ?? null;
-  }
-
-  async seedRound(roomId: string): Promise<RoundRecord> {
-    const round = {
-      id: `round-${this.rounds.length + 1}`,
-      roomId,
-      endedAt: null
-    };
-    this.rounds.push(round);
-    return round;
-  }
-
-  async recordBatch(input: {
-    roomId: string;
-    mutationId: string;
-    actionFingerprint: string;
-    roomEvents: readonly RoomEventInput[];
-    roundActions: readonly RoundActionInput[];
-  }): Promise<GameActionMutationRecord> {
-    const existingMutation = await this.findMutation(input.roomId, input.mutationId);
-    if (existingMutation) {
-      return existingMutation;
-    }
-
-    const roomEvents = input.roomEvents.map((event) => this.createRoomEvent(input.roomId, event));
-    const actions: GameActionRecord[] = [];
-    let round = await this.findOpenRoundByRoomId(input.roomId);
-
-    for (const action of input.roundActions) {
-      if (action.type === "round_started") {
-        round = await this.seedRound(input.roomId);
-      }
-      if (!round) {
-        throw new Error(`Cannot record ${action.type} without an open round.`);
-      }
-      actions.push(this.createAction(round.id, action));
-      if (action.settlement) {
-        this.settlements.push({
-          roundId: round.id,
-          landlordId: action.settlement.landlordId,
-          players: action.settlement.players.map((player) => ({ ...player }))
-        });
-        this.coinLedgerPlayerIds.push(
-          ...action.settlement.players.filter((player) => player.playerKind === "human").map((player) => player.playerId)
-        );
-        round = {
-          ...round,
-          endedAt: new Date(Date.UTC(2026, 0, this.actions.length + 1))
-        };
-        const index = this.rounds.findIndex((item) => item.id === round?.id);
-        if (index >= 0) {
-          this.rounds[index] = round;
-        }
-      }
-    }
-
-    const mutation = {
-      mutationId: input.mutationId,
-      actionFingerprint: input.actionFingerprint,
-      roomEventIds: roomEvents.map((event) => event.id),
-      actionIds: actions.map((action) => action.id),
-      roundId: round?.id ?? null
-    };
-    this.mutations.set(mutationKey(input.roomId, input.mutationId), mutation);
-    return mutation;
-  }
-
-  private createRoomEvent(roomId: string, input: RoomEventInput): RoomEventRecord {
-    const event = {
-      id: `room-event-${this.roomEvents.length + 1}`,
-      roomId,
-      playerId: input.playerId,
-      playerKind: input.playerKind,
-      type: input.type as RoomActionType,
-      payload: input.payload,
-      createdAt: new Date(Date.UTC(2026, 0, this.roomEvents.length + 1))
-    };
-    this.roomEvents.push(event);
-    return event;
-  }
-
-  private createAction(roundId: string, input: RoundActionInput): GameActionRecord {
-    const action = {
-      id: `action-${this.actions.length + 1}`,
-      roundId,
-      playerId: input.playerId,
-      playerKind: input.playerKind,
-      type: input.type as RoundActionType,
-      payload: input.payload,
-      createdAt: new Date(Date.UTC(2026, 0, this.actions.length + 1))
-    };
-    this.actions.push(action);
-    return action;
-  }
-}
-
 function mutationId(index: number): string {
   return `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`;
-}
-
-function mutationKey(roomId: string, mutationIdValue: string): string {
-  return `${roomId}:${mutationIdValue}`;
 }
 
 function createSettlementPayload(winnerId: string): Record<string, unknown> {

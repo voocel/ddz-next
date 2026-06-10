@@ -1,6 +1,6 @@
 import type { Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
-import { verifyAccessToken, type TokenConfig } from "@ddz/auth";
+import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
 import { GameTable } from "@ddz/domain";
 import { clientCommandSchema } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
@@ -20,7 +20,6 @@ interface JoinOptions {
 }
 
 interface RoomCreateOptions extends JoinOptions {
-  tokenConfig: TokenConfig;
   roomStatusClient: RoomStatusClient;
   gameActionClient: GameActionClient;
   botCount?: number;
@@ -30,23 +29,43 @@ interface RoomCreateOptions extends JoinOptions {
 
 const DEFAULT_BOT_MOVE_DELAY_MS = 500;
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
+// 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
+const SETTLEMENT_DISPLAY_MS = 5000;
+// 同一玩家新连接踢掉旧会话时使用的自定义关闭码
+const DUPLICATE_SESSION_CLOSE_CODE = 4002;
 
 export class DdzRoom extends Room {
+  /** join 前 JWT 校验所需的配置，进程启动时注入。 */
+  static authTokenConfig: TokenConfig | null = null;
+
   maxClients = 3;
   private readonly table = new GameTable();
   private readonly tasks = new SerialTaskQueue();
   private readonly clientPlayers = new Map<string, PlayerId>();
   private readonly playerSessions = new Map<PlayerId, Set<string>>();
-  private tokenConfig!: TokenConfig;
   private persistence!: RoomPersistence;
   private turnScheduler!: RoomTurnScheduler;
   private roomCode!: string;
   private botMoveDelayMs = DEFAULT_BOT_MOVE_DELAY_MS;
   private botIds: PlayerId[] = [];
   private turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS;
+  private failed = false;
+
+  /** join 前校验 JWT，返回的 claims 会作为 client.auth 传入 onJoin。 */
+  static override async onAuth(token: string, options: JoinOptions | undefined): Promise<AccessTokenClaims> {
+    if (!DdzRoom.authTokenConfig) {
+      throw new Error("Token config is not configured for DdzRoom.");
+    }
+
+    const accessToken = options?.accessToken?.trim() || token;
+    if (!accessToken) {
+      throw new Error("Access token is required to join the game room.");
+    }
+
+    return verifyAccessToken(accessToken, DdzRoom.authTokenConfig);
+  }
 
   async onCreate(options: RoomCreateOptions): Promise<void> {
-    this.tokenConfig = options.tokenConfig;
     this.botMoveDelayMs = readBotMoveDelayMs(options.botMoveDelayMs);
     this.turnTimeoutMs = readTurnTimeoutMs(options.turnTimeoutMs);
     this.roomCode = readRoomCode(options);
@@ -93,10 +112,23 @@ export class DdzRoom extends Room {
     await this.tasks.enqueue(() => this.handleLeave(client));
   }
 
+  async onDispose(): Promise<void> {
+    this.turnScheduler?.cancelAll();
+    // failRoom 已上报 closed；onCreate 失败时 persistence 可能尚未初始化
+    if (this.failed || !this.persistence) {
+      return;
+    }
+
+    try {
+      await this.persistence.closeRoom();
+    } catch (error) {
+      console.error(`[DdzRoom ${this.roomCode}] Failed to close room on dispose.`, error);
+    }
+  }
+
   private async handleJoin(client: Client, options: JoinOptions): Promise<void> {
-    const accessToken = options.accessToken?.trim();
-    if (!accessToken) {
-      throw new Error("Access token is required to join the game room.");
+    if (this.failed) {
+      throw new Error("Room is closed.");
     }
 
     const roomCode = parseRoomCode(options.roomCode);
@@ -104,13 +136,23 @@ export class DdzRoom extends Room {
       throw new Error(`Room code ${roomCode} does not match this game room.`);
     }
 
-    const claims = verifyAccessToken(accessToken, this.tokenConfig);
+    // JWT 已由 static onAuth 在 join 前校验，claims 通过 client.auth 传入
+    const claims = client.auth as AccessTokenClaims | undefined;
+    if (!claims?.sub) {
+      throw new Error("Access token is required to join the game room.");
+    }
+
     const playerId = claims.sub;
     const reconnecting = this.table.hasPlayer(playerId);
     const seat = this.table.addPlayer(playerId);
     this.table.setConnected(playerId, true);
+    // 同一玩家的旧会话在新连接生效后踢掉，避免双开占座
+    const staleSessions = [...(this.playerSessions.get(playerId) ?? [])].filter((sessionId) => sessionId !== client.sessionId);
     this.clientPlayers.set(client.sessionId, playerId);
     this.bindSession(playerId, client.sessionId);
+    for (const sessionId of staleSessions) {
+      this.clients.getById(sessionId)?.leave(DUPLICATE_SESSION_CLOSE_CODE);
+    }
 
     const snapshot = this.table.snapshot();
     try {
@@ -144,12 +186,20 @@ export class DdzRoom extends Room {
     }
 
     this.sendSnapshot(client);
+    this.sendTurnTimer(client, snapshot);
     this.turnScheduler.scheduleBotTurn(snapshot);
   }
 
   private async handleLeave(client: Client): Promise<void> {
     const playerId = this.clientPlayers.get(client.sessionId);
     if (!playerId) {
+      return;
+    }
+
+    // 房间已失败：只清理本地映射，不再走持久化与广播
+    if (this.failed) {
+      this.clientPlayers.delete(client.sessionId);
+      this.unbindSession(playerId, client.sessionId);
       return;
     }
 
@@ -234,6 +284,11 @@ export class DdzRoom extends Room {
   }
 
   private async handleCommand(client: Client, payload: unknown): Promise<void> {
+    if (this.failed) {
+      this.sendRejected(client, "Room is closed.");
+      return;
+    }
+
     const parsed = clientCommandSchema.safeParse(payload);
     if (!parsed.success) {
       this.sendRejected(client, parsed.error.issues.map((issue: { message: string }) => issue.message).join("; "));
@@ -410,6 +465,7 @@ export class DdzRoom extends Room {
         hand: toCardsDto(this.table.getHand(playerId))
       }));
       this.turnScheduler.cancelAll();
+      this.startNextRound();
       return;
     }
 
@@ -540,6 +596,61 @@ export class DdzRoom extends Room {
     }
   }
 
+  /** 结算画面停留一段时间后再重开下一局，否则客户端的结算界面会一闪而过。 */
+  private startNextRound(): void {
+    this.clock.setTimeout(() => {
+      void this.tasks.enqueue(async () => {
+        if (this.failed || this.table.snapshot().phase !== "settled") {
+          return;
+        }
+        const snapshot = this.table.resetForNextRound();
+        this.broadcastPersonalSnapshot("snapshot", snapshot);
+        await this.readyBots();
+      });
+    }, SETTLEMENT_DISPLAY_MS);
+  }
+
+  private async readyBots(): Promise<void> {
+    if (this.failed) {
+      return;
+    }
+
+    for (const botId of this.botIds) {
+      const snapshot = this.table.snapshot();
+      if (snapshot.phase !== "waiting" && snapshot.phase !== "ready") {
+        return;
+      }
+
+      const bot = snapshot.players.find((player) => player.id === botId);
+      if (!bot || bot.ready) {
+        continue;
+      }
+
+      try {
+        await this.afterReady(this.table.setReady(botId));
+      } catch (error) {
+        await this.failRoom(error, "Failed to ready bot for the next round.");
+        return;
+      }
+    }
+  }
+
+  /** 给客户端补发当前回合计时，重连后才能拿到剩余时间。 */
+  private sendTurnTimer(client: Client, snapshot: GameSnapshot): void {
+    const timer = this.turnScheduler.getActiveTurnTimer();
+    if (!timer) {
+      return;
+    }
+
+    client.send("event", {
+      type: "turn_timer",
+      playerId: timer.playerId,
+      deadlineAt: timer.deadlineAt,
+      durationMs: timer.durationMs,
+      snapshot: toSnapshotDto(snapshot)
+    } satisfies GameEvent);
+  }
+
   private sendSnapshot(client: Client): void {
     const playerId = this.clientPlayers.get(client.sessionId);
     if (!playerId) {
@@ -587,21 +698,37 @@ export class DdzRoom extends Room {
   }
 
   private async failRoom(error: unknown, defaultReason: string): Promise<void> {
-    this.turnScheduler.cancelAll();
-    let reason = error instanceof Error ? error.message : defaultReason;
-    try {
-      await this.persistence.closeFailedRoom(reason, this.table.snapshot());
-    } catch (closeError) {
-      const closeReason = closeError instanceof Error ? closeError.message : "Unknown room close error.";
-      reason = `${reason}; failed to close room in API: ${closeReason}`;
-      console.error(reason);
+    // 幂等：失败只处理一次，disconnect 触发的 onLeave 等回调不会再次进入
+    if (this.failed) {
+      return;
     }
-    this.broadcast("event", {
-      type: "room_failed",
-      reason
-    } satisfies GameEvent);
+
+    this.failed = true;
+    this.turnScheduler.cancelAll();
+    // 详细错误只进服务端日志，客户端收到通用文案
+    const detail = error instanceof Error ? error.message : defaultReason;
+    console.error(`[DdzRoom ${this.roomCode}] ${defaultReason} ${detail}`, error);
+
+    try {
+      this.broadcast("event", {
+        type: "room_failed",
+        reason: "Room closed due to an internal error."
+      } satisfies GameEvent);
+    } catch (broadcastError) {
+      console.error(`[DdzRoom ${this.roomCode}] Failed to broadcast room_failed.`, broadcastError);
+    }
+
+    try {
+      await this.persistence.closeFailedRoom(detail, this.table.snapshot());
+    } catch (closeError) {
+      console.error(`[DdzRoom ${this.roomCode}] Failed to close room in API.`, closeError);
+    }
+
     await this.lock();
-    await this.disconnect(1011);
+    // 不在串行队列内等待 disconnect：onLeave 与本方法同走一条队列，等待会死锁
+    void this.disconnect(1011).catch((disconnectError) => {
+      console.error(`[DdzRoom ${this.roomCode}] Failed to disconnect room.`, disconnectError);
+    });
   }
 }
 
@@ -644,12 +771,12 @@ function parseRoomCode(value: unknown): string {
     throw new Error("Room code is required to join the game room.");
   }
 
-  const roomCode = value.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4,12}$/.test(roomCode)) {
+  // 严格校验：只接受规范格式，不做 trim/toUpperCase 之类的静默修正
+  if (!/^[A-Z0-9]{4,12}$/.test(value)) {
     throw new Error("Room code must be 4-12 uppercase letters or digits.");
   }
 
-  return roomCode;
+  return value;
 }
 
 function readPlayerKind(playerId: PlayerId, snapshot: GameSnapshot): "human" | "bot" {

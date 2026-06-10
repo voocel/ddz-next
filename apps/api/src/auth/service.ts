@@ -29,6 +29,10 @@ export class AuthService {
 
   async register(input: RegisterRequest): Promise<LoginResponse> {
     const username = normalizeUsername(input.username);
+    if (!USERNAME_PATTERN.test(username)) {
+      throw new AuthError("Username must be 3-32 letters, numbers, underscores, or hyphens.", 400);
+    }
+
     const existing = await this.users.findByUsername(username);
     if (existing) {
       throw new AuthError("Username already exists.", 409);
@@ -47,6 +51,8 @@ export class AuthService {
     const username = normalizeUsername(input.username);
     const user = await this.users.findByUsername(username);
     if (!user) {
+      // 跑一次虚拟散列验证，抹平“用户不存在”与“密码错误”的响应时序差异
+      await verifyPassword(input.password, DUMMY_PASSWORD_HASH);
       throw new AuthError("Invalid username or password.", 401);
     }
 
@@ -71,6 +77,13 @@ export class AuthService {
     };
   }
 }
+
+// 与 demoUser 的用户名约束保持一致（规范化后为小写）
+const USERNAME_PATTERN = /^[a-z0-9_-]{3,32}$/;
+
+// 预生成的 scrypt 散列（参数与 hashPassword 相同），仅用于抹平时序，不对应任何真实密码
+const DUMMY_PASSWORD_HASH =
+  "scrypt$16384$8$1$sjRYcgi62LYcJTbxjLBHcg$_nRVZ-2-3kDeO9ovIEAkbu1x9TN8p9abeogrUMYGYVT8KJlhsDsdfjqafgkEPxlUsTeHtrqbXSoqUdBK_j34Xg";
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();

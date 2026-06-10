@@ -33,6 +33,7 @@ describe("table presentation", () => {
     expect(describeSettlement(settledSnapshot(), "p0")).toEqual([
       "赢家 你",
       "地主 你",
+      "倍数 x1",
       "你  地主  +2  总分 2",
       "机器人1  农民  -1  总分 -1",
       "机器人2  农民  -1  总分 -1"
@@ -54,6 +55,7 @@ function snapshot(phase: GameSnapshotDto["phase"], currentPlayerId: string | nul
     landlordCards: [],
     lastPlay: null,
     passCount: 0,
+    multiplier: 1,
     settlement: null
   };
 }
@@ -91,6 +93,8 @@ function settledSnapshot(): GameSnapshotDto {
       landlordId: "p0",
       landlordWon: true,
       baseScore: 1,
+      multiplier: 1,
+      spring: false,
       players: [
         { playerId: "bot:room:2", seat: 2, role: "farmer", handCount: 8, scoreDelta: -1, totalScore: -1 },
         { playerId: "p0", seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },

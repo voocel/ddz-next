@@ -4,6 +4,8 @@ node_modules
 **/dist/
 **/.turbo/
 coverage/
+tasks
+tmp
 
 # local env files
 .env

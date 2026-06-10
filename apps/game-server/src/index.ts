@@ -4,7 +4,7 @@ import { readApiSyncConfig } from "./api/config.js";
 import { HttpGameActionClient } from "./api/gameActionClient.js";
 import { HttpRoomStatusClient } from "./api/roomStatusClient.js";
 import { readTokenConfig } from "./auth/config.js";
-import { loadRootEnv } from "./env.js";
+import { loadRootEnv } from "@ddz/env";
 import { DdzRoom } from "./rooms/DdzRoom.js";
 
 loadRootEnv();
@@ -28,8 +28,10 @@ const gameServer = new Server({
   transport: new WebSocketTransport()
 });
 
+// static onAuth 在房间创建前就会执行，token 配置需在进程启动时注入
+DdzRoom.authTokenConfig = tokenConfig;
+
 gameServer.define("ddz", DdzRoom, {
-  tokenConfig,
   roomStatusClient,
   gameActionClient,
   botCount,

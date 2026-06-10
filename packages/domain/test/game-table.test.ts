@@ -188,3 +188,81 @@ describe("GameTable bidding and robbing", () => {
     );
   });
 });
+
+describe("GameTable multipliers and multi-round", () => {
+  function settleWithLandlordSweep(table: GameTable, landlordId: string) {
+    const hand = [...table.getHand(landlordId)];
+    for (const card of hand) {
+      table.playCards(landlordId, [card.id]);
+      if (table.snapshot().phase === "settled") {
+        return;
+      }
+      table.pass(table.snapshot().currentPlayerId!);
+      table.pass(table.snapshot().currentPlayerId!);
+    }
+  }
+
+  it("doubles settlement for each rob and for spring", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", true);
+
+    settleWithLandlordSweep(table, "p2");
+
+    const settlement = table.snapshot().settlement!;
+    // 抢地主一次 ×2，农民整局未出牌构成春天 ×2。
+    expect(settlement.spring).toBe(true);
+    expect(settlement.multiplier).toBe(4);
+    expect(settlement.players.find((player) => player.role === "landlord")?.scoreDelta).toBe(8);
+    expect(settlement.players.filter((player) => player.role === "farmer").map((player) => player.scoreDelta)).toEqual([
+      -4, -4
+    ]);
+  });
+
+  it("uses base multiplier when nobody robs", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", false);
+
+    settleWithLandlordSweep(table, "p0");
+
+    const settlement = table.snapshot().settlement!;
+    expect(settlement.spring).toBe(true);
+    expect(settlement.multiplier).toBe(2);
+    expect(settlement.players.find((player) => player.role === "landlord")?.scoreDelta).toBe(4);
+  });
+
+  it("supports a follow-up round after settlement and keeps total scores", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", false);
+    settleWithLandlordSweep(table, "p0");
+
+    const totalsBefore = table.snapshot().players.map((player) => player.score);
+    expect(totalsBefore.some((score) => score !== 0)).toBe(true);
+
+    const snapshot = table.resetForNextRound();
+    expect(snapshot.phase).toBe("ready");
+    expect(snapshot.multiplier).toBe(1);
+    expect(snapshot.settlement).toBeNull();
+    expect(snapshot.landlordId).toBeNull();
+    expect(snapshot.players.map((player) => player.handCount)).toEqual([0, 0, 0]);
+    expect(snapshot.players.map((player) => player.ready)).toEqual([false, false, false]);
+    expect(snapshot.players.map((player) => player.score)).toEqual(totalsBefore);
+
+    table.setReady("p0");
+    table.setReady("p1");
+    const next = table.setReady("p2");
+    expect(next.roundStarted).toBe(true);
+    expect(next.snapshot.phase).toBe("bidding");
+    expect(next.snapshot.players.map((player) => player.handCount)).toEqual([17, 17, 17]);
+  });
+
+  it("rejects reset outside the settled phase", () => {
+    const table = readyThreePlayers();
+    expect(() => table.resetForNextRound()).toThrow("Cannot reset during bidding phase.");
+  });
+});

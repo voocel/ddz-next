@@ -32,12 +32,18 @@ importers:
       '@ddz/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@ddz/env':
+        specifier: workspace:*
+        version: link:../../packages/env
       '@ddz/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       '@fastify/cors':
         specifier: ^11.1.0
         version: 11.2.0
+      '@fastify/rate-limit':
+        specifier: ^11.0.0
+        version: 11.0.0
       '@prisma/client':
         specifier: ^6.19.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
@@ -75,6 +81,9 @@ importers:
       '@ddz/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@ddz/env':
+        specifier: workspace:*
+        version: link:../../packages/env
       '@ddz/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -122,9 +131,6 @@ importers:
       '@ddz/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@vitejs/plugin-react':
-        specifier: ^5.1.1
-        version: 5.2.0(vite@7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4))
       phaser:
         specifier: ^3.90.0
         version: 3.90.0
@@ -134,9 +140,6 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.2.7(react@19.2.7)
-      vite:
-        specifier: ^7.2.4
-        version: 7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4)
       zod:
         specifier: ^4.1.13
         version: 4.4.3
@@ -150,9 +153,15 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.1
+        version: 5.2.0(vite@7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4))
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.4
+        version: 7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4)
       vitest:
         specifier: ^4.0.14
         version: 4.1.8(@types/node@24.13.1)(vite@7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4))
@@ -175,6 +184,12 @@ importers:
       vitest:
         specifier: ^4.0.14
         version: 4.1.8(@types/node@24.13.1)(vite@7.3.5(@types/node@24.13.1)(jiti@2.7.0)(tsx@4.22.4))
+
+  packages/env:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.1
 
   packages/protocol:
     dependencies:
@@ -719,6 +734,9 @@ packages:
   '@fastify/proxy-addr@5.1.0':
     resolution: {integrity: sha512-INS+6gh91cLUjB+PVHfu1UqcB76Sqtpyp7bnL+FYojhjygvOPA9ctiD/JDKsyD9Xgu4hUhCSJBPig/w7duNajw==}
 
+  '@fastify/rate-limit@11.0.0':
+    resolution: {integrity: sha512-kCs+G59SitZw9TL/ekFe+MrzXk20dEp6zPAM8WEZjFl5Ubvv5ksTbEXYr4jGlBwWAKn78q+NFsj5CN75zXLjaw==}
+
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
     engines: {node: '>=18.18.0'}
@@ -754,6 +772,10 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lukeed/ms@2.0.2':
+    resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
+    engines: {node: '>=8'}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
@@ -2741,6 +2763,12 @@ snapshots:
       '@fastify/forwarded': 3.0.1
       ipaddr.js: 2.4.0
 
+  '@fastify/rate-limit@11.0.0':
+    dependencies:
+      '@lukeed/ms': 2.0.2
+      fastify-plugin: 5.1.0
+      toad-cache: 3.7.1
+
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -2775,6 +2803,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@lukeed/ms@2.0.2': {}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true

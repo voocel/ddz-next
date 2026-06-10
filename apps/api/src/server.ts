@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import {
   createRoomRequestSchema,
   loginRequestSchema,
@@ -7,15 +8,13 @@ import {
   updateRoomStatusRequestSchema
 } from "@ddz/protocol";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
-import { GameActionError } from "./actions/errors.js";
+import { timingSafeEqual } from "node:crypto";
 import type { GameActionService } from "./actions/service.js";
 import Fastify from "fastify";
-import { AuthError } from "./auth/errors.js";
 import type { AuthService } from "./auth/service.js";
-import { HistoryError } from "./history/errors.js";
+import { ApiError } from "./errors.js";
 import type { HistoryService } from "./history/service.js";
 import type { InternalConfig } from "./internal/config.js";
-import { RoomError } from "./rooms/errors.js";
 import type { RoomService } from "./rooms/service.js";
 
 interface ServerDependencies {
@@ -28,6 +27,16 @@ interface ServerDependencies {
   readonly close?: () => Promise<void>;
 }
 
+/** 认证路由限流：同一来源每分钟最多 10 次 */
+const authRateLimit = {
+  config: {
+    rateLimit: {
+      max: 10,
+      timeWindow: "1 minute"
+    }
+  }
+};
+
 export function buildServer(dependencies: ServerDependencies) {
   const app = Fastify({
     logger: true
@@ -38,7 +47,37 @@ export function buildServer(dependencies: ServerDependencies) {
   });
 
   app.register(cors, {
-    origin: true
+    origin: readCorsOrigins()
+  });
+
+  app.register(rateLimit, {
+    global: false
+  });
+
+  // 统一错误处理：ApiError 与 Prisma 已知错误转为对应状态码，其余兜底 500
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof ApiError) {
+      return reply.code(error.statusCode).send(
+        error.issues === undefined
+          ? { message: error.message }
+          : { message: error.message, issues: error.issues }
+      );
+    }
+
+    const { code, statusCode, message } = error as { code?: unknown; statusCode?: unknown; message?: unknown };
+    if (code === "P2002") {
+      return reply.code(409).send({ message: "Resource already exists." });
+    }
+    if (code === "P2025") {
+      return reply.code(404).send({ message: "Resource not found." });
+    }
+
+    if (typeof statusCode === "number" && statusCode < 500) {
+      return reply.code(statusCode).send({ message: typeof message === "string" ? message : "Request failed." });
+    }
+
+    request.log.error(error);
+    return reply.code(500).send({ message: "Internal server error." });
   });
 
   app.get("/health", async () => ({
@@ -46,208 +85,141 @@ export function buildServer(dependencies: ServerDependencies) {
     service: "ddz-api"
   }));
 
-  app.post("/auth/register", async (request, reply) => {
-    const parsed = registerRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        message: "Invalid register request.",
-        issues: parsed.error.issues
-      });
-    }
+  // 认证路由需在 rate-limit 插件加载完成后注册，限流配置才会生效
+  app.after(() => {
+    app.post("/auth/register", authRateLimit, async (request) => {
+      const parsed = registerRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new ApiError("Invalid register request.", 400, parsed.error.issues);
+      }
 
-    try {
-      return await dependencies.authService.register(parsed.data);
-    } catch (error) {
-      return sendAuthError(reply, error);
-    }
-  });
+      return dependencies.authService.register(parsed.data);
+    });
 
-  app.post("/auth/login", async (request, reply) => {
-    const parsed = loginRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        message: "Invalid login request.",
-        issues: parsed.error.issues
-      });
-    }
+    app.post("/auth/login", authRateLimit, async (request) => {
+      const parsed = loginRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new ApiError("Invalid login request.", 400, parsed.error.issues);
+      }
 
-    try {
-      return await dependencies.authService.login(parsed.data);
-    } catch (error) {
-      return sendAuthError(reply, error);
-    }
+      return dependencies.authService.login(parsed.data);
+    });
   });
 
   app.get("/rooms", async () => dependencies.roomService.listOpenRooms());
 
-  app.post("/rooms", async (request, reply) => {
-    if (!authenticate(request.headers, dependencies.tokenConfig)) {
-      return reply.code(401).send({
-        message: "Invalid access token."
-      });
-    }
+  app.post("/rooms", async (request) => {
+    requireAuth(request.headers, dependencies.tokenConfig);
 
     const parsed = createRoomRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({
-        message: "Invalid create room request.",
-        issues: parsed.error.issues
-      });
+      throw new ApiError("Invalid create room request.", 400, parsed.error.issues);
     }
 
-    try {
-      return await dependencies.roomService.createRoom(parsed.data);
-    } catch (error) {
-      return sendRoomError(reply, error);
-    }
+    return dependencies.roomService.createRoom(parsed.data);
   });
 
-  app.post("/rooms/match", async (request, reply) => {
-    if (!authenticate(request.headers, dependencies.tokenConfig)) {
-      return reply.code(401).send({
-        message: "Invalid access token."
-      });
-    }
-
-    try {
-      return await dependencies.roomService.matchRoom();
-    } catch (error) {
-      return sendRoomError(reply, error);
-    }
+  app.post("/rooms/match", async (request) => {
+    requireAuth(request.headers, dependencies.tokenConfig);
+    return dependencies.roomService.matchRoom();
   });
 
-  app.get("/internal/rooms/:code/joinable", async (request, reply) => {
-    if (!isInternalRequest(request.headers, dependencies.internalConfig.token)) {
-      return reply.code(401).send({
-        message: "Invalid internal token."
-      });
-    }
+  app.get("/internal/rooms/:code/joinable", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
 
     const code = (request.params as { code?: string }).code;
     if (!code) {
-      return reply.code(400).send({
-        message: "Room code is required."
-      });
+      throw new ApiError("Room code is required.", 400);
     }
 
-    try {
-      return await dependencies.roomService.requireJoinableRoom(code);
-    } catch (error) {
-      return sendRoomError(reply, error);
-    }
+    return dependencies.roomService.requireJoinableRoom(code);
   });
 
-  app.get("/me/rounds", async (request, reply) => {
-    const claims = authenticate(request.headers, dependencies.tokenConfig);
-    if (!claims) {
-      return reply.code(401).send({
-        message: "Invalid access token."
-      });
-    }
-
-    try {
-      return await dependencies.historyService.listRounds(claims.sub);
-    } catch (error) {
-      return sendHistoryError(reply, error);
-    }
+  app.get("/me/rounds", async (request) => {
+    const claims = requireAuth(request.headers, dependencies.tokenConfig);
+    return dependencies.historyService.listRounds(claims.sub);
   });
 
-  app.get("/me/rounds/:roundId", async (request, reply) => {
-    const claims = authenticate(request.headers, dependencies.tokenConfig);
-    if (!claims) {
-      return reply.code(401).send({
-        message: "Invalid access token."
-      });
-    }
+  app.get("/me/rounds/:roundId", async (request) => {
+    const claims = requireAuth(request.headers, dependencies.tokenConfig);
 
     const roundId = (request.params as { roundId?: string }).roundId?.trim();
     if (!roundId) {
-      return reply.code(400).send({
-        message: "Round id is required."
-      });
+      throw new ApiError("Round id is required.", 400);
     }
 
-    try {
-      return await dependencies.historyService.getRoundReplay(claims.sub, roundId);
-    } catch (error) {
-      return sendHistoryError(reply, error);
-    }
+    return dependencies.historyService.getRoundReplay(claims.sub, roundId);
   });
 
-  app.get("/me/coin-ledgers", async (request, reply) => {
-    const claims = authenticate(request.headers, dependencies.tokenConfig);
-    if (!claims) {
-      return reply.code(401).send({
-        message: "Invalid access token."
-      });
-    }
-
-    try {
-      return await dependencies.historyService.listCoinLedgers(claims.sub);
-    } catch (error) {
-      return sendHistoryError(reply, error);
-    }
+  app.get("/me/coin-ledgers", async (request) => {
+    const claims = requireAuth(request.headers, dependencies.tokenConfig);
+    return dependencies.historyService.listCoinLedgers(claims.sub);
   });
 
-  app.patch("/internal/rooms/:code/status", async (request, reply) => {
-    if (!isInternalRequest(request.headers, dependencies.internalConfig.token)) {
-      return reply.code(401).send({
-        message: "Invalid internal token."
-      });
-    }
+  app.patch("/internal/rooms/:code/status", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
 
     const code = (request.params as { code?: string }).code;
     if (!code) {
-      return reply.code(400).send({
-        message: "Room code is required."
-      });
+      throw new ApiError("Room code is required.", 400);
     }
 
     const parsed = updateRoomStatusRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({
-        message: "Invalid room status request.",
-        issues: parsed.error.issues
-      });
+      throw new ApiError("Invalid room status request.", 400, parsed.error.issues);
     }
 
-    try {
-      return await dependencies.roomService.updateRoomStatus(code, parsed.data.status);
-    } catch (error) {
-      return sendRoomError(reply, error);
-    }
+    return dependencies.roomService.updateRoomStatus(code, parsed.data.status);
   });
 
-  app.post("/internal/game-actions", async (request, reply) => {
-    if (!isInternalRequest(request.headers, dependencies.internalConfig.token)) {
-      return reply.code(401).send({
-        message: "Invalid internal token."
-      });
-    }
+  app.post("/internal/game-actions", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
 
     const parsed = recordGameActionRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({
-        message: "Invalid game action request.",
-        issues: parsed.error.issues
-      });
+      throw new ApiError("Invalid game action request.", 400, parsed.error.issues);
     }
 
-    try {
-      return await dependencies.gameActionService.record(parsed.data);
-    } catch (error) {
-      return sendGameActionError(reply, error);
-    }
+    return dependencies.gameActionService.record(parsed.data);
   });
 
   return app;
 }
 
-function isInternalRequest(headers: Record<string, string | string[] | undefined>, token: string): boolean {
-  return headers["x-ddz-internal-token"] === token;
+/** CORS 白名单：从 CORS_ORIGINS 读取（逗号分隔），默认仅允许本地开发前端 */
+function readCorsOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CORS_ORIGINS ?? "http://localhost:5173,http://127.0.0.1:5173";
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 }
 
-function authenticate(headers: Record<string, string | string[] | undefined>, config: TokenConfig): AccessTokenClaims | null {
+type RequestHeaders = Record<string, string | string[] | undefined>;
+
+function requireInternal(headers: RequestHeaders, token: string): void {
+  const header = headers["x-ddz-internal-token"];
+  // 常量时间比较，避免内部令牌被时序攻击逐字节猜测
+  if (typeof header !== "string" || !constantTimeEquals(header, token)) {
+    throw new ApiError("Invalid internal token.", 401);
+  }
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function requireAuth(headers: RequestHeaders, config: TokenConfig): AccessTokenClaims {
+  const claims = authenticate(headers, config);
+  if (!claims) {
+    throw new ApiError("Invalid access token.", 401);
+  }
+  return claims;
+}
+
+function authenticate(headers: RequestHeaders, config: TokenConfig): AccessTokenClaims | null {
   const authorization = headers.authorization;
   if (typeof authorization !== "string" || !authorization.startsWith("Bearer ")) {
     return null;
@@ -258,44 +230,4 @@ function authenticate(headers: Record<string, string | string[] | undefined>, co
   } catch {
     return null;
   }
-}
-
-function sendAuthError(reply: { code(statusCode: number): { send(payload: unknown): unknown } }, error: unknown) {
-  if (error instanceof AuthError) {
-    return reply.code(error.statusCode).send({
-      message: error.message
-    });
-  }
-
-  throw error;
-}
-
-function sendRoomError(reply: { code(statusCode: number): { send(payload: unknown): unknown } }, error: unknown) {
-  if (error instanceof RoomError) {
-    return reply.code(error.statusCode).send({
-      message: error.message
-    });
-  }
-
-  throw error;
-}
-
-function sendGameActionError(reply: { code(statusCode: number): { send(payload: unknown): unknown } }, error: unknown) {
-  if (error instanceof GameActionError) {
-    return reply.code(error.statusCode).send({
-      message: error.message
-    });
-  }
-
-  throw error;
-}
-
-function sendHistoryError(reply: { code(statusCode: number): { send(payload: unknown): unknown } }, error: unknown) {
-  if (error instanceof HistoryError) {
-    return reply.code(error.statusCode).send({
-      message: error.message
-    });
-  }
-
-  throw error;
 }

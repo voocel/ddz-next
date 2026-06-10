@@ -1,7 +1,11 @@
+import { COMBINATION_KINDS, GAME_PHASES, RANKS, SUITS } from "@ddz/domain";
+import type { Card, Combination, GamePhase, GameSnapshot, PublicPlay, Rank, Settlement, Suit } from "@ddz/domain";
 import { z } from "zod";
 
-export const rankSchema = z.enum(["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2", "SJ", "BJ"]);
-export const suitSchema = z.enum(["clubs", "diamonds", "hearts", "spades"]);
+// 与 @ddz/domain 共享的 schema 一律从 domain 常量派生并用 satisfies 锁定输出类型，
+// domain 改动时这里会编译期报错，防止两份定义漂移。
+export const rankSchema = z.enum(RANKS) satisfies z.ZodType<Rank>;
+export const suitSchema = z.enum(SUITS) satisfies z.ZodType<Suit>;
 export const cardIdSchema = z.union([
   z.literal("SJ"),
   z.literal("BJ"),
@@ -12,11 +16,19 @@ export const cardIdSchema = z.union([
   ])
 ]);
 
-export const cardSchema = z.object({
-  id: cardIdSchema,
-  rank: rankSchema,
-  suit: suitSchema.optional()
-});
+export const cardSchema = z
+  .object({
+    id: cardIdSchema,
+    rank: rankSchema,
+    suit: suitSchema.optional()
+  })
+  .refine(
+    (card) =>
+      card.id === "SJ" || card.id === "BJ"
+        ? card.rank === card.id && card.suit === undefined
+        : card.suit !== undefined && card.id === `${card.rank}-${card.suit}`,
+    { message: "Card id must match its rank and suit." }
+  ) satisfies z.ZodType<Card>;
 
 export const playerSnapshotSchema = z.object({
   id: z.string().min(1),
@@ -28,38 +40,28 @@ export const playerSnapshotSchema = z.object({
   score: z.number().int()
 });
 
-export const gamePhaseSchema = z.enum(["waiting", "ready", "bidding", "robbing", "playing", "settled"]);
+export const gamePhaseSchema = z.enum(GAME_PHASES) satisfies z.ZodType<GamePhase>;
 
-export const combinationKindSchema = z.enum([
-  "single",
-  "pair",
-  "trio",
-  "trio_with_single",
-  "trio_with_pair",
-  "straight",
-  "pair_sequence",
-  "plane",
-  "plane_with_singles",
-  "plane_with_pairs",
-  "four_with_two_singles",
-  "four_with_two_pairs",
-  "bomb",
-  "rocket"
-]);
+export const combinationKindSchema = z.enum(COMBINATION_KINDS);
 
-export const combinationSchema = z.object({
-  kind: combinationKindSchema,
-  cards: z.array(cardSchema),
-  mainRank: rankSchema,
-  length: z.number().int().positive(),
-  chainLength: z.number().int().positive().optional()
-});
+export const combinationSchema = z
+  .object({
+    kind: combinationKindSchema,
+    cards: z.array(cardSchema).max(20),
+    mainRank: rankSchema,
+    length: z.number().int().positive(),
+    chainLength: z.number().int().positive().optional()
+  })
+  .refine((combination) => combination.cards.length === combination.length, {
+    message: "Combination length must match its card count.",
+    path: ["length"]
+  }) satisfies z.ZodType<Combination>;
 
 export const publicPlaySchema = z.object({
   playerId: z.string().min(1),
   cards: z.array(cardSchema),
   combination: combinationSchema
-});
+}) satisfies z.ZodType<PublicPlay>;
 
 export const settlementPlayerSchema = z.object({
   playerId: z.string().min(1),
@@ -70,16 +72,33 @@ export const settlementPlayerSchema = z.object({
   totalScore: z.number().int()
 });
 
-export const settlementSchema = z.object({
-  winnerId: z.string().min(1),
-  landlordId: z.string().min(1),
-  landlordWon: z.boolean(),
-  baseScore: z.number().int().positive(),
-  players: z.array(settlementPlayerSchema).length(3)
-}).refine((settlement) => settlement.players.reduce((total, player) => total + player.scoreDelta, 0) === 0, {
-  message: "Settlement score deltas must be zero-sum.",
-  path: ["players"]
-});
+export const settlementSchema = z
+  .object({
+    winnerId: z.string().min(1),
+    landlordId: z.string().min(1),
+    landlordWon: z.boolean(),
+    baseScore: z.number().int().positive(),
+    // default 兼容历史落库数据（multiplier/spring 引入前的对局回放）。
+    multiplier: z.number().int().min(1).default(1),
+    spring: z.boolean().default(false),
+    players: z.array(settlementPlayerSchema).length(3)
+  })
+  .refine((settlement) => settlement.players.reduce((total, player) => total + player.scoreDelta, 0) === 0, {
+    message: "Settlement score deltas must be zero-sum.",
+    path: ["players"]
+  })
+  .refine((settlement) => new Set(settlement.players.map((player) => player.playerId)).size === settlement.players.length, {
+    message: "Settlement players must be unique.",
+    path: ["players"]
+  })
+  .refine((settlement) => new Set(settlement.players.map((player) => player.seat)).size === settlement.players.length, {
+    message: "Settlement seats must be unique.",
+    path: ["players"]
+  })
+  .refine((settlement) => settlement.players.filter((player) => player.role === "landlord").length === 1, {
+    message: "Settlement must contain exactly one landlord.",
+    path: ["players"]
+  }) satisfies z.ZodType<Settlement>;
 
 export const gameSnapshotSchema = z.object({
   phase: gamePhaseSchema,
@@ -90,8 +109,9 @@ export const gameSnapshotSchema = z.object({
   landlordCards: z.array(cardSchema),
   lastPlay: publicPlaySchema.nullable(),
   passCount: z.number().int().min(0).max(2),
+  multiplier: z.number().int().min(1).default(1),
   settlement: settlementSchema.nullable()
-});
+}) satisfies z.ZodType<GameSnapshot>;
 
 export const readyCommandSchema = z.object({
   type: z.literal("ready")

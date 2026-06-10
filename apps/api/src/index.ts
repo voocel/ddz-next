@@ -1,4 +1,4 @@
-import { loadRootEnv } from "./env.js";
+import { loadRootEnv } from "@ddz/env";
 import { buildServer } from "./server.js";
 import { createDefaultAuthDependencies } from "./auth/defaults.js";
 
@@ -24,4 +24,18 @@ if (demoUser.enabled) {
     },
     "Demo user is available."
   );
+}
+
+// 优雅停机：关闭 HTTP 服务（onClose 钩子内会断开 Prisma 连接）
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, async () => {
+    server.log.info({ signal }, "Shutting down.");
+    try {
+      await server.close();
+      process.exit(0);
+    } catch (error) {
+      server.log.error(error, "Failed to shut down gracefully.");
+      process.exit(1);
+    }
+  });
 }

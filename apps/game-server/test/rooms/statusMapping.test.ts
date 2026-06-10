@@ -9,8 +9,8 @@ describe("mapSnapshotToRoomStatus", () => {
     }
   });
 
-  it("maps settled rounds to closed", () => {
-    expect(mapSnapshotToRoomStatus(createSnapshot("settled"))).toBe("closed");
+  it("maps settled rounds to playing because the room continues with the next round", () => {
+    expect(mapSnapshotToRoomStatus(createSnapshot("settled"))).toBe("playing");
   });
 
   it("maps empty disconnected pre-game rooms to open", () => {
@@ -34,7 +34,7 @@ describe("mapSnapshotToRoomStatus", () => {
     ).toBe("open");
   });
 
-  it("keeps pre-game rooms with a connected human unchanged", () => {
+  it("maps pre-game rooms with a connected human and an empty seat to open", () => {
     expect(
       mapSnapshotToRoomStatus({
         ...createSnapshot("waiting"),
@@ -43,7 +43,19 @@ describe("mapSnapshotToRoomStatus", () => {
           { id: "bot:test:1", kind: "bot", seat: 1, ready: true, handCount: 0, connected: true, score: 0 }
         ]
       })
-    ).toBeNull();
+    ).toBe("open");
+  });
+
+  it("maps ready rooms with empty seats back to open so players can join", () => {
+    expect(
+      mapSnapshotToRoomStatus({
+        ...createSnapshot("ready"),
+        players: [
+          { id: "p0", kind: "human", seat: 0, ready: true, handCount: 0, connected: true, score: 0 },
+          { id: "bot:test:1", kind: "bot", seat: 1, ready: true, handCount: 0, connected: true, score: 0 }
+        ]
+      })
+    ).toBe("open");
   });
 
   it("maps full ready rooms to playing so they stop being matched", () => {
@@ -65,6 +77,7 @@ function createSnapshot(phase: GamePhase): GameSnapshot {
     landlordCards: [],
     lastPlay: null,
     passCount: 0,
+    multiplier: 1,
     settlement: null
   };
 }

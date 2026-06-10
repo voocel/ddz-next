@@ -123,7 +123,7 @@ function readPreviousCombination(play: GameSnapshotDto["lastPlay"]): Combination
   return identifyCombination(play.cards.map(toDomainCard));
 }
 
-function toDomainCard(card: CardDto): Card {
+export function toDomainCard(card: CardDto): Card {
   if (card.suit === undefined) {
     return {
       id: card.id,

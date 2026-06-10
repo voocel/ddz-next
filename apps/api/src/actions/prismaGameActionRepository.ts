@@ -122,6 +122,11 @@ export class PrismaGameActionRepository implements GameActionRepository {
 
       for (const action of input.roundActions) {
         if (action.type === "round_started") {
+          // 事务内重查，确保同一房间不存在未结束的局（DB 部分唯一索引兜底）
+          const openRound = await findOpenRound(tx, input.roomId);
+          if (openRound) {
+            throw new GameActionError("Cannot start a round while another round is open.", 409);
+          }
           round = await tx.round.create({
             data: {
               roomId: input.roomId
@@ -238,17 +243,24 @@ async function createRoomEvent(tx: PrismaTransaction, roomId: string, event: Roo
 }
 
 async function applySettlement(tx: PrismaTransaction, roundId: string, settlement: RoundSettlementInput): Promise<void> {
-  await tx.round.update({
+  // 带 endedAt 守卫的条件更新：已结算的局不能二次结算
+  const settled = await tx.round.updateMany({
     where: {
-      id: roundId
+      id: roundId,
+      endedAt: null
     },
     data: {
       landlordId: settlement.landlordId,
       endedAt: new Date()
     }
   });
+  if (settled.count === 0) {
+    throw new GameActionError("Round was already settled.", 409);
+  }
 
-  for (const player of settlement.players) {
+  // 按 playerId 排序后逐个更新，保证并发事务以相同顺序加锁，避免死锁
+  const players = [...settlement.players].sort((a, b) => a.playerId.localeCompare(b.playerId));
+  for (const player of players) {
     await tx.roundPlayer.upsert({
       where: {
         roundId_playerId: {

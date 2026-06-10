@@ -1,28 +1,31 @@
 import type { Card, Rank } from "./cards.js";
 import { compareRank, getRankValue, sortCards } from "./cards.js";
 
-export type CombinationKind =
-  | "single"
-  | "pair"
-  | "trio"
-  | "trio_with_single"
-  | "trio_with_pair"
-  | "straight"
-  | "pair_sequence"
-  | "plane"
-  | "plane_with_singles"
-  | "plane_with_pairs"
-  | "four_with_two_singles"
-  | "four_with_two_pairs"
-  | "bomb"
-  | "rocket";
+export const COMBINATION_KINDS = [
+  "single",
+  "pair",
+  "trio",
+  "trio_with_single",
+  "trio_with_pair",
+  "straight",
+  "pair_sequence",
+  "plane",
+  "plane_with_singles",
+  "plane_with_pairs",
+  "four_with_two_singles",
+  "four_with_two_pairs",
+  "bomb",
+  "rocket"
+] as const;
+
+export type CombinationKind = (typeof COMBINATION_KINDS)[number];
 
 export interface Combination {
   readonly kind: CombinationKind;
   readonly cards: readonly Card[];
   readonly mainRank: Rank;
   readonly length: number;
-  readonly chainLength?: number;
+  readonly chainLength?: number | undefined;
 }
 
 interface RankGroup {
@@ -94,7 +97,7 @@ export function identifyCombination(cards: readonly Card[]): Combination | null 
     return plane;
   }
 
-  if (cards.length === 6 && quads.length === 1 && singles.length === 2) {
+  if (cards.length === 6 && quads.length === 1 && singles.length === 2 && !wingsSplitRocket(singles)) {
     return createCombination("four_with_two_singles", sorted, quads[0]!.rank);
   }
 
@@ -126,10 +129,7 @@ export function canBeat(candidate: Combination, previous: Combination | null): b
     return false;
   }
 
-  if (candidate.length !== previous.length) {
-    return false;
-  }
-
+  // 同类型下 length 由 kind 与 chainLength 唯一决定，校验 chainLength 即可。
   if (candidate.chainLength !== previous.chainLength) {
     return false;
   }
@@ -150,6 +150,11 @@ function createCombination(
     length: cards.length,
     ...(chainLength === undefined ? {} : { chainLength })
   };
+}
+
+// 双王（火箭）不允许被拆开当作带牌的翼；单张王可以。
+function wingsSplitRocket(wings: readonly RankGroup[]): boolean {
+  return wings.some((group) => group.rank === "SJ") && wings.some((group) => group.rank === "BJ");
 }
 
 function getRankGroups(cards: readonly Card[]): RankGroup[] {
@@ -229,7 +234,7 @@ function identifyPlane(
     return createCombination("plane", cards, mainRank, trios.length);
   }
 
-  if (wingLength === trios.length && singles.length === trios.length) {
+  if (wingLength === trios.length && singles.length === trios.length && !wingsSplitRocket(singles)) {
     return createCombination("plane_with_singles", cards, mainRank, trios.length);
   }
 

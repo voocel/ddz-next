@@ -1,9 +1,19 @@
 import Phaser from "phaser";
-import { identifyCombination, suggestPlay, type Card, type CardId } from "@ddz/domain";
+import { identifyCombination, suggestPlay, type CardId } from "@ddz/domain";
 import { gameSnapshotSchema } from "@ddz/protocol";
-import type { CardDto, GameEvent, GameSnapshotDto, RoundHistoryActionDto, RoundReplayDto } from "@ddz/protocol";
-import { describeSelectedCards, validateSelectedPlay } from "./playValidation";
-import { describeEventFeedback, describePhasePrompt, describeSettlement, describeSnapshotStatus } from "./tablePresentation";
+import type { CardDto, GameEvent, GameSnapshotDto, RoundReplayDto } from "@ddz/protocol";
+import { describeSelectedCards, toDomainCard, validateSelectedPlay } from "./playValidation";
+import {
+  describeEventFeedback,
+  describePhasePrompt,
+  describeSettlement,
+  formatActor,
+  formatCardId,
+  formatReplayAction,
+  formatScore,
+  isRedCardId,
+  parseReplayCardIds
+} from "./tablePresentation";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
 
 export interface TableGameBridge {
@@ -17,7 +27,15 @@ interface TableSceneOptions {
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-type SoundKey = "sound-click" | "sound-select" | "sound-play" | "sound-pass" | "sound-deal" | "sound-start";
+type SoundKey =
+  | "sound-click"
+  | "sound-select"
+  | "sound-play"
+  | "sound-pass"
+  | "sound-deal"
+  | "sound-start"
+  | "sound-win"
+  | "sound-lose";
 type CardSuit = "♥" | "♦" | "♠" | "♣";
 
 interface RenderedHandCard {
@@ -26,29 +44,38 @@ interface RenderedHandCard {
 }
 
 const TEXT_STYLE = {
-  fontFamily: "Menlo, monospace",
+  fontFamily: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
   fontSize: "16px",
-  color: "#f6e7b1",
+  fontStyle: "700",
+  color: "#fff6e0",
   resolution: getTableDevicePixelRatio()
 } satisfies Phaser.Types.GameObjects.Text.TextStyle;
 
+const INK = "#5b3a1e";
+const INK_SOFT = "#7a5a36";
+const ACCENT = "#d8820c";
+
 const BUTTON_WIDTH = 132;
 const BUTTON_HEIGHT = 79;
-const SEAT_POSITIONS = [
-  { x: 640, y: 198 },
-  { x: 216, y: 360 },
-  { x: 1064, y: 360 }
+// 按相对本地玩家的座位渲染：0 = 自己（左下），1 = 下家（右上），2 = 上家（左上）
+const RELATIVE_SEAT_POSITIONS = [
+  { x: 176, y: 556 },
+  { x: 1064, y: 300 },
+  { x: 216, y: 300 }
 ] as const;
 
 export class TableScene extends Phaser.Scene implements TableGameBridge {
   private readonly selected = new Set<CardId>();
   private hand: CardDto[] = [];
   private snapshot: GameSnapshotDto | null = null;
-  private statusText?: Phaser.GameObjects.Text;
+  private replayMode = false;
+  // React 状态可能先于场景 create() 到达，缓存待应用的回放与进入回放前的直播状态
+  private replayState: { readonly replay: RoundReplayDto; readonly step: number } | null = null;
+  private liveState: { readonly snapshot: GameSnapshotDto | null; readonly hand: CardDto[] } | null = null;
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
-  private settlementText?: Phaser.GameObjects.Text;
-  private replayText?: Phaser.GameObjects.Text;
+  private feedbackText?: Phaser.GameObjects.Text;
+  private playControls: (Phaser.GameObjects.Image | Phaser.GameObjects.Text)[] = [];
   private landlordCardsLayer?: Phaser.GameObjects.Container;
   private settlementLayer?: Phaser.GameObjects.Container;
   private handLayer?: Phaser.GameObjects.Container;
@@ -69,16 +96,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   preload(): void {
-    this.load.image("table-bg", "/assets/images/generated/table_room.png");
-    this.load.image("card-back", "/assets/images/generated/card_back.png");
-    this.load.image("coin", "/assets/images/generated/coin.png");
+    this.load.image("table-bg", "/assets/images/generated/lobby/bg_table.jpg");
+    this.load.image("card-back", "/assets/images/generated/lobby/card_back.png");
+    this.load.image("coin", "/assets/images/coin.png");
     this.load.image("suit-hearts", "/assets/images/heart.png");
     this.load.image("suit-diamonds", "/assets/images/diamond.png");
     this.load.image("suit-spades", "/assets/images/spade.png");
     this.load.image("suit-clubs", "/assets/images/club.png");
-    this.load.image("play-button", "/assets/images/generated/button/play.png");
-    this.load.image("pass-button", "/assets/images/generated/button/pass.png");
-    this.load.image("tip-button", "/assets/images/generated/button/tip.png");
+    this.load.image("play-button", "/assets/images/generated/lobby/btn_pill_orange.png");
+    this.load.image("pass-button", "/assets/images/generated/lobby/btn_pill_green.png");
+    this.load.image("tip-button", "/assets/images/generated/lobby/btn_pill_blue.png");
 
     this.load.audio("sound-click", "/assets/audio/click.mp3");
     this.load.audio("sound-select", "/assets/audio/select.mp3");
@@ -86,6 +113,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.load.audio("sound-pass", "/assets/audio/pass0.mp3");
     this.load.audio("sound-deal", "/assets/audio/deal.mp3");
     this.load.audio("sound-start", "/assets/audio/start.mp3");
+    this.load.audio("sound-win", "/assets/audio/end_win.mp3");
+    this.load.audio("sound-lose", "/assets/audio/end_lose.mp3");
   }
 
   create(): void {
@@ -95,29 +124,28 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
     });
     this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
-    this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.18);
 
-    this.add.rectangle(380, 82, 690, 96, 0x11150f, 0.58).setStrokeStyle(1, 0xf1c45d, 0.28);
-    this.statusText = this.add.text(56, 44, "等待服务端状态", {
-      ...TEXT_STYLE,
-      fontSize: "15px"
-    });
-    this.settlementText = this.add.text(56, 106, "", {
-      ...TEXT_STYLE,
-      color: "#f4c542"
-    });
-    this.replayText = this.add.text(56, 146, "", {
-      ...TEXT_STYLE,
-      color: "#d6f5dc",
-      wordWrap: {
-        width: 760
-      }
-    });
+    this.feedbackText = this.add
+      .text(640, 502, "", {
+        ...TEXT_STYLE,
+        fontSize: "15px",
+        backgroundColor: "rgba(74, 42, 16, 0.78)",
+        wordWrap: {
+          width: 760
+        }
+      })
+      .setOrigin(0.5)
+      .setPadding(14, 6, 14, 6)
+      .setDepth(18)
+      .setVisible(false);
     this.phaseText = this.add
       .text(640, 246, "等待玩家入座", {
         ...TEXT_STYLE,
         fontSize: "30px",
-        color: "#f4c542"
+        fontStyle: "900",
+        color: "#ffffff",
+        stroke: INK,
+        strokeThickness: 6
       })
       .setOrigin(0.5)
       .setDepth(15);
@@ -125,8 +153,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .text(640, 298, "", {
         ...TEXT_STYLE,
         fontSize: "22px",
-        color: "#d6f5dc",
-        backgroundColor: "rgba(17, 21, 15, 0.72)"
+        color: "#fff6e0",
+        backgroundColor: "rgba(74, 42, 16, 0.78)"
       })
       .setOrigin(0.5)
       .setPadding(18, 8, 18, 8)
@@ -158,7 +186,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.createImageButton(1188, 646, "play-button", "出牌", () => {
       const validation = validateSelectedPlay(this.hand, this.selected, this.snapshot, this.options.localPlayerId);
       if (!validation.ok) {
-        this.replayText?.setText(validation.reason);
+        this.setFeedback(validation.reason);
         return;
       }
       this.playSound("sound-play");
@@ -166,6 +194,14 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.selected.clear();
       this.renderHand();
     });
+    this.updatePlayControls();
+
+    // 场景就绪前到达的 snapshot/hand/回放在此补渲染，避免白屏
+    if (this.replayState) {
+      this.applyReplay(this.replayState.replay, this.replayState.step);
+    } else {
+      this.renderLiveState();
+    }
   }
 
   private fitStageToCanvas(): void {
@@ -176,7 +212,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   applyEvent(event: GameEvent): void {
-    this.replayText?.setText("");
+    this.setFeedback("");
     const feedback = describeEventFeedback(event, this.options.localPlayerId);
     if (feedback) {
       this.showActionFeedback(feedback, event.type === "command_rejected" ? 0xff8f70 : 0xd6f5dc);
@@ -184,14 +220,15 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     if ("snapshot" in event) {
       this.snapshot = event.snapshot;
-      this.renderStatus(event.snapshot);
-      this.renderSeats(event.snapshot);
-      this.renderLandlordCards(event.snapshot);
-      this.renderSettlementOverlay(event.snapshot);
+      this.renderSnapshotViews(event.snapshot);
+      if (event.type !== "cards_played") {
+        // 同步快照中的上一手牌；cards_played 走下方的动画路径
+        this.syncLastPlay(event.snapshot);
+      }
     }
 
     if (event.type === "room_failed") {
-      this.statusText?.setText(`房间故障: ${event.reason}`);
+      this.setFeedback(`房间故障: ${event.reason}`);
     }
 
     if ("hand" in event) {
@@ -204,7 +241,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.playSound("sound-start");
       this.playSound("sound-deal");
       this.lastPlayLayer?.removeAll(true);
-      this.settlementText?.setText("");
       this.settlementLayer?.setVisible(false);
     }
 
@@ -225,48 +261,52 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.hand = event.hand;
       this.pruneSelectedCards();
       this.renderHand();
-      this.settlementText?.setText(
-        [
-          `赢家: ${shortId(event.settlement.winnerId)}`,
-          `地主: ${shortId(event.settlement.landlordId)}`,
-          ...event.settlement.players.map((player) => `${shortId(player.playerId)}: ${formatScore(player.scoreDelta)}`)
-        ].join("  ")
-      );
-    }
-
-    if (event.type === "command_rejected") {
-      this.statusText?.setText(`命令被拒绝: ${event.reason}`);
+      this.playSound(event.settlement.winnerId === this.options.localPlayerId ? "sound-win" : "sound-lose");
     }
   }
 
   applyReplay(replay: RoundReplayDto | null, step: number): void {
+    const wasReplay = this.replayMode;
+    this.replayMode = Boolean(replay);
+
     if (!replay) {
-      this.replayText?.setText("");
+      this.replayState = null;
+      if (wasReplay) {
+        // 退出回放：恢复进入前暂存的直播状态
+        this.snapshot = this.liveState?.snapshot ?? null;
+        this.hand = this.liveState?.hand ?? [];
+        this.liveState = null;
+        this.selected.clear();
+        this.renderLiveState();
+      }
+      this.setFeedback("");
+      this.updatePlayControls();
       return;
     }
+
+    if (!wasReplay) {
+      // 进入回放：暂存直播状态，退出时恢复
+      this.liveState = { snapshot: this.snapshot, hand: this.hand };
+    }
+    this.replayState = { replay, step };
 
     this.selected.clear();
     this.hand = [];
     this.snapshot = null;
     this.renderHand();
+    this.updatePlayControls();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
     const action = replay.actions[currentStep];
     const snapshot = action ? parseReplaySnapshot(action.payload.snapshot) : null;
-    this.statusText?.setText(`回放: ${replay.roomCode}  ${currentStep + 1}/${Math.max(1, replay.actions.length)}`);
     if (snapshot) {
       this.snapshot = snapshot;
-      this.renderStatus(snapshot);
-      this.renderSeats(snapshot);
-      this.renderLandlordCards(snapshot);
-      this.renderSettlementOverlay(snapshot);
-      this.settlementText?.setText(snapshot.settlement ? formatSettlement(snapshot.settlement) : formatReplayScore(replay));
-      this.replayText?.setText(action ? formatReplayAction(action) : "暂无回放事件");
+      this.renderSnapshotViews(snapshot);
+      this.setFeedback(action ? formatReplayAction(action) : "暂无回放事件");
     } else {
       this.renderReplaySeats(replay);
       this.renderLandlordCards(null);
       this.settlementLayer?.setVisible(false);
-      this.settlementText?.setText(formatReplayScore(replay));
-      this.replayText?.setText(action ? `历史事件缺少快照: ${formatReplayAction(action)}` : "暂无回放事件");
+      this.setFeedback(action ? `历史事件缺少快照: ${formatReplayAction(action)}` : "暂无回放事件");
     }
 
     if (snapshot?.lastPlay) {
@@ -282,16 +322,17 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const button = this.add.image(x, y, texture).setDisplaySize(BUTTON_WIDTH, BUTTON_HEIGHT).setInteractive({
       useHandCursor: true
     });
-    this.add
-      .text(x, y + 13, label, {
-        fontFamily: "Inter, system-ui, sans-serif",
-        fontSize: "17px",
-        fontStyle: "800",
-        color: "#fff6d3",
-        stroke: "#2f1f0b",
+    const buttonLabel = this.add
+      .text(x, y - 3, label, {
+        fontFamily: TEXT_STYLE.fontFamily,
+        fontSize: "19px",
+        fontStyle: "900",
+        color: "#ffffff",
+        stroke: INK,
         strokeThickness: 4
       })
       .setOrigin(0.5);
+    this.playControls.push(button, buttonLabel);
 
     button.on("pointerdown", () => {
       button.setTint(0xd7f5ff);
@@ -304,6 +345,17 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.playSound("sound-click");
       onClick();
     });
+  }
+
+  private createSeatPlate(x: number, y: number, active: boolean): Phaser.GameObjects.Graphics {
+    const plate = this.add.graphics();
+    plate.fillStyle(0x8c5318, active ? 0.85 : 0.5);
+    plate.fillRoundedRect(x - 107 + 3, y - 37 + 5, 214, 74, 18);
+    plate.fillStyle(0xfff6e0, 0.96);
+    plate.fillRoundedRect(x - 107, y - 37, 214, 74, 18);
+    plate.lineStyle(active ? 4 : 2, active ? 0xffb300 : 0xb9772f, 1);
+    plate.strokeRoundedRect(x - 107, y - 37, 214, 74, 18);
+    return plate;
   }
 
   private renderHand(): void {
@@ -352,7 +404,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   private applySuggestion(): void {
     if (!this.snapshot || this.snapshot.phase !== "playing") {
-      this.replayText?.setText("提示仅在出牌阶段可用");
+      this.setFeedback("提示仅在出牌阶段可用");
       return;
     }
     if (!this.ensureLocalTurn()) {
@@ -362,14 +414,14 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const previousCards = this.snapshot.lastPlay?.cards ?? null;
     const previous = previousCards ? identifyCombination(previousCards.map(toDomainCard)) : null;
     if (previousCards && !previous) {
-      this.replayText?.setText("上一手牌型无法识别，不能生成提示");
+      this.setFeedback("上一手牌型无法识别，不能生成提示");
       return;
     }
     const suggestion = suggestPlay(this.hand.map(toDomainCard), previous);
     if (!suggestion) {
       this.selected.clear();
       this.renderHand();
-      this.replayText?.setText("没有可压过上一手的牌");
+      this.setFeedback("没有可压过上一手的牌");
       return;
     }
 
@@ -379,31 +431,78 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
     this.playSound("sound-select");
     this.renderHand();
-    this.replayText?.setText(`提示: ${describeSelectedCards(this.hand, this.selected)}`);
+    this.setFeedback(`提示: ${describeSelectedCards(this.hand, this.selected)}`);
   }
 
   private ensureLocalTurn(): boolean {
     if (this.snapshot?.phase !== "playing") {
-      this.replayText?.setText("当前不是出牌阶段");
+      this.setFeedback("当前不是出牌阶段");
       return false;
     }
 
     if (!this.options.localPlayerId) {
-      this.replayText?.setText("尚未绑定本地玩家");
+      this.setFeedback("尚未绑定本地玩家");
       return false;
     }
 
     if (this.snapshot.currentPlayerId !== this.options.localPlayerId) {
-      this.replayText?.setText("还没轮到你出牌");
+      this.setFeedback("还没轮到你出牌");
       return false;
     }
 
     return true;
   }
 
+  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行） */
+  private renderSnapshotViews(snapshot: GameSnapshotDto): void {
+    this.renderStatus(snapshot);
+    this.renderSeats(snapshot);
+    this.renderLandlordCards(snapshot);
+    this.renderSettlementOverlay(snapshot);
+  }
+
+  /** 按快照同步上一手牌区（无动画） */
+  private syncLastPlay(snapshot: GameSnapshotDto): void {
+    if (snapshot.lastPlay) {
+      this.renderLastPlay(snapshot.lastPlay.cards, snapshot.lastPlay.playerId, false);
+    } else {
+      this.lastPlayLayer?.removeAll(true);
+    }
+  }
+
+  /** 按当前缓存的直播 snapshot/hand 渲染整桌；无快照时清空各层 */
+  private renderLiveState(): void {
+    this.renderHand();
+    if (this.snapshot) {
+      this.renderSnapshotViews(this.snapshot);
+      this.syncLastPlay(this.snapshot);
+      return;
+    }
+
+    this.seatsLayer?.removeAll(true);
+    this.renderLandlordCards(null);
+    this.settlementLayer?.setVisible(false);
+    this.lastPlayLayer?.removeAll(true);
+    this.phaseText?.setText("等待玩家入座").setVisible(true);
+    this.updatePlayControls();
+  }
+
   private renderStatus(snapshot: GameSnapshotDto): void {
-    this.statusText?.setText(describeSnapshotStatus(snapshot, this.options.localPlayerId));
-    this.phaseText?.setText(describePhasePrompt(snapshot, this.options.localPlayerId));
+    this.phaseText
+      ?.setText(describePhasePrompt(snapshot, this.options.localPlayerId))
+      .setVisible(!snapshot.settlement);
+    this.updatePlayControls();
+  }
+
+  private setFeedback(message: string): void {
+    this.feedbackText?.setText(message).setVisible(message.length > 0);
+  }
+
+  private updatePlayControls(): void {
+    const visible = !this.replayMode && this.snapshot?.phase === "playing";
+    for (const control of this.playControls) {
+      control.setVisible(visible);
+    }
   }
 
   private renderSeats(snapshot: GameSnapshotDto): void {
@@ -413,37 +512,49 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     seatsLayer.removeAll(true);
+    const localSeat = snapshot.players.find((player) => player.id === this.options.localPlayerId)?.seat ?? null;
+    const showReady = snapshot.phase === "waiting" || snapshot.phase === "ready";
 
     snapshot.players.forEach((player) => {
-      const position = SEAT_POSITIONS[player.seat];
-      if (!position) {
-        return;
-      }
-
+      const position = this.seatPositionFor(player.seat, localSeat);
+      const isLocal = player.id === this.options.localPlayerId;
       const active = snapshot.currentPlayerId === player.id;
-      const rect = this.add
-        .rectangle(position.x, position.y, 214, 74, 0x11150f, 0.78)
-        .setStrokeStyle(active ? 3 : 2, active ? 0xf4c542 : 0x6b4c1c, active ? 0.9 : 0.58);
+      const plate = this.createSeatPlate(position.x, position.y, active);
       const coin = this.add.image(position.x - 82, position.y - 18, "coin").setDisplaySize(28, 28);
-      const landlord = snapshot.landlordId === player.id ? " 地主" : "";
-      const label = this.add.text(position.x - 54, position.y - 28, `#${player.seat + 1} ${shortId(player.id)}${landlord}`, {
-        ...TEXT_STYLE,
-        fontSize: "14px"
-      });
+      const landlord = snapshot.landlordId === player.id ? " 👑地主" : "";
+      const label = this.add.text(
+        position.x - 54,
+        position.y - 28,
+        `${formatActor(player.id, this.options.localPlayerId)}${landlord}`,
+        {
+          ...TEXT_STYLE,
+          fontSize: "14px",
+          fontStyle: "900",
+          color: INK
+        }
+      );
+      const offline = !player.connected ? "  已离线" : "";
       const meta = this.add.text(
         position.x - 54,
         position.y - 4,
-        `${player.ready ? "已准备" : "未准备"}  手牌 ${player.handCount}  分 ${player.score}`,
+        `${showReady ? (player.ready ? "已准备  " : "未准备  ") : ""}手牌 ${player.handCount}  分 ${player.score}${offline}`,
         {
           ...TEXT_STYLE,
           fontSize: "12px",
-          color: player.connected ? "#d6f5dc" : "#ff8f70"
+          color: player.connected ? INK_SOFT : "#e25840"
         }
       );
 
-      this.addCardBackStack(seatsLayer, position.x + 35, position.y + 19, player.handCount);
-      seatsLayer.add([rect, coin, label, meta]);
+      if (!isLocal) {
+        this.addCardBackStack(seatsLayer, position.x + 35, position.y + 19, player.handCount);
+      }
+      seatsLayer.add([plate, coin, label, meta]);
     });
+  }
+
+  private seatPositionFor(seat: number, localSeat: number | null): { x: number; y: number } {
+    const relative = localSeat === null ? seat : (seat - localSeat + 3) % 3;
+    return RELATIVE_SEAT_POSITIONS[relative] ?? RELATIVE_SEAT_POSITIONS[0];
   }
 
   private renderLandlordCards(snapshot: GameSnapshotDto | null): void {
@@ -458,7 +569,10 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const label = this.add.text(640, 88, revealed ? "地主底牌" : "底牌待定", {
       ...TEXT_STYLE,
       fontSize: "14px",
-      color: "#f4c542"
+      fontStyle: "900",
+      color: "#ffffff",
+      stroke: INK,
+      strokeThickness: 4
     }).setOrigin(0.5);
     layer.add(label);
 
@@ -493,20 +607,31 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     const rows = describeSettlement(snapshot, this.options.localPlayerId);
-    const backdrop = this.add.rectangle(640, 388, 560, 254, 0x11150f, 0.92).setStrokeStyle(2, 0xf4c542, 0.68);
+    const backdrop = this.add.graphics();
+    backdrop.fillStyle(0x8c5318, 0.6);
+    backdrop.fillRoundedRect(360 + 4, 261 + 7, 560, 254, 26);
+    backdrop.fillStyle(0xfff6e0, 0.98);
+    backdrop.fillRoundedRect(360, 261, 560, 254, 26);
+    backdrop.lineStyle(5, 0xb9772f, 1);
+    backdrop.strokeRoundedRect(360, 261, 560, 254, 26);
     const title = this.add.text(640, 298, "本局结算", {
       ...TEXT_STYLE,
       fontSize: "28px",
-      color: "#f4c542"
+      fontStyle: "900",
+      color: ACCENT
     }).setOrigin(0.5);
     layer.add([backdrop, title]);
 
     rows.forEach((row, index) => {
-      const text = this.add.text(420, 340 + index * 30, row, {
-        ...TEXT_STYLE,
-        fontSize: index < 2 ? "17px" : "15px",
-        color: index < 2 ? "#f6e7b1" : "#d6f5dc"
-      });
+      // 前 3 行为赢家/地主/倍数摘要，其余为玩家明细
+      const text = this.add
+        .text(640, 340 + index * 30, row, {
+          ...TEXT_STYLE,
+          fontSize: index < 3 ? "17px" : "15px",
+          fontStyle: index < 3 ? "900" : "700",
+          color: index < 3 ? INK : INK_SOFT
+        })
+        .setOrigin(0.5, 0);
       layer.add(text);
     });
 
@@ -577,27 +702,31 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     seatsLayer.removeAll(true);
+    const localSeat = replay.players.find((player) => player.playerId === this.options.localPlayerId)?.seat ?? null;
 
     replay.players.forEach((player) => {
-      const position = SEAT_POSITIONS[player.seat];
-      if (!position) {
-        return;
-      }
-
-      const rect = this.add.rectangle(position.x, position.y, 214, 74, 0x11150f, 0.78).setStrokeStyle(2, 0x6b4c1c, 0.58);
+      const position = this.seatPositionFor(player.seat, localSeat);
+      const plate = this.createSeatPlate(position.x, position.y, false);
       const coin = this.add.image(position.x - 82, position.y - 18, "coin").setDisplaySize(28, 28);
-      const label = this.add.text(position.x - 54, position.y - 28, `#${player.seat + 1} ${shortId(player.playerId)}`, {
-        ...TEXT_STYLE,
-        fontSize: "14px"
-      });
+      const label = this.add.text(
+        position.x - 54,
+        position.y - 28,
+        formatActor(player.playerId, this.options.localPlayerId),
+        {
+          ...TEXT_STYLE,
+          fontSize: "14px",
+          fontStyle: "900",
+          color: INK
+        }
+      );
       const meta = this.add.text(position.x - 54, position.y - 4, `分 ${player.score}  流水 ${formatScore(player.coinDelta)}`, {
         ...TEXT_STYLE,
         fontSize: "12px",
-        color: "#d6f5dc"
+        color: INK_SOFT
       });
 
       this.addCardBackStack(seatsLayer, position.x + 35, position.y + 19, 5);
-      seatsLayer.add([rect, coin, label, meta]);
+      seatsLayer.add([plate, coin, label, meta]);
     });
   }
 
@@ -748,20 +877,25 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const countText = this.add.text(x + 58, y - 9, `x${count}`, {
       ...TEXT_STYLE,
       fontSize: "12px",
-      color: "#f4c542"
+      fontStyle: "900",
+      color: "#ffffff",
+      stroke: INK,
+      strokeThickness: 3
     });
     layer.add(countText);
   }
 
   private playSound(key: SoundKey): void {
-    const played = this.sound.play(key, {
-      volume: key === "sound-select" ? 0.45 : 0.62
-    });
-
-    if (!played) {
-      const message = `音效播放失败: ${key}`;
-      this.replayText?.setText(message);
-      console.warn(message);
+    // 音效失败只记录日志，不打断游戏流程
+    try {
+      const played = this.sound.play(key, {
+        volume: key === "sound-select" ? 0.45 : 0.62
+      });
+      if (!played) {
+        console.warn(`音效播放失败: ${key}`);
+      }
+    } catch (error) {
+      console.warn(`音效播放失败: ${key}`, error);
     }
   }
 
@@ -792,9 +926,15 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
   }
 
-  private findSeatPosition(playerId: string): (typeof SEAT_POSITIONS)[number] | null {
-    const player = this.snapshot?.players.find((item) => item.id === playerId);
-    return player ? SEAT_POSITIONS[player.seat] ?? null : null;
+  private findSeatPosition(playerId: string): { x: number; y: number } | null {
+    const players = this.snapshot?.players;
+    const player = players?.find((item) => item.id === playerId);
+    if (!player) {
+      return null;
+    }
+
+    const localSeat = players?.find((item) => item.id === this.options.localPlayerId)?.seat ?? null;
+    return this.seatPositionFor(player.seat, localSeat);
   }
 
   private handleHandDragMove(pointer: Phaser.Input.Pointer): void {
@@ -821,7 +961,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.dragSelection = null;
     if (touched > 0) {
       this.playSound("sound-select");
-      this.replayText?.setText(describeSelectedCards(this.hand, this.selected));
+      this.setFeedback(describeSelectedCards(this.hand, this.selected));
       this.renderHand();
     }
   }
@@ -895,90 +1035,7 @@ function cardTextStyle(fontSize: string, color: string): Phaser.Types.GameObject
   };
 }
 
-function toDomainCard(card: CardDto): Card {
-  if (card.suit === undefined) {
-    return {
-      id: card.id,
-      rank: card.rank
-    };
-  }
-
-  return {
-    id: card.id,
-    rank: card.rank,
-    suit: card.suit
-  };
-}
-
-function formatScore(score: number): string {
-  return score > 0 ? `+${score}` : `${score}`;
-}
-
-function formatReplayScore(replay: RoundReplayDto): string {
-  const endedAt = replay.endedAt ? `结束: ${new Date(replay.endedAt).toLocaleString("zh-CN")}` : "进行中";
-  return [
-    `地主: ${replay.landlordId ? shortId(replay.landlordId) : "-"}`,
-    endedAt,
-    ...replay.players.map((player) => `${shortId(player.playerId)} ${formatScore(player.coinDelta)}`)
-  ].join("  ");
-}
-
-function formatSettlement(settlement: NonNullable<GameSnapshotDto["settlement"]>): string {
-  return [
-    `赢家: ${shortId(settlement.winnerId)}`,
-    `地主: ${shortId(settlement.landlordId)}`,
-    ...settlement.players.map((player) => `${shortId(player.playerId)} ${formatScore(player.scoreDelta)}`)
-  ].join("  ");
-}
-
-function formatReplayAction(action: RoundHistoryActionDto): string {
-  const actor = action.playerId ? shortId(action.playerId) : "系统";
-    switch (action.type) {
-      case "round_started":
-        return "开局发牌";
-      case "landlord_bid":
-        return `${actor} ${action.payload.called === true ? "叫地主" : "不叫"}`;
-    case "landlord_robbed":
-      return `${actor} ${action.payload.robbed === true ? "抢地主" : "不抢"}`;
-    case "cards_played":
-      return `${actor} 出牌 ${parseReplayCardIds(action.payload.cards).map(formatCardId).join(" ")}`;
-    case "player_passed":
-      return `${actor} 过牌`;
-      case "round_settled":
-        return `${actor} 完成结算`;
-    }
-  }
-
 function parseReplaySnapshot(value: unknown): GameSnapshotDto | null {
   const parsed = gameSnapshotSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
-}
-
-function parseReplayCardIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === "string");
-}
-
-function shortId(value: string): string {
-  return value.length > 8 ? `${value.slice(0, 8)}...` : value;
-}
-
-function formatCardId(cardId: string): string {
-  if (cardId === "SJ") {
-    return "小王";
-  }
-  if (cardId === "BJ") {
-    return "大王";
-  }
-
-  const [rank, suit] = cardId.split("-");
-  const suitText = suit === "hearts" ? "♥" : suit === "diamonds" ? "♦" : suit === "spades" ? "♠" : "♣";
-  return `${rank ?? cardId}${suit ? suitText : ""}`;
-}
-
-function isRedCardId(cardId: string): boolean {
-  return cardId.includes("-hearts") || cardId.includes("-diamonds") || cardId === "BJ";
 }

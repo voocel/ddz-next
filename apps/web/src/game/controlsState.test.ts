@@ -51,6 +51,7 @@ function snapshot(
     landlordCards: [],
     lastPlay: null,
     passCount: 0,
+    multiplier: 1,
     settlement: null
   };
 }

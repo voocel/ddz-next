@@ -144,3 +144,56 @@ describe("Dou Dizhu card combinations", () => {
     expect(suggestPlay(hand, previous!)).toBeNull();
   });
 });
+
+describe("rocket as attachment wings", () => {
+  it("rejects both jokers together as wings", () => {
+    expect(
+      identifyCombination(
+        parseCardIds(["3-clubs", "3-hearts", "3-spades", "4-clubs", "4-hearts", "4-spades", "SJ", "BJ"])
+      )
+    ).toBeNull();
+    expect(identifyCombination(parseCardIds(["4-clubs", "4-hearts", "4-spades", "4-diamonds", "SJ", "BJ"]))).toBeNull();
+  });
+
+  it("allows a single joker as one wing", () => {
+    expect(
+      identifyCombination(
+        parseCardIds(["3-clubs", "3-hearts", "3-spades", "4-clubs", "4-hearts", "4-spades", "SJ", "5-clubs"])
+      )?.kind
+    ).toBe("plane_with_singles");
+    expect(identifyCombination(parseCardIds(["4-clubs", "4-hearts", "4-spades", "4-diamonds", "SJ", "5-clubs"]))?.kind).toBe(
+      "four_with_two_singles"
+    );
+  });
+});
+
+describe("chain boundaries", () => {
+  it("allows straights up to ace but not across 2", () => {
+    expect(identifyCombination(parseCardIds(["10-clubs", "J-clubs", "Q-clubs", "K-clubs", "A-clubs"]))?.kind).toBe(
+      "straight"
+    );
+    expect(identifyCombination(parseCardIds(["J-clubs", "Q-clubs", "K-clubs", "A-clubs", "2-clubs"]))).toBeNull();
+    expect(
+      identifyCombination(parseCardIds(["A-clubs", "A-hearts", "A-spades", "2-clubs", "2-hearts", "2-spades"]))
+    ).toBeNull();
+  });
+
+  it("requires matching chain length between sequences", () => {
+    const five = identifyCombination(parseCardIds(["3-clubs", "4-clubs", "5-clubs", "6-clubs", "7-clubs"]));
+    const six = identifyCombination(parseCardIds(["4-hearts", "5-hearts", "6-hearts", "7-hearts", "8-hearts", "9-hearts"]));
+    expect(canBeat(six!, five)).toBe(false);
+  });
+});
+
+describe("parseCardId validation", () => {
+  it("rejects malformed ids", () => {
+    expect(() => parseCardIds(["SJ-clubs" as never])).toThrow("Invalid card id");
+    expect(() => parseCardIds(["2-spades-x" as never])).toThrow("Invalid card id");
+    expect(() => parseCardIds(["Z-clubs" as never])).toThrow("Invalid card id");
+    expect(() => parseCardIds(["3-stars" as never])).toThrow("Invalid card id");
+  });
+
+  it("accepts valid ids including jokers", () => {
+    expect(parseCardIds(["2-spades", "SJ", "BJ"]).map((card) => card.rank)).toEqual(["2", "SJ", "BJ"]);
+  });
+});

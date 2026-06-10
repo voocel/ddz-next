@@ -16,6 +16,10 @@ interface PhaserTableProps {
 export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep, onPlay }: PhaserTableProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const bridgeRef = useRef<TableGameBridge | null>(null);
+  const lastAppliedRef = useRef<GameEvent | null>(null);
+  // 回调走 ref，避免父组件重建回调时反复销毁/重建 Phaser 场景
+  const callbacksRef = useRef({ onPass, onPlay });
+  callbacksRef.current = { onPass, onPlay };
 
   useEffect(() => {
     if (!hostRef.current) {
@@ -24,29 +28,45 @@ export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep,
 
     const tableGame = createTableGame(hostRef.current, {
       localPlayerId,
-      onPass,
-      onPlay
+      onPass: () => callbacksRef.current.onPass(),
+      onPlay: (cards) => callbacksRef.current.onPlay(cards)
     });
 
     bridgeRef.current = tableGame.bridge;
+    // 场景重建后重放全部事件
+    lastAppliedRef.current = null;
 
     return () => {
       tableGame.destroy();
       bridgeRef.current = null;
     };
-  }, [localPlayerId, onPass, onPlay]);
+  }, [localPlayerId]);
 
   useEffect(() => {
     if (replay) {
+      // 回放期间直播事件只跟踪不应用（丢弃式），退出回放后不会重放过期事件
+      lastAppliedRef.current = events[0] ?? null;
+      return;
+    }
+    if (!events.length) {
       return;
     }
 
-    const latestEvent = events[0];
-    if (!latestEvent) {
-      return;
+    // events 为最新在前；一个 React 批次可能合并多条事件，只放最新一条会丢失
+    // 携带手牌的 round_started 等中间事件，因此按时间顺序补放所有未应用的事件。
+    const pending: GameEvent[] = [];
+    for (const event of events) {
+      if (event === lastAppliedRef.current) {
+        break;
+      }
+      pending.push(event);
     }
 
-    bridgeRef.current?.applyEvent(latestEvent);
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      bridgeRef.current?.applyEvent(pending[index]!);
+    }
+
+    lastAppliedRef.current = events[0] ?? null;
   }, [events, replay]);
 
   useEffect(() => {

@@ -25,7 +25,7 @@ export type CardId = `${Exclude<Rank, "SJ" | "BJ">}-${Suit}` | "SJ" | "BJ";
 export interface Card {
   readonly id: CardId;
   readonly rank: Rank;
-  readonly suit?: Suit;
+  readonly suit?: Suit | undefined;
 }
 
 const rankValue = new Map<Rank, number>(RANKS.map((rank, index) => [rank, index]));
@@ -120,8 +120,15 @@ export function parseCardId(id: CardId): Card {
     };
   }
 
-  const [rank, suit] = id.split("-");
-  if (!RANKS.includes(rank as Rank) || !SUITS.includes(suit as Suit)) {
+  const segments = id.split("-");
+  const [rank, suit] = segments;
+  if (
+    segments.length !== 2 ||
+    rank === "SJ" ||
+    rank === "BJ" ||
+    !RANKS.includes(rank as Rank) ||
+    !SUITS.includes(suit as Suit)
+  ) {
     throw new Error(`Invalid card id: ${id}`);
   }
 

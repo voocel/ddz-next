@@ -18,8 +18,10 @@
   },
   "dependencies": {
     "@ddz/auth": "workspace:*",
+    "@ddz/env": "workspace:*",
     "@ddz/protocol": "workspace:*",
     "@fastify/cors": "^11.1.0",
+    "@fastify/rate-limit": "^11.0.0",
     "@prisma/client": "^6.19.0",
     "fastify": "^5.6.2",
     "zod": "^4.1.13"

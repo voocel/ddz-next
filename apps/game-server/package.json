@@ -17,6 +17,7 @@
     "@colyseus/ws-transport": "^0.17.13",
     "@ddz/auth": "workspace:*",
     "@ddz/domain": "workspace:*",
+    "@ddz/env": "workspace:*",
     "@ddz/protocol": "workspace:*"
   },
   "devDependencies": {

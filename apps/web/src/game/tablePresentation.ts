@@ -1,4 +1,4 @@
-import type { GameEvent, GameSnapshotDto } from "@ddz/protocol";
+import type { GameEvent, GameSnapshotDto, RoundHistoryActionDto } from "@ddz/protocol";
 import { combinationKindLabel } from "./playValidation";
 
 const PHASE_LABELS: Record<GameSnapshotDto["phase"], string> = {
@@ -84,6 +84,7 @@ export function describeSettlement(snapshot: GameSnapshotDto, localPlayerId: str
   return [
     `赢家 ${formatActor(snapshot.settlement.winnerId, localPlayerId)}`,
     `地主 ${formatActor(snapshot.settlement.landlordId, localPlayerId)}`,
+    `倍数 x${snapshot.settlement.multiplier}${snapshot.settlement.spring ? "（春天）" : ""}`,
     ...snapshot.settlement.players
       .slice()
       .sort((a, b) => a.seat - b.seat)
@@ -107,10 +108,53 @@ export function formatActor(playerId: string, localPlayerId: string): string {
   return shortId(playerId);
 }
 
-function formatScore(score: number): string {
+export function formatScore(score: number): string {
   return score > 0 ? `+${score}` : String(score);
 }
 
-function shortId(value: string): string {
+export function shortId(value: string): string {
   return value.length > 8 ? `${value.slice(0, 8)}...` : value;
+}
+
+export function formatReplayAction(action: RoundHistoryActionDto): string {
+  const actor = action.playerId ? shortId(action.playerId) : "系统";
+  switch (action.type) {
+    case "round_started":
+      return "开局发牌";
+    case "landlord_bid":
+      return `${actor} ${action.payload.called === true ? "叫地主" : "不叫"}`;
+    case "landlord_robbed":
+      return `${actor} ${action.payload.robbed === true ? "抢地主" : "不抢"}`;
+    case "cards_played":
+      return `${actor} 出牌 ${parseReplayCardIds(action.payload.cards).map(formatCardId).join(" ")}`;
+    case "player_passed":
+      return `${actor} 过牌`;
+    case "round_settled":
+      return `${actor} 完成结算`;
+  }
+}
+
+export function parseReplayCardIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+export function formatCardId(cardId: string): string {
+  if (cardId === "SJ") {
+    return "小王";
+  }
+  if (cardId === "BJ") {
+    return "大王";
+  }
+
+  const [rank, suit] = cardId.split("-");
+  const suitText = suit === "hearts" ? "♥" : suit === "diamonds" ? "♦" : suit === "spades" ? "♠" : "♣";
+  return `${rank ?? cardId}${suit ? suitText : ""}`;
+}
+
+export function isRedCardId(cardId: string): boolean {
+  return cardId.includes("-hearts") || cardId.includes("-diamonds") || cardId === "BJ";
 }

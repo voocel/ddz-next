@@ -67,6 +67,7 @@ function snapshot(options: { readonly previous: CardDto[] | null }): GameSnapsho
         }
       : null,
     passCount: 0,
+    multiplier: 1,
     settlement: null
   };
 }

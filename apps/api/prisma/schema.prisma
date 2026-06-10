@@ -42,6 +42,9 @@ model RoomEvent {
   @@index([roomId, createdAt])
 }
 
+// 注意：Round 上还有一个 Prisma 无法表达的部分唯一索引
+// "Round_roomId_open_round_key"（roomId WHERE endedAt IS NULL），
+// 保证同一房间同时只有一局未结束，见迁移 add_settlement_constraints
 model Round {
   id         String        @id @default(cuid())
   roomId     String
@@ -107,6 +110,7 @@ model CoinLedger {
   reason    String
   createdAt DateTime @default(now())
 
+  // 同一局对同一用户只允许一条流水，防止重复结算入账
+  @@unique([roundId, userId])
   @@index([userId, createdAt])
-  @@index([roundId])
 }

@@ -9,13 +9,28 @@ interface GameClientOptions {
   readonly roomCode: string;
   readonly onEvent: (event: GameEvent) => void;
   readonly onStatus: (status: string) => void;
+  /** 房间被服务端/网络异常关闭（非本地主动离开）时回调 */
+  readonly onDropped: (code: number) => void;
 }
+
+/** Colyseus 主动离开的正常关闭码 */
+const NORMAL_LEAVE_CODE = 1000;
 
 export function createGameClient(options: GameClientOptions) {
   let room: Room | null = null;
+  // 世代号：每次 connect/disconnect 自增，旧连接的异步回调据此失效，
+  // 避免快速进出房间时旧连接覆盖新状态。
+  let generation = 0;
+
+  const disconnect = (): void => {
+    generation += 1;
+    room?.leave();
+    room = null;
+  };
 
   return {
     async connect() {
+      const gen = ++generation;
       try {
         if (!options.playerId.trim()) {
           throw new Error("Player id is required before connecting to the game server.");
@@ -29,13 +44,23 @@ export function createGameClient(options: GameClientOptions) {
 
         options.onStatus("连接中");
         const client = new Client(options.endpoint);
-        room = await client.joinOrCreate("ddz", {
+        const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
           roomCode: options.roomCode
         });
+        if (gen !== generation) {
+          // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接
+          void joined.leave();
+          return;
+        }
+
+        room = joined;
         options.onStatus(`已进入房间 ${options.roomCode}`);
 
-        room.onMessage("event", (payload: unknown) => {
+        joined.onMessage("event", (payload: unknown) => {
+          if (gen !== generation) {
+            return;
+          }
           const parsed = gameEventSchema.safeParse(payload);
           if (!parsed.success) {
             console.error("Invalid game event", parsed.error.issues);
@@ -44,25 +69,34 @@ export function createGameClient(options: GameClientOptions) {
           options.onEvent(parsed.data);
         });
 
-        room.onLeave((code) => {
-          options.onStatus(`已离开房间 ${code}`);
+        joined.onLeave((code) => {
+          if (gen !== generation) {
+            return;
+          }
+          // 走到这里说明不是本地 disconnect 触发（disconnect 会先自增世代号）
+          generation += 1;
+          room = null;
+          if (code === NORMAL_LEAVE_CODE) {
+            options.onStatus(`已离开房间 ${code}`);
+            return;
+          }
+          options.onDropped(code);
         });
 
-        room.onError((code, message) => {
+        joined.onError((code, message) => {
+          if (gen !== generation) {
+            return;
+          }
           options.onStatus(`房间错误 ${code}: ${message}`);
         });
       } catch (error) {
+        if (gen !== generation) {
+          return;
+        }
         options.onStatus(error instanceof Error ? error.message : "连接失败");
       }
     },
-    disconnect() {
-      room?.leave();
-      room = null;
-    },
-    leaveRoom() {
-      room?.leave();
-      room = null;
-    },
+    disconnect,
     ready() {
       room?.send("command", {
         type: "ready"

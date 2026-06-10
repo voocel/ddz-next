@@ -5,25 +5,33 @@ export function useTurnTimerTicker(
   turnTimer: TurnTimerState | null,
   setTurnTimer: Dispatch<SetStateAction<TurnTimerState | null>>
 ): void {
+  // 只依赖截止时间：每 250ms 刷新 remainingMs 不会重建 interval，归零后停表
+  const deadlineAt = turnTimer?.deadlineAt ?? null;
+
   useEffect(() => {
-    if (!turnTimer) {
+    if (!deadlineAt) {
       return;
     }
 
+    const deadline = new Date(deadlineAt).getTime();
     const timer = window.setInterval(() => {
+      const remainingMs = Math.max(0, deadline - Date.now());
       setTurnTimer((current) => {
-        if (!current) {
-          return null;
+        if (!current || current.deadlineAt !== deadlineAt) {
+          return current;
         }
         return {
           ...current,
-          remainingMs: Math.max(0, new Date(current.deadlineAt).getTime() - Date.now())
+          remainingMs
         };
       });
+      if (remainingMs <= 0) {
+        window.clearInterval(timer);
+      }
     }, 250);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [setTurnTimer, turnTimer]);
+  }, [deadlineAt, setTurnTimer]);
 }

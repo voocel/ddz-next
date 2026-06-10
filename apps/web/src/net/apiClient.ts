@@ -17,6 +17,8 @@ import {
 
 export interface ApiClientOptions {
   readonly endpoint: string;
+  /** 请求返回 401 时回调（用于自动登出） */
+  readonly onUnauthorized?: () => void;
 }
 
 export function createApiClient(options: ApiClientOptions) {
@@ -28,37 +30,37 @@ export function createApiClient(options: ApiClientOptions) {
       return postAuth(options.endpoint, "/auth/register", input);
     },
     listRooms(): Promise<RoomListResponse> {
-      return requestJson(options.endpoint, "/rooms", {
+      return requestJson(options, "/rooms", {
         method: "GET"
       }).then((body) => parseRoomList(body));
     },
     createRoom(accessToken: string): Promise<RoomResponse> {
-      return requestJson(options.endpoint, "/rooms", {
+      return requestJson(options, "/rooms", {
         method: "POST",
         headers: authHeaders(accessToken),
         body: JSON.stringify({})
       }).then((body) => parseRoomResponse(body));
     },
     matchRoom(accessToken: string): Promise<RoomResponse> {
-      return requestJson(options.endpoint, "/rooms/match", {
+      return requestJson(options, "/rooms/match", {
         method: "POST",
         headers: authHeaders(accessToken)
       }).then((body) => parseRoomResponse(body));
     },
     listRoundHistory(accessToken: string): Promise<RoundHistoryResponse> {
-      return requestJson(options.endpoint, "/me/rounds", {
+      return requestJson(options, "/me/rounds", {
         method: "GET",
         headers: authHeaders(accessToken)
       }).then((body) => parseRoundHistory(body));
     },
     getRoundReplay(accessToken: string, roundId: string): Promise<RoundReplayResponse> {
-      return requestJson(options.endpoint, `/me/rounds/${encodeURIComponent(roundId)}`, {
+      return requestJson(options, `/me/rounds/${encodeURIComponent(roundId)}`, {
         method: "GET",
         headers: authHeaders(accessToken)
       }).then((body) => parseRoundReplay(body));
     },
     listCoinLedgers(accessToken: string): Promise<CoinLedgerResponse> {
-      return requestJson(options.endpoint, "/me/coin-ledgers", {
+      return requestJson(options, "/me/coin-ledgers", {
         method: "GET",
         headers: authHeaders(accessToken)
       }).then((body) => parseCoinLedgers(body));
@@ -67,7 +69,8 @@ export function createApiClient(options: ApiClientOptions) {
 }
 
 async function postAuth(endpoint: string, path: string, payload: unknown): Promise<LoginResponse> {
-  const body = await requestJson(endpoint, path, {
+  // 认证接口的 401 表示账号密码错误，不走自动登出回调
+  const body = await requestJson({ endpoint }, path, {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -80,17 +83,20 @@ async function postAuth(endpoint: string, path: string, payload: unknown): Promi
   return parsed.data;
 }
 
-async function requestJson(endpoint: string, path: string, init: RequestInit): Promise<unknown> {
+async function requestJson(options: ApiClientOptions, path: string, init: RequestInit): Promise<unknown> {
   const headers = {
     ...init.headers,
     ...(init.body === undefined ? {} : { "content-type": "application/json" })
   };
-  const response = await fetch(new URL(path, endpoint), {
+  const response = await fetch(new URL(path, options.endpoint), {
     ...init,
     headers
   });
   const body = (await response.json()) as unknown;
   if (!response.ok) {
+    if (response.status === 401) {
+      options.onUnauthorized?.();
+    }
     throw new Error(readErrorMessage(body));
   }
   return body;

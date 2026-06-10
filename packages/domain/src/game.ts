@@ -6,7 +6,9 @@ import { canBeat, identifyCombination } from "./combinations.js";
 export type PlayerId = string;
 export type PlayerKind = "human" | "bot";
 export type SeatIndex = 0 | 1 | 2;
-export type GamePhase = "waiting" | "ready" | "bidding" | "robbing" | "playing" | "settled";
+
+export const GAME_PHASES = ["waiting", "ready", "bidding", "robbing", "playing", "settled"] as const;
+export type GamePhase = (typeof GAME_PHASES)[number];
 
 export interface PlayerSnapshot {
   readonly id: PlayerId;
@@ -27,6 +29,7 @@ export interface GameSnapshot {
   readonly landlordCards: readonly Card[];
   readonly lastPlay: PublicPlay | null;
   readonly passCount: number;
+  readonly multiplier: number;
   readonly settlement: Settlement | null;
 }
 
@@ -50,6 +53,8 @@ export interface Settlement {
   readonly landlordId: PlayerId;
   readonly landlordWon: boolean;
   readonly baseScore: number;
+  readonly multiplier: number;
+  readonly spring: boolean;
   readonly players: readonly SettlementPlayer[];
 }
 
@@ -98,6 +103,9 @@ export class GameTable {
   private bidAttempts = 0;
   private robQueue: PlayerId[] = [];
   private robIndex = 0;
+  private robCount = 0;
+  private bombCount = 0;
+  private readonly playCounts = new Map<PlayerId, number>();
 
   addPlayer(playerId: PlayerId): SeatIndex {
     if (this.players.has(playerId)) {
@@ -229,11 +237,7 @@ export class GameTable {
       this.robQueue = this.otherPlayersInTurnOrder(playerId);
       this.robIndex = 0;
       this.phase = "robbing";
-      this.currentPlayerId = this.robQueue[0] ?? null;
-
-      if (!this.currentPlayerId) {
-        this.finalizeLandlord(playerId);
-      }
+      this.currentPlayerId = this.robQueue[0]!;
 
       return {
         playerId,
@@ -279,6 +283,7 @@ export class GameTable {
 
     if (robbed) {
       this.bidCandidateId = playerId;
+      this.robCount += 1;
     }
 
     this.robIndex += 1;
@@ -333,6 +338,10 @@ export class GameTable {
       combination
     };
 
+    if (combination.kind === "bomb" || combination.kind === "rocket") {
+      this.bombCount += 1;
+    }
+    this.playCounts.set(playerId, (this.playCounts.get(playerId) ?? 0) + 1);
     this.lastPlay = play;
     this.passCount = 0;
 
@@ -395,8 +404,38 @@ export class GameTable {
       landlordCards: this.landlordCards,
       lastPlay: this.lastPlay,
       passCount: this.passCount,
+      multiplier: this.currentMultiplier(),
       settlement: this.settlement
     };
+  }
+
+  /** 结算后开启下一局：保留玩家与累计分，清空牌局状态，回到 ready/waiting。 */
+  resetForNextRound(): GameSnapshot {
+    if (this.phase !== "settled") {
+      throw new Error(`Cannot reset during ${this.phase} phase.`);
+    }
+
+    for (const player of this.players.values()) {
+      player.ready = false;
+      player.hand = [];
+    }
+
+    this.currentPlayerId = null;
+    this.landlordId = null;
+    this.bidCandidateId = null;
+    this.landlordCards = [];
+    this.bottomCards = [];
+    this.lastPlay = null;
+    this.settlement = null;
+    this.passCount = 0;
+    this.bidAttempts = 0;
+    this.robQueue = [];
+    this.robIndex = 0;
+    this.robCount = 0;
+    this.bombCount = 0;
+    this.playCounts.clear();
+    this.phase = this.players.size === 3 ? "ready" : "waiting";
+    return this.snapshot();
   }
 
   private dealForBidding(): void {
@@ -420,6 +459,9 @@ export class GameTable {
     this.bidAttempts = 0;
     this.robQueue = [];
     this.robIndex = 0;
+    this.robCount = 0;
+    this.bombCount = 0;
+    this.playCounts.clear();
     this.phase = "bidding";
   }
 
@@ -484,6 +526,26 @@ export class GameTable {
     return result;
   }
 
+  private currentMultiplier(): number {
+    return 2 ** (this.robCount + this.bombCount);
+  }
+
+  private isSpring(landlordWon: boolean): boolean {
+    if (!this.landlordId) {
+      return false;
+    }
+
+    if (landlordWon) {
+      // 春天：两位农民整局没出过一手牌。
+      return [...this.players.values()]
+        .filter((player) => player.id !== this.landlordId)
+        .every((player) => (this.playCounts.get(player.id) ?? 0) === 0);
+    }
+
+    // 反春：地主只出过首手就被农民打完。
+    return (this.playCounts.get(this.landlordId) ?? 0) <= 1;
+  }
+
   private createSettlement(winnerId: PlayerId): Settlement {
     if (!this.landlordId) {
       throw new Error("Cannot settle before landlord is decided.");
@@ -491,12 +553,15 @@ export class GameTable {
 
     const baseScore = 1;
     const landlordWon = winnerId === this.landlordId;
+    const spring = this.isSpring(landlordWon);
+    const multiplier = this.currentMultiplier() * (spring ? 2 : 1);
     const players = [...this.players.values()].sort((a, b) => a.seat - b.seat);
 
     const settlementPlayers = players.map((player) => {
       const role = player.id === this.landlordId ? "landlord" : "farmer";
+      const farmerDelta = baseScore * multiplier;
       const scoreDelta =
-        role === "landlord" ? (landlordWon ? baseScore * 2 : -baseScore * 2) : landlordWon ? -baseScore : baseScore;
+        role === "landlord" ? (landlordWon ? farmerDelta * 2 : -farmerDelta * 2) : landlordWon ? -farmerDelta : farmerDelta;
 
       player.score += scoreDelta;
 
@@ -515,6 +580,8 @@ export class GameTable {
       landlordId: this.landlordId,
       landlordWon,
       baseScore,
+      multiplier,
+      spring,
       players: settlementPlayers
     };
   }

@@ -26,20 +26,25 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  // 散列格式畸形时按验证失败处理，不抛异常导致 500
   const parts = storedHash.split("$");
   if (parts.length !== 6 || parts[0] !== PASSWORD_HASH_ALGORITHM) {
-    throw new Error("Unsupported password hash format.");
+    return false;
   }
 
-  const costText = parts[1]!;
-  const blockSizeText = parts[2]!;
-  const parallelizationText = parts[3]!;
   const salt = parts[4]!;
   const expectedText = parts[5]!;
-  const cost = parsePositiveInteger(costText, "scrypt cost");
-  const blockSize = parsePositiveInteger(blockSizeText, "scrypt block size");
-  const parallelization = parsePositiveInteger(parallelizationText, "scrypt parallelization");
+  const cost = parsePositiveInteger(parts[1]);
+  const blockSize = parsePositiveInteger(parts[2]);
+  const parallelization = parsePositiveInteger(parts[3]);
+  if (cost === null || blockSize === null || parallelization === null) {
+    return false;
+  }
+
   const expected = Buffer.from(expectedText, "base64url");
+  if (expected.length === 0) {
+    return false;
+  }
   const actual = await deriveKey(password, salt, {
     cost,
     blockSize,
@@ -79,10 +84,10 @@ async function deriveKey(password: string, salt: string, params: ScryptParams): 
   });
 }
 
-function parsePositiveInteger(value: string | undefined, label: string): number {
+function parsePositiveInteger(value: string | undefined): number | null {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${label}.`);
+    return null;
   }
   return parsed;
 }

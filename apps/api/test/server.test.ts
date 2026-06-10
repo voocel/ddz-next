@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { AuthService, type AuthUserRecord, type CreateUserInput, type UserRepository } from "../src/auth/service";
+import { AuthService } from "../src/auth/service";
 import { GameActionService } from "../src/actions/service";
-import {
-  HistoryService,
-  type CoinLedgerRecord,
-  type HistoryRepository,
-  type RoundHistoryRecord,
-  type RoundReplayRecord
-} from "../src/history/service";
+import { HistoryService } from "../src/history/service";
 import { RoomService } from "../src/rooms/service";
 import { buildServer } from "../src/server";
-import { InMemoryGameActionRepository } from "./actions/service.test";
-import { InMemoryRoomRepository } from "./rooms/service.test";
+import {
+  InMemoryGameActionRepository,
+  InMemoryHistoryRepository,
+  InMemoryRoomRepository,
+  InMemoryUserRepository
+} from "./helpers";
 
 const tokenConfig = {
   secret: "test-secret-that-is-long-enough",
@@ -491,41 +489,34 @@ describe("API auth routes", () => {
 
     await app.close();
   });
+
+  it("rate limits repeated auth requests", async () => {
+    const app = buildServer({
+      authService: new AuthService(new InMemoryUserRepository(), tokenConfig),
+      roomService: new RoomService(new InMemoryRoomRepository()),
+      gameActionService: new GameActionService(new InMemoryGameActionRepository()),
+      historyService: new HistoryService(new InMemoryHistoryRepository()),
+      tokenConfig,
+      internalConfig: {
+        token: "internal-test-token"
+      }
+    });
+
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: {
+          username: "alice",
+          password: "wrong-password"
+        }
+      });
+      lastStatus = response.statusCode;
+    }
+
+    expect(lastStatus).toBe(429);
+
+    await app.close();
+  });
 });
-
-class InMemoryUserRepository implements UserRepository {
-  readonly records: AuthUserRecord[] = [];
-
-  async findByUsername(username: string): Promise<AuthUserRecord | null> {
-    return this.records.find((record) => record.username === username) ?? null;
-  }
-
-  async createUser(input: CreateUserInput): Promise<AuthUserRecord> {
-    const record = {
-      id: `user-${this.records.length + 1}`,
-      username: input.username,
-      nickname: input.nickname,
-      passwordHash: input.passwordHash
-    };
-    this.records.push(record);
-    return record;
-  }
-}
-
-class InMemoryHistoryRepository implements HistoryRepository {
-  readonly rounds = new Map<string, readonly RoundHistoryRecord[]>();
-  readonly replays = new Map<string, RoundReplayRecord>();
-  readonly ledgers = new Map<string, readonly CoinLedgerRecord[]>();
-
-  async listRoundsByUserId(userId: string): Promise<readonly RoundHistoryRecord[]> {
-    return this.rounds.get(userId) ?? [];
-  }
-
-  async listCoinLedgersByUserId(userId: string): Promise<readonly CoinLedgerRecord[]> {
-    return this.ledgers.get(userId) ?? [];
-  }
-
-  async findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null> {
-    return this.replays.get(`${userId}:${roundId}`) ?? null;
-  }
-}

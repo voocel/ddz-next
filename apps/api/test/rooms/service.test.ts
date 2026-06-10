@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RoomError } from "../../src/rooms/errors";
-import {
-  RoomService,
-  type CreateRoomInput,
-  type RoomRecord,
-  type RoomRepository
-} from "../../src/rooms/service";
+import { RoomService } from "../../src/rooms/service";
+import { InMemoryRoomRepository } from "../helpers";
 
 describe("RoomService", () => {
   it("creates and lists open rooms", async () => {
@@ -76,7 +72,31 @@ describe("RoomService", () => {
 
     expect(updated.room.code).toBe("OPEN02");
     expect(updated.room.status).toBe("playing");
+  });
+
+  it("treats same-status updates as idempotent", async () => {
+    const service = new RoomService(new InMemoryRoomRepository());
+    await service.createRoom({
+      code: "OPEN04"
     });
+
+    const updated = await service.updateRoomStatus("OPEN04", "open");
+
+    expect(updated.room.status).toBe("open");
+  });
+
+  it("rejects status transitions out of the closed terminal state", async () => {
+    const service = new RoomService(new InMemoryRoomRepository());
+    await service.createRoom({
+      code: "OPEN05"
+    });
+    await service.updateRoomStatus("OPEN05", "closed");
+
+    for (const status of ["open", "playing"] as const) {
+      await expect(service.updateRoomStatus("OPEN05", status)).rejects.toMatchObject({
+        statusCode: 409
+      } satisfies Partial<RoomError>);
+    }
   });
 
   it("rejects duplicate closed room codes", async () => {
@@ -96,51 +116,4 @@ describe("RoomService", () => {
       statusCode: 409
     } satisfies Partial<RoomError>);
   });
-
-export class InMemoryRoomRepository implements RoomRepository {
-  readonly records: RoomRecord[] = [];
-
-  async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
-    return this.records
-      .filter((room) => room.status === "open")
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, limit);
-  }
-
-  async findRoomByCode(code: string): Promise<RoomRecord | null> {
-    return this.records.find((room) => room.code === code) ?? null;
-  }
-
-  async findOpenRoomByCode(code: string): Promise<RoomRecord | null> {
-    return this.records.find((room) => room.code === code && room.status === "open") ?? null;
-  }
-
-  async createRoom(input: CreateRoomInput): Promise<RoomRecord> {
-    const now = new Date(Date.UTC(2026, 0, this.records.length + 1));
-    const room = {
-      id: `room-${this.records.length + 1}`,
-      code: input.code,
-      status: input.status,
-      createdAt: now,
-      updatedAt: now
-    };
-    this.records.push(room);
-    return room;
-  }
-
-  async updateRoomStatusByCode(code: string, status: RoomRecord["status"]): Promise<RoomRecord | null> {
-    const index = this.records.findIndex((room) => room.code === code);
-    if (index === -1) {
-      return null;
-    }
-
-    const current = this.records[index]!;
-    const updated = {
-      ...current,
-      status,
-      updatedAt: new Date(current.updatedAt.getTime() + 1000)
-    };
-    this.records[index] = updated;
-    return updated;
-  }
-}
+});

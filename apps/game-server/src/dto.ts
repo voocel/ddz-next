@@ -41,6 +41,7 @@ export function toSnapshotDto(snapshot: GameSnapshot): GameSnapshotDto {
     landlordCards: toCardsDto(snapshot.landlordCards),
     lastPlay: snapshot.lastPlay ? toPublicPlayDto(snapshot.lastPlay) : null,
     passCount: snapshot.passCount,
+    multiplier: snapshot.multiplier,
     settlement: snapshot.settlement ? toSettlementDto(snapshot.settlement) : null
   };
 }
@@ -51,6 +52,8 @@ export function toSettlementDto(settlement: Settlement): SettlementDto {
     landlordId: settlement.landlordId,
     landlordWon: settlement.landlordWon,
     baseScore: settlement.baseScore,
+    multiplier: settlement.multiplier,
+    spring: settlement.spring,
     players: settlement.players.map((player) => ({ ...player }))
   };
 }

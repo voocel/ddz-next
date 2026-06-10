@@ -58,6 +58,50 @@ describe("RoomTurnScheduler", () => {
     expect(fixture.clock.handles).toEqual([]);
   });
 
+  it("drops queued turn timeout tasks when the turn changed before execution", async () => {
+    const fixture = createFixture();
+    const scheduler = createScheduler(fixture, []);
+
+    scheduler.scheduleTurnTimer(createSnapshot("playing", "p0"));
+    fixture.clock.fire(0);
+    expect(fixture.enqueuedTasks).toHaveLength(1);
+
+    // 任务入队后、执行前回合推进（token 变化），迟到的超时任务应放弃执行
+    scheduler.scheduleTurnTimer(createSnapshot("playing", "p2"));
+    await fixture.enqueuedTasks[0]?.();
+
+    expect(fixture.timeoutTurns).toEqual([]);
+  });
+
+  it("drops queued bot turn tasks when the bot timer was rescheduled before execution", async () => {
+    const fixture = createFixture();
+    const scheduler = createScheduler(fixture, ["bot:room:1"]);
+
+    scheduler.scheduleBotTurn(createSnapshot("playing", "bot:room:1"));
+    fixture.clock.fire(0);
+    expect(fixture.enqueuedTasks).toHaveLength(1);
+
+    scheduler.cancelAll();
+    await fixture.enqueuedTasks[0]?.();
+
+    expect(fixture.botTurns).toEqual([]);
+  });
+
+  it("exposes the active turn timer and clears it on cancel", () => {
+    const fixture = createFixture();
+    const scheduler = createScheduler(fixture, []);
+
+    expect(scheduler.getActiveTurnTimer()).toBeNull();
+    scheduler.scheduleTurnTimer(createSnapshot("playing", "p0"));
+    expect(scheduler.getActiveTurnTimer()).toMatchObject({
+      playerId: "p0",
+      durationMs: 1000
+    });
+
+    scheduler.cancelAll();
+    expect(scheduler.getActiveTurnTimer()).toBeNull();
+  });
+
   it("routes scheduled task failures to the room failure handler", async () => {
     const fixture = createFixture();
     fixture.failBotTurn = true;
@@ -175,6 +219,7 @@ function createSnapshot(phase: GameSnapshot["phase"], currentPlayerId: PlayerId 
     landlordCards: [],
     lastPlay: null,
     passCount: 0,
+    multiplier: 1,
     settlement: null
   };
 }

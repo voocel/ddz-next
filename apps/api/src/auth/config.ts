@@ -2,8 +2,9 @@ import type { TokenConfig } from "@ddz/auth";
 
 export function readTokenConfig(env: NodeJS.ProcessEnv = process.env): TokenConfig {
   const secret = env.JWT_SECRET?.trim();
-  if (!secret) {
-    throw new Error("JWT_SECRET is required to start the API authentication service.");
+  // 至少 32 字符，避免弱密钥被暴力破解
+  if (!secret || secret.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters to start the API authentication service.");
   }
 
   const ttl = Number(env.ACCESS_TOKEN_TTL_SECONDS ?? 3600);

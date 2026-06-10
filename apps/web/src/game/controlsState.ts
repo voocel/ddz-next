@@ -27,7 +27,8 @@ export function getTableControlsState(
   const localTurn = Boolean(snapshot && snapshot.currentPlayerId === localPlayerId);
 
   return {
-    ready: Boolean(snapshot && (snapshot.phase === "waiting" || snapshot.phase === "ready") && !localPlayer?.ready),
+    // 本地玩家未入座时不允许准备
+    ready: Boolean(snapshot && (snapshot.phase === "waiting" || snapshot.phase === "ready") && localPlayer && !localPlayer.ready),
     bid: Boolean(snapshot?.phase === "bidding" && localTurn),
     rob: Boolean(snapshot?.phase === "robbing" && localTurn),
     pass: Boolean(snapshot?.phase === "playing" && localTurn),

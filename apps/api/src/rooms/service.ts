@@ -1,5 +1,13 @@
 import type { CreateRoomRequest, RoomDto, RoomListResponse, RoomResponse, RoomStatus } from "@ddz/protocol";
+import { randomInt } from "node:crypto";
 import { RoomError } from "./errors.js";
+
+// 房间状态合法转移表：closed 为终态
+const ROOM_STATUS_TRANSITIONS: Record<RoomStatus, readonly RoomStatus[]> = {
+  open: ["playing", "closed"],
+  playing: ["open", "closed"],
+  closed: []
+};
 
 export interface RoomRecord {
   readonly id: string;
@@ -72,7 +80,23 @@ export class RoomService {
   }
 
   async updateRoomStatus(code: string, status: RoomStatus): Promise<RoomResponse> {
-    const room = await this.rooms.updateRoomStatusByCode(normalizeRoomCode(code), status);
+    const normalized = normalizeRoomCode(code);
+    const current = await this.rooms.findRoomByCode(normalized);
+    if (!current) {
+      throw new RoomError("Room not found.", 404);
+    }
+
+    // 同状态更新视为幂等，直接返回；非法转移拒绝
+    if (current.status === status) {
+      return {
+        room: toRoomDto(current)
+      };
+    }
+    if (!ROOM_STATUS_TRANSITIONS[current.status].includes(status)) {
+      throw new RoomError(`Cannot change room status from ${current.status} to ${status}.`, 409);
+    }
+
+    const room = await this.rooms.updateRoomStatusByCode(normalized, status);
     if (!room) {
       throw new RoomError("Room not found.", 404);
     }
@@ -106,7 +130,8 @@ export function toRoomDto(room: RoomRecord): RoomDto {
 }
 
 function createRoomCode(): string {
-  const value = Math.floor(Math.random() * 36 ** 6);
+  // 使用加密安全随机数，避免房间码可预测
+  const value = randomInt(0, 36 ** 6);
   return value.toString(36).toUpperCase().padStart(6, "0");
 }
 

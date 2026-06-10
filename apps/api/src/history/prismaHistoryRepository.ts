@@ -83,9 +83,8 @@ export class PrismaHistoryRepository implements HistoryRepository {
       where: {
         userId
       },
-      orderBy: {
-        createdAt: "desc"
-      },
+      // createdAt 相同时以 id 作次键，保证排序确定性
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit,
       select: {
         id: true,

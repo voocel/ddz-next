@@ -42,6 +42,16 @@ export class RoomPersistence {
     }
   }
 
+  /** 房间销毁时把 DB 状态收尾为 closed，避免停留在 playing。 */
+  async closeRoom(): Promise<void> {
+    if (this.syncedStatus === "closed") {
+      return;
+    }
+
+    await this.roomStatusClient.updateRoomStatus(this.roomCode, "closed");
+    this.syncedStatus = "closed";
+  }
+
   async closeFailedRoom(reason: string, snapshot: GameSnapshot): Promise<void> {
     await this.roomStatusClient.updateRoomStatus(this.roomCode, "closed");
     this.syncedStatus = "closed";
@@ -64,7 +74,7 @@ export class RoomPersistence {
 
   private async syncStatusAfterSnapshot(snapshot: GameSnapshot): Promise<void> {
     const status = mapSnapshotToRoomStatus(snapshot);
-    if (!status || status === this.syncedStatus) {
+    if (status === this.syncedStatus) {
       return;
     }
 

@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { hashPassword, verifyPassword } from "./password.js";
+import { hashPassword } from "./password.js";
 
 export interface DemoUserConfig {
   readonly enabled: boolean;
@@ -11,7 +11,7 @@ export interface DemoUserConfig {
 export interface DemoUserSeedResult {
   readonly enabled: boolean;
   readonly nickname: string;
-  readonly status: "created" | "disabled" | "ready" | "updated";
+  readonly status: "created" | "disabled" | "ready";
   readonly username: string;
 }
 
@@ -21,7 +21,8 @@ const DEFAULT_DEMO_PASSWORD = "secret123";
 
 export function readDemoUserConfig(env: NodeJS.ProcessEnv = process.env): DemoUserConfig {
   return {
-    enabled: readBooleanEnv("DEMO_USER_ENABLED", env.DEMO_USER_ENABLED, env.NODE_ENV !== "production"),
+    // 默认关闭，必须显式设置 DEMO_USER_ENABLED=true 才会创建演示账号
+    enabled: readBooleanEnv("DEMO_USER_ENABLED", env.DEMO_USER_ENABLED, false),
     username: readUsername(env.DEMO_USER_USERNAME ?? DEFAULT_DEMO_USERNAME),
     nickname: readNickname(env.DEMO_USER_NICKNAME ?? DEFAULT_DEMO_NICKNAME),
     password: readPassword(env.DEMO_USER_PASSWORD ?? DEFAULT_DEMO_PASSWORD)
@@ -43,30 +44,12 @@ export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfi
       username: config.username
     },
     select: {
-      id: true,
-      nickname: true,
-      passwordHash: true
+      id: true
     }
   });
 
-  if (!existing) {
-    await prisma.user.create({
-      data: {
-        username: config.username,
-        nickname: config.nickname,
-        passwordHash: await hashPassword(config.password)
-      }
-    });
-    return {
-      enabled: true,
-      username: config.username,
-      nickname: config.nickname,
-      status: "created"
-    };
-  }
-
-  const passwordMatches = await verifyPassword(config.password, existing.passwordHash);
-  if (passwordMatches && existing.nickname === config.nickname) {
+  // 仅在用户不存在时创建，绝不覆盖已存在用户的密码或昵称
+  if (existing) {
     return {
       enabled: true,
       username: config.username,
@@ -75,13 +58,11 @@ export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfi
     };
   }
 
-  await prisma.user.update({
-    where: {
-      id: existing.id
-    },
+  await prisma.user.create({
     data: {
+      username: config.username,
       nickname: config.nickname,
-      passwordHash: passwordMatches ? existing.passwordHash : await hashPassword(config.password)
+      passwordHash: await hashPassword(config.password)
     }
   });
 
@@ -89,7 +70,7 @@ export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfi
     enabled: true,
     username: config.username,
     nickname: config.nickname,
-    status: "updated"
+    status: "created"
   };
 }
 

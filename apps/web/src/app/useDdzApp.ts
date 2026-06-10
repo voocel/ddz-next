@@ -23,9 +23,9 @@ export function useDdzApp() {
   const [status, setStatus] = useState("等待登录");
   const [authStatus, setAuthStatus] = useState(() => (session ? `已登录 ${session.user.nickname}` : "未登录"));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [username, setUsername] = useState("alice");
-  const [nickname, setNickname] = useState("Alice");
-  const [password, setPassword] = useState("secret123");
+  const [username, setUsername] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [password, setPassword] = useState("");
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [historyStatus, setHistoryStatus] = useState("等待登录");
@@ -42,7 +42,13 @@ export function useDdzApp() {
   const api = useMemo(
     () =>
       createApiClient({
-        endpoint: import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:3000"
+        endpoint: import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:3000",
+        onUnauthorized: () => {
+          // 令牌失效：清会话回登录屏
+          setSession(null);
+          clearStoredSession();
+          setAuthStatus("登录已过期，请重新登录");
+        }
       }),
     []
   );
@@ -101,6 +107,11 @@ export function useDdzApp() {
         accessToken: session?.accessToken ?? "",
         roomCode: selectedRoom?.code ?? "",
         onStatus: setStatus,
+        onDropped: (code) => {
+          // 房间异常断开：清理游戏状态回大厅，并在大厅提示
+          setSelectedRoom(null);
+          setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
+        },
         onEvent: (event) => {
           if ("snapshot" in event) {
             setSnapshot(event.snapshot);
@@ -117,7 +128,7 @@ export function useDdzApp() {
             setTurnTimer(null);
             void refreshHistory();
           }
-          setEvents((items) => [event, ...items].slice(0, 8));
+          setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
     [refreshHistory, selectedRoom?.code, session?.accessToken, session?.user.id]
@@ -135,34 +146,38 @@ export function useDdzApp() {
     setReplayStatus("未选择对局");
   }, []);
 
-  const enterRoom = useCallback(
-    (room: RoomDto): void => {
-      setSelectedRoom(room);
-      setSnapshot(null);
-      setEvents([]);
-      clearReplay();
-      setRooms((items) => [room, ...items.filter((item) => item.id !== room.id)]);
-    },
-    [clearReplay]
-  );
-
-  const resetAuthenticatedState = useCallback((nextStatus: string): void => {
-    setAuthStatus("未登录");
-    setStatus(nextStatus);
-    setRoomStatus(nextStatus);
-    setHistoryStatus(nextStatus);
-    setReplayStatus("未选择对局");
-    setRooms([]);
-    setRoundHistory([]);
-    setSelectedReplay(null);
-    setReplayStep(0);
-    setReplayPlaying(false);
-    setCoinLedgers([]);
-    setSelectedRoom(null);
+  // 房间内游戏状态的统一清理
+  const resetRoomState = useCallback((): void => {
     setSnapshot(null);
     setTurnTimer(null);
     setEvents([]);
   }, []);
+
+  const enterRoom = useCallback(
+    (room: RoomDto): void => {
+      setSelectedRoom(room);
+      resetRoomState();
+      clearReplay();
+      setStatus(`准备进入房间 ${room.code}`);
+      setRooms((items) => [room, ...items.filter((item) => item.id !== room.id)]);
+    },
+    [clearReplay, resetRoomState]
+  );
+
+  const resetAuthenticatedState = useCallback(
+    (nextStatus: string): void => {
+      setStatus(nextStatus);
+      setRoomStatus(nextStatus);
+      setHistoryStatus(nextStatus);
+      setRooms([]);
+      setRoundHistory([]);
+      setCoinLedgers([]);
+      setSelectedRoom(null);
+      clearReplay();
+      resetRoomState();
+    },
+    [clearReplay, resetRoomState]
+  );
 
   const handlePass = useCallback((): void => {
     client.pass();
@@ -221,26 +236,22 @@ export function useDdzApp() {
   );
 
   const logout = useCallback((): void => {
-    client.disconnect();
+    // 断线与状态清理由 session/selectedRoom 副作用统一处理
     setSession(null);
     clearStoredSession();
-    resetAuthenticatedState("等待登录");
-  }, [client, resetAuthenticatedState]);
+    setAuthStatus("未登录");
+  }, []);
 
   const leaveRoom = useCallback((): void => {
     if (!selectedRoom) {
       return;
     }
 
-    client.leaveRoom();
+    // 置空 selectedRoom 后，连接副作用会负责断开与游戏状态清理
     setSelectedRoom(null);
-    setStatus("请选择房间");
-    setSnapshot(null);
-    setTurnTimer(null);
-    setEvents([]);
     clearReplay();
     void refreshRooms();
-  }, [clearReplay, client, refreshRooms, selectedRoom]);
+  }, [clearReplay, refreshRooms, selectedRoom]);
 
   const createRoom = useCallback(async (): Promise<void> => {
     if (!session) {
@@ -272,17 +283,6 @@ export function useDdzApp() {
     }
   }, [api, enterRoom, session]);
 
-  const selectRoom = useCallback(
-    (room: RoomDto): void => {
-      setSelectedRoom(room);
-      setSnapshot(null);
-      setEvents([]);
-      clearReplay();
-      setStatus(`准备进入房间 ${room.code}`);
-    },
-    [clearReplay]
-  );
-
   useEffect(() => {
     if (!session) {
       resetAuthenticatedState("等待登录");
@@ -297,17 +297,15 @@ export function useDdzApp() {
     if (!session || !selectedRoom) {
       client.disconnect();
       setStatus(session ? "请选择房间" : "等待登录");
-      setSnapshot(null);
-      setTurnTimer(null);
-      setEvents([]);
+      resetRoomState();
       return;
     }
 
-    client.connect();
+    void client.connect();
     return () => {
       client.disconnect();
     };
-  }, [client, selectedRoom, session]);
+  }, [client, resetRoomState, selectedRoom, session]);
 
   useReplayPlayback({
     replayPlaying,
@@ -325,6 +323,7 @@ export function useDdzApp() {
     client,
     coinLedgers,
     createRoom,
+    enterRoom,
     events,
     handlePass,
     handlePlay,
@@ -345,7 +344,6 @@ export function useDdzApp() {
     roundHistory,
     selectedReplay,
     selectedRoom,
-    selectRoom,
     session,
     setAuthMode,
     setNickname,

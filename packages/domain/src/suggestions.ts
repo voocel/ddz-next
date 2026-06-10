@@ -32,7 +32,8 @@ export function suggestPlay(hand: readonly Card[], previous: Combination | null)
     return sameKind;
   }
 
-  const bomb = suggestBomb(groups, previous.kind === "bomb" ? previous.mainRank : null);
+  // previous 为炸弹时 suggestSameKind 已尝试过更大的炸弹，这里只处理非炸弹牌型。
+  const bomb = previous.kind === "bomb" ? null : suggestBomb(groups, null);
   if (bomb) {
     return bomb;
   }
@@ -228,7 +229,17 @@ function selectSingles(
     return null;
   }
 
-  return candidates.slice(0, count).map((group) => takeCards(group, 1)[0]!);
+  const chosen = candidates.slice(0, count);
+  // 双王不能同时作翼（等于拆火箭），用下一个非王候选替换大王。
+  if (chosen.some((group) => group.rank === "SJ") && chosen.some((group) => group.rank === "BJ")) {
+    const replacement = candidates.slice(count).find((group) => group.rank !== "SJ" && group.rank !== "BJ");
+    if (!replacement) {
+      return null;
+    }
+    chosen[chosen.findIndex((group) => group.rank === "BJ")] = replacement;
+  }
+
+  return chosen.map((group) => takeCards(group, 1)[0]!);
 }
 
 function selectPairs(

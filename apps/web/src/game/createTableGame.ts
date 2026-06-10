@@ -20,7 +20,7 @@ export function createTableGame(parent: HTMLElement, options: TableGameOptions) 
     width,
     height,
     parent,
-    backgroundColor: "#12372a",
+    backgroundColor: "#4e9e2f",
     antialias: true,
     antialiasGL: true,
     roundPixels: true,
