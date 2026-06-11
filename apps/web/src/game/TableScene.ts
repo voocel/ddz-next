@@ -53,7 +53,6 @@ const TEXT_STYLE = {
 
 const INK = "#5b3a1e";
 const INK_SOFT = "#7a5a36";
-const ACCENT = "#d8820c";
 
 const BUTTON_WIDTH = 132;
 const BUTTON_HEIGHT = 79;
@@ -99,10 +98,13 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.load.image("table-bg", "/assets/images/generated/lobby/bg_table.jpg");
     this.load.image("card-back", "/assets/images/generated/lobby/card_back.png");
     this.load.image("coin", "/assets/images/coin.png");
-    this.load.image("suit-hearts", "/assets/images/heart.png");
-    this.load.image("suit-diamonds", "/assets/images/diamond.png");
-    this.load.image("suit-spades", "/assets/images/spade.png");
-    this.load.image("suit-clubs", "/assets/images/club.png");
+    this.load.image("suit-hearts", "/assets/images/generated/lobby/suit_heart.png");
+    this.load.image("suit-diamonds", "/assets/images/generated/lobby/suit_diamond.png");
+    this.load.image("suit-spades", "/assets/images/generated/lobby/suit_spade.png");
+    this.load.image("suit-clubs", "/assets/images/generated/lobby/suit_club.png");
+    this.load.image("joker-big", "/assets/images/generated/lobby/joker_big.png");
+    this.load.image("joker-small", "/assets/images/generated/lobby/joker_small.png");
+    this.load.image("ribbon-title", "/assets/images/generated/lobby/ribbon_title.png");
     this.load.image("play-button", "/assets/images/generated/lobby/btn_pill_orange.png");
     this.load.image("pass-button", "/assets/images/generated/lobby/btn_pill_green.png");
     this.load.image("tip-button", "/assets/images/generated/lobby/btn_pill_blue.png");
@@ -614,13 +616,15 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     backdrop.fillRoundedRect(360, 261, 560, 254, 26);
     backdrop.lineStyle(5, 0xb9772f, 1);
     backdrop.strokeRoundedRect(360, 261, 560, 254, 26);
-    const title = this.add.text(640, 298, "本局结算", {
+    const ribbon = this.add.image(640, 262, "ribbon-title").setDisplaySize(248, 62);
+    const title = this.add.text(640, 258, "本局结算", {
       ...TEXT_STYLE,
-      fontSize: "28px",
+      fontSize: "24px",
       fontStyle: "900",
-      color: ACCENT
+      color: "#ffffff"
     }).setOrigin(0.5);
-    layer.add([backdrop, title]);
+    title.setShadow(0, 2, "rgba(80, 40, 0, 0.45)", 2);
+    layer.add([backdrop, ribbon, title]);
 
     rows.forEach((row, index) => {
       // 前 3 行为赢家/地主/倍数摘要，其余为玩家明细
@@ -810,7 +814,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     fontSize?: string
   ): void {
     const rankSize = fontSize ?? `${Math.max(16, Math.round(width * 0.28))}px`;
-    const cornerSuitSize = `${Math.max(12, Math.round(width * 0.18))}px`;
     const cornerX = -width / 2 + Math.max(6, width * 0.1);
     const cornerY = -height / 2 + Math.max(5, height * 0.08);
     const rightX = width / 2 - Math.max(6, width * 0.1);
@@ -820,13 +823,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .image(0, height * 0.08, suitKey)
       .setDisplaySize(width * 0.46, width * 0.46)
       .setAlpha(0.94);
+    const cornerSuitWidth = Math.max(11, width * 0.17);
     const topRank = this.add.text(cornerX, cornerY, rank, cardTextStyle(rankSize, color)).setOrigin(0, 0);
     const topSuit = this.add
-      .text(cornerX + width * 0.02, cornerY + height * 0.21, suit, cardTextStyle(cornerSuitSize, color))
+      .image(cornerX + width * 0.02, cornerY + height * 0.22, suitKey)
+      .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
       .setOrigin(0, 0);
     const bottomRank = this.add.text(rightX, rightY, rank, cardTextStyle(rankSize, color)).setOrigin(1, 1);
     const bottomSuit = this.add
-      .text(rightX - width * 0.02, rightY - height * 0.21, suit, cardTextStyle(cornerSuitSize, color))
+      .image(rightX - width * 0.02, rightY - height * 0.22, suitKey)
+      .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
       .setOrigin(1, 1);
 
     container.add([centerSuit, topRank, topSuit, bottomRank, bottomSuit]);
@@ -841,27 +847,18 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     fontSize?: string
   ): void {
     const color = red ? "#c41f1f" : "#171717";
-    const centerColor = red ? "#d22b2b" : "#222222";
     const cornerSize = fontSize ?? `${Math.max(13, Math.round(width * 0.2))}px`;
-    const centerSize = `${Math.max(28, Math.round(width * 0.42))}px`;
     const cornerX = -width / 2 + Math.max(6, width * 0.1);
     const cornerY = -height / 2 + Math.max(6, height * 0.08);
     const rightX = width / 2 - Math.max(6, width * 0.1);
     const rightY = height / 2 - Math.max(6, height * 0.08);
+    const jokerKey = red ? "joker-big" : "joker-small";
+    const portrait = this.add.image(0, height * 0.05, jokerKey);
+    portrait.setScale(Math.min((height * 0.62) / portrait.height, (width * 0.66) / portrait.width));
     const topText = this.add.text(cornerX, cornerY, label, cardTextStyle(cornerSize, color)).setOrigin(0, 0);
-    const centerText = this.add
-      .text(0, height * 0.02, "王", {
-        fontFamily: "Georgia, 'Times New Roman', serif",
-        fontSize: centerSize,
-        fontStyle: "900",
-        color: centerColor,
-        stroke: "#f9e8bd",
-        strokeThickness: Math.max(2, Math.round(width * 0.04))
-      })
-      .setOrigin(0.5);
     const bottomText = this.add.text(rightX, rightY, label, cardTextStyle(cornerSize, color)).setOrigin(1, 1);
 
-    container.add([topText, centerText, bottomText]);
+    container.add([portrait, topText, bottomText]);
   }
 
   private addCardBackStack(layer: Phaser.GameObjects.Container, x: number, y: number, count: number): void {
