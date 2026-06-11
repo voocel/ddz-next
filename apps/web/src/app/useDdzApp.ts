@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { CardId } from "@ddz/domain";
 import type {
   CoinLedgerItemDto,
@@ -12,6 +12,7 @@ import type {
 import { getTableControlsState } from "../game/controlsState";
 import { createApiClient } from "../net/apiClient";
 import { createGameClient } from "../net/gameClient";
+import { createMatchmakingClient } from "../net/matchmakingClient";
 import { clearStoredSession, readStoredSession, storeSession } from "./sessionStorage";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import type { AuthMode, TurnTimerState } from "./types";
@@ -44,7 +45,16 @@ export function useDdzApp() {
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
+  const [matchQueue, setMatchQueue] = useState<{ waiting: number; position: number } | null>(null);
+  const matchClientRef = useRef<ReturnType<typeof createMatchmakingClient> | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => loadTheme());
+
+  /** 静默退出匹配队列（取消、进房、登出时复用） */
+  const stopMatching = useCallback((): void => {
+    matchClientRef.current?.cancel();
+    matchClientRef.current = null;
+    setMatchQueue(null);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -170,6 +180,7 @@ export function useDdzApp() {
 
   const enterRoom = useCallback(
     (room: RoomDto, options: { readonly quickStart?: boolean } = {}): void => {
+      stopMatching();
       setSelectedRoom(room);
       setSelectedRoomQuickStart(options.quickStart === true);
       resetRoomState();
@@ -177,11 +188,12 @@ export function useDdzApp() {
       setStatus(`准备进入房间 ${room.code}`);
       setRooms((items) => [room, ...items.filter((item) => item.id !== room.id)]);
     },
-    [clearReplay, resetRoomState]
+    [clearReplay, resetRoomState, stopMatching]
   );
 
   const resetAuthenticatedState = useCallback(
     (nextStatus: string): void => {
+      stopMatching();
       setStatus(nextStatus);
       setRoomStatus(nextStatus);
       setHistoryStatus(nextStatus);
@@ -193,7 +205,7 @@ export function useDdzApp() {
       clearReplay();
       resetRoomState();
     },
-    [clearReplay, resetRoomState]
+    [clearReplay, resetRoomState, stopMatching]
   );
 
   const handlePass = useCallback((): void => {
@@ -290,22 +302,44 @@ export function useDdzApp() {
     }
   }, [api, enterRoom, session]);
 
-  const matchRoom = useCallback(async (): Promise<void> => {
-    if (!session) {
+  const matchRoom = useCallback((): void => {
+    if (!session || matchClientRef.current) {
       return;
     }
 
-    setRoomStatus("快速开始中");
-    try {
-      const response = await api.createRoom(session.accessToken);
-      enterRoom(response.room, {
-        quickStart: true
-      });
-      setRoomStatus(`已快速开始 ${response.room.code}`);
-    } catch (error) {
-      setRoomStatus(error instanceof Error ? error.message : "快速开始失败");
-    }
-  }, [api, enterRoom, session]);
+    setRoomStatus("匹配中");
+    setMatchQueue({ waiting: 1, position: 1 });
+    const matchClient = createMatchmakingClient({
+      endpoint: import.meta.env.VITE_GAME_ENDPOINT ?? "http://localhost:2567",
+      accessToken: session.accessToken,
+      onEvent: (event) => {
+        if (event.type === "queue_status") {
+          setMatchQueue({ waiting: event.waiting, position: event.position });
+          return;
+        }
+        if (event.type === "matched") {
+          enterRoom(event.room, {
+            quickStart: true
+          });
+          setRoomStatus(`已匹配到房间 ${event.room.code}`);
+          return;
+        }
+        setRoomStatus(event.message);
+      },
+      onStatus: setRoomStatus,
+      onClosed: () => {
+        matchClientRef.current = null;
+        setMatchQueue(null);
+      }
+    });
+    matchClientRef.current = matchClient;
+    void matchClient.start();
+  }, [enterRoom, session]);
+
+  const cancelMatch = useCallback((): void => {
+    stopMatching();
+    setRoomStatus("已取消匹配");
+  }, [stopMatching]);
 
   useEffect(() => {
     if (!session) {
@@ -344,6 +378,7 @@ export function useDdzApp() {
     authMode,
     authStatus,
     authStatusTone,
+    cancelMatch,
     clearReplay,
     client,
     coinLedgers,
@@ -356,6 +391,7 @@ export function useDdzApp() {
     leaveRoom,
     loadReplay,
     logout,
+    matchQueue,
     matchRoom,
     nickname,
     password,

@@ -38,6 +38,8 @@ export class InMemoryUserRepository implements UserRepository {
 
 export class InMemoryRoomRepository implements RoomRepository {
   readonly records: RoomRecord[] = [];
+  /** 标记"已被使用"（有事件/对局）的房间码，清扫时跳过 */
+  readonly usedCodes = new Set<string>();
 
   async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.records
@@ -81,6 +83,20 @@ export class InMemoryRoomRepository implements RoomRepository {
     };
     this.records[index] = updated;
     return updated;
+  }
+  async closeStaleOpenRooms(cutoff: Date): Promise<number> {
+    let count = 0;
+    this.records.forEach((room, index) => {
+      if (room.status === "open" && room.updatedAt.getTime() < cutoff.getTime() && !this.usedCodes.has(room.code)) {
+        this.records[index] = {
+          ...room,
+          status: "closed",
+          updatedAt: new Date()
+        };
+        count += 1;
+      }
+    });
+    return count;
   }
 }
 

@@ -1099,3 +1099,47 @@ h2 {
 :root[data-theme="pixel"] .player-plate img {
   border-radius: 4px;
 }
+
+/* ===== 匹配中指示 ===== */
+
+.match-indicator {
+  display: grid;
+  padding: 14px 40px;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  text-align: center;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  background: linear-gradient(180deg, var(--sun-1), var(--sun-3));
+  border: 3px solid #fff3c2;
+  border-radius: var(--r-l);
+  box-shadow:
+    0 5px 0 var(--sun-edge),
+    0 12px 20px rgba(70, 38, 6, 0.32);
+  gap: 4px;
+}
+
+.match-indicator small {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  opacity: 0.92;
+}
+
+.match-dots::after {
+  content: "…";
+  display: inline-block;
+  animation: match-dots 1.2s steps(4, end) infinite;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+@keyframes match-dots {
+  0% {
+    width: 0;
+  }
+  100% {
+    width: 1.2em;
+  }
+}

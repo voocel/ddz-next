@@ -41,12 +41,6 @@ export function createApiClient(options: ApiClientOptions) {
         body: JSON.stringify({})
       }).then((body) => parseRoomResponse(body));
     },
-    matchRoom(accessToken: string): Promise<RoomResponse> {
-      return requestJson(options, "/rooms/match", {
-        method: "POST",
-        headers: authHeaders(accessToken)
-      }).then((body) => parseRoomResponse(body));
-    },
     listRoundHistory(accessToken: string): Promise<RoundHistoryResponse> {
       return requestJson(options, "/me/rounds", {
         method: "GET",

@@ -28,6 +28,8 @@ export interface RoomRepository {
   findOpenRoomByCode(code: string): Promise<RoomRecord | null>;
   createRoom(input: CreateRoomInput): Promise<RoomRecord>;
   updateRoomStatusByCode(code: string, status: RoomStatus): Promise<RoomRecord | null>;
+  /** 关闭 updatedAt 早于 cutoff 且从未被使用过（无事件无对局）的 open 房，返回关闭数量 */
+  closeStaleOpenRooms(cutoff: Date): Promise<number>;
 }
 
 export class RoomService {
@@ -57,15 +59,9 @@ export class RoomService {
     };
   }
 
-  async matchRoom(): Promise<RoomResponse> {
-    const [room] = await this.rooms.listOpenRooms(1);
-    if (room) {
-      return {
-        room: toRoomDto(room)
-      };
-    }
-
-    return this.createRoom();
+  /** 清扫创建后从未被使用的 open 房，避免长期占据房间列表 */
+  async closeStaleRooms(maxIdleMs: number): Promise<number> {
+    return this.rooms.closeStaleOpenRooms(new Date(Date.now() - maxIdleMs));
   }
 
   async requireJoinableRoom(code: string): Promise<RoomResponse> {

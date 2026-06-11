@@ -119,9 +119,9 @@ export function buildServer(dependencies: ServerDependencies) {
     return dependencies.roomService.createRoom(parsed.data);
   });
 
-  app.post("/rooms/match", async (request) => {
-    requireAuth(request.headers, dependencies.tokenConfig);
-    return dependencies.roomService.matchRoom();
+  app.post("/internal/rooms", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
+    return dependencies.roomService.createRoom();
   });
 
   app.get("/internal/rooms/:code/joinable", async (request) => {

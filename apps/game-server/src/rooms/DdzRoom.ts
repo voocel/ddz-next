@@ -24,6 +24,7 @@ interface RoomCreateOptions extends JoinOptions {
   roomStatusClient: RoomStatusClient;
   gameActionClient: GameActionClient;
   botCount?: number;
+  matchBotCount?: number;
   botMoveDelayMs?: number;
   turnTimeoutMs?: number;
 }
@@ -33,6 +34,8 @@ const DEFAULT_TURN_TIMEOUT_MS = 20_000;
 const QUICK_START_BOT_COUNT = 2;
 // 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
 const SETTLEMENT_DISPLAY_MS = 5000;
+// 撮合房创建后玩家迟迟未入场的自毁时限
+const MATCHED_ROOM_EMPTY_TIMEOUT_MS = 60_000;
 // 同一玩家新连接踢掉旧会话时使用的自定义关闭码
 const DUPLICATE_SESSION_CLOSE_CODE = 4002;
 
@@ -73,9 +76,19 @@ export class DdzRoom extends Room {
     this.roomCode = readRoomCode(options);
     this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient);
     await this.persistence.requireJoinableRoom();
-    const botCount = readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount);
+    const matchBotCount = readMatchBotCount(options.matchBotCount);
+    const botCount =
+      matchBotCount ?? (readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount));
     this.maxClients = 3 - botCount;
     this.addBots(botCount);
+    if (matchBotCount !== null) {
+      // 撮合房由服务端预创建；若玩家始终未入场则自毁，避免空房常驻
+      this.clock.setTimeout(() => {
+        if (this.clients.length === 0) {
+          void this.disconnect();
+        }
+      }, MATCHED_ROOM_EMPTY_TIMEOUT_MS);
+    }
     this.turnScheduler = new RoomTurnScheduler({
       botIds: this.botIds,
       botMoveDelayMs: this.botMoveDelayMs,
@@ -754,6 +767,17 @@ function readBotCount(value: unknown): number {
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
     throw new Error("Bot count must be an integer between 0 and 2.");
+  }
+  return value;
+}
+
+/** 撮合房专用 bot 数：与 define 注入的 botCount 区分，避免被 handler options 覆盖 */
+function readMatchBotCount(value: unknown): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
+    throw new Error("Match bot count must be an integer between 0 and 2.");
   }
   return value;
 }

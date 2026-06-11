@@ -75,4 +75,26 @@ export class PrismaRoomRepository implements RoomRepository {
       select: roomSelect
     }) as Promise<RoomRecord>;
   }
+
+  async closeStaleOpenRooms(cutoff: Date): Promise<number> {
+    // 只清"从未被使用"的房：被用过的 open 房（如局间休息）即使闲置也可随时重进，清掉反而破坏状态
+    const result = await this.prisma.room.updateMany({
+      where: {
+        status: "open",
+        updatedAt: {
+          lt: cutoff
+        },
+        events: {
+          none: {}
+        },
+        rounds: {
+          none: {}
+        }
+      },
+      data: {
+        status: "closed"
+      }
+    });
+    return result.count;
+  }
 }

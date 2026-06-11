@@ -1,13 +1,37 @@
-import { internalRoomJoinResponseSchema, type RoomStatus } from "@ddz/protocol";
+import { internalRoomJoinResponseSchema, roomResponseSchema, type RoomDto, type RoomStatus } from "@ddz/protocol";
 import type { ApiSyncConfig } from "./config.js";
 
 export interface RoomStatusClient {
+  createRoom(): Promise<RoomDto>;
   requireJoinableRoom(roomCode: string): Promise<void>;
   updateRoomStatus(roomCode: string, status: RoomStatus): Promise<void>;
 }
 
 export class HttpRoomStatusClient implements RoomStatusClient {
   constructor(private readonly config: ApiSyncConfig) {}
+
+  async createRoom(): Promise<RoomDto> {
+    const response = await this.fetchWithRetry(new URL("/internal/rooms", this.config.endpoint), {
+      method: "POST",
+      headers: {
+        "x-ddz-internal-token": this.config.internalToken
+      }
+    });
+
+    const body = await readJsonOrText(response);
+    if (!response.ok) {
+      throw new Error(`Failed to create matched room: ${response.status} ${formatResponseBody(body)}`);
+    }
+
+    const parsed = roomResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid create room response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`
+      );
+    }
+
+    return parsed.data.room;
+  }
 
   async requireJoinableRoom(roomCode: string): Promise<void> {
     const response = await this.fetchWithRetry(new URL(`/internal/rooms/${roomCode}/joinable`, this.config.endpoint), {

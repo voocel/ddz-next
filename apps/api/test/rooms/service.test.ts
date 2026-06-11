@@ -33,17 +33,34 @@ describe("RoomService", () => {
     } satisfies Partial<RoomError>);
   });
 
-  it("matches an existing open room before creating a new one", async () => {
+  it("closes stale open rooms and keeps fresh ones", async () => {
     const rooms = new InMemoryRoomRepository();
     const service = new RoomService(rooms);
 
     await service.createRoom({
-      code: "OPEN01"
+      code: "STALE1"
     });
-    const matched = await service.matchRoom();
+    await service.createRoom({
+      code: "FRESH1"
+    });
+    // 第二个房间刚刚活跃过
+    await rooms.updateRoomStatusByCode("FRESH1", "open");
+    rooms.records[1] = {
+      ...rooms.records[1]!,
+      updatedAt: new Date()
+    };
 
-    expect(matched.room.code).toBe("OPEN01");
-    expect(rooms.records).toHaveLength(1);
+    // 被使用过的房（有事件/对局）即使闲置也不清
+    await service.createRoom({
+      code: "USED01"
+    });
+    rooms.usedCodes.add("USED01");
+
+    const closed = await service.closeStaleRooms(60_000);
+    expect(closed).toBe(1);
+    expect(rooms.records.find((room) => room.code === "STALE1")?.status).toBe("closed");
+    expect(rooms.records.find((room) => room.code === "FRESH1")?.status).toBe("open");
+    expect(rooms.records.find((room) => room.code === "USED01")?.status).toBe("open");
   });
 
   it("requires rooms to be open before the realtime server can join them", async () => {

@@ -314,6 +314,23 @@ export const internalRoomJoinResponseSchema = z.object({
   room: roomSchema
 });
 
+// 匹配通道服务端推送：排队状态 / 撮合成功 / 撮合失败
+export const matchmakingEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("queue_status"),
+    waiting: z.number().int().min(0),
+    position: z.number().int().min(1)
+  }),
+  z.object({
+    type: z.literal("matched"),
+    room: roomSchema
+  }),
+  z.object({
+    type: z.literal("match_failed"),
+    message: z.string().min(1)
+  })
+]);
+
 export const roundHistoryActionSchema = z.object({
   id: z.string().min(1),
   type: roundActionTypeSchema,
@@ -385,6 +402,7 @@ export type RoomDto = z.infer<typeof roomSchema>;
 export type RoomListResponse = z.infer<typeof roomListResponseSchema>;
 export type RoomResponse = z.infer<typeof roomResponseSchema>;
 export type InternalRoomJoinResponse = z.infer<typeof internalRoomJoinResponseSchema>;
+export type MatchmakingEvent = z.infer<typeof matchmakingEventSchema>;
 export type RoomStatus = z.infer<typeof roomStatusSchema>;
 export type SettlementDto = z.infer<typeof settlementSchema>;
 export type RoundHistoryActionDto = z.infer<typeof roundHistoryActionSchema>;

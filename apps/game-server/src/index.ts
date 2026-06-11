@@ -6,6 +6,7 @@ import { HttpRoomStatusClient } from "./api/roomStatusClient.js";
 import { readTokenConfig } from "./auth/config.js";
 import { loadRootEnv } from "@ddz/env";
 import { DdzRoom } from "./rooms/DdzRoom.js";
+import { MatchmakingRoom } from "./rooms/MatchmakingRoom.js";
 
 loadRootEnv();
 
@@ -30,6 +31,7 @@ const gameServer = new Server({
 
 // static onAuth 在房间创建前就会执行，token 配置需在进程启动时注入
 DdzRoom.authTokenConfig = tokenConfig;
+MatchmakingRoom.authTokenConfig = tokenConfig;
 
 gameServer.define("ddz", DdzRoom, {
   roomStatusClient,
@@ -38,6 +40,13 @@ gameServer.define("ddz", DdzRoom, {
   botMoveDelayMs,
   turnTimeoutMs
 }).filterBy(["roomCode"]);
+
+gameServer.define("matchmaking", MatchmakingRoom, {
+  roomStatusClient,
+  matchTimeoutMs: readIntegerEnv("MATCH_TIMEOUT_MS", 8_000, {
+    min: 1000
+  })
+});
 
 await gameServer.listen(port);
 

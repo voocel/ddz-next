@@ -143,21 +143,21 @@ describe("API auth routes", () => {
     expect(list.statusCode).toBe(200);
     expect(list.json().rooms).toHaveLength(1);
 
-    const matched = await app.inject({
+    const internalCreated = await app.inject({
       method: "POST",
-      url: "/rooms/match",
+      url: "/internal/rooms",
       headers: {
-        authorization: `Bearer ${accessToken}`
+        "x-ddz-internal-token": "internal-test-token"
       }
     });
-    expect(matched.statusCode).toBe(200);
-    expect(matched.json().room.code).toBe("ROOM01");
+    expect(internalCreated.statusCode).toBe(200);
+    expect(internalCreated.json().room.status).toBe("open");
 
-    const anonymousMatch = await app.inject({
+    const anonymousInternalCreate = await app.inject({
       method: "POST",
-      url: "/rooms/match"
+      url: "/internal/rooms"
     });
-    expect(anonymousMatch.statusCode).toBe(401);
+    expect(anonymousInternalCreate.statusCode).toBe(401);
 
     await app.close();
   });

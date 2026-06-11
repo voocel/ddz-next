@@ -42,6 +42,7 @@ function App() {
     authMode,
     authStatus,
     authStatusTone,
+    cancelMatch,
     clearReplay,
     client,
     coinLedgers,
@@ -54,6 +55,7 @@ function App() {
     leaveRoom,
     loadReplay,
     logout,
+    matchQueue,
     matchRoom,
     nickname,
     password,
@@ -204,12 +206,28 @@ function App() {
           <img className="stage-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
           <div className="stage-center">
             <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
-            <button type="button" className="btn-jelly btn-orange btn-xl" onClick={matchRoom}>
-              快速开始
-            </button>
-            <button type="button" className="btn-jelly btn-green btn-lg" onClick={createRoom}>
-              创建房间
-            </button>
+            {matchQueue ? (
+              <>
+                <div className="match-indicator">
+                  匹配中<span className="match-dots" />
+                  <small>
+                    队列 {matchQueue.waiting} 人 · 第 {matchQueue.position} 位
+                  </small>
+                </div>
+                <button type="button" className="btn-jelly btn-green btn-lg" onClick={cancelMatch}>
+                  取消匹配
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="btn-jelly btn-orange btn-xl" onClick={matchRoom}>
+                  快速开始
+                </button>
+                <button type="button" className="btn-jelly btn-green btn-lg" onClick={createRoom}>
+                  创建房间
+                </button>
+              </>
+            )}
             <p className="stage-status">{roomStatus}</p>
           </div>
           <nav className="feature-bar">
