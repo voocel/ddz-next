@@ -1,10 +1,12 @@
 import Phaser from "phaser";
 import type { CardId } from "@ddz/domain";
+import type { ThemeId } from "../theme";
 import { TableScene } from "./TableScene";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
 
 interface TableGameOptions {
   readonly localPlayerId: string;
+  readonly theme: ThemeId;
   readonly onPass: () => void;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
@@ -15,14 +17,17 @@ export function createTableGame(parent: HTMLElement, options: TableGameOptions) 
   const dpr = getTableDevicePixelRatio();
   const width = Math.max(TABLE_STAGE_WIDTH, Math.round(bounds.width * dpr));
   const height = Math.max(TABLE_STAGE_HEIGHT, Math.round(bounds.height * dpr));
+  const pixelTheme = options.theme === "pixel";
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     width,
     height,
     parent,
-    backgroundColor: "#4e9e2f",
-    antialias: true,
-    antialiasGL: true,
+    backgroundColor: pixelTheme ? "#3f7d2c" : "#4e9e2f",
+    // 像素主题用最近邻缩放保持像素块锐利
+    pixelArt: pixelTheme,
+    antialias: !pixelTheme,
+    antialiasGL: !pixelTheme,
     roundPixels: true,
     scale: {
       mode: Phaser.Scale.NONE,

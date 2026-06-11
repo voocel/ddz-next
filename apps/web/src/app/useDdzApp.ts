@@ -13,13 +13,11 @@ import { getTableControlsState } from "../game/controlsState";
 import { createApiClient } from "../net/apiClient";
 import { createGameClient } from "../net/gameClient";
 import { clearStoredSession, readStoredSession, storeSession } from "./sessionStorage";
+import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import type { AuthMode, TurnTimerState } from "./types";
 import { useReplayPlayback } from "./useReplayPlayback";
 import { useTurnTimerTicker } from "./useTurnTimerTicker";
 
-const DEFAULT_LOGIN_USERNAME = "alice";
-const DEFAULT_LOGIN_PASSWORD = "secret123";
-const DEFAULT_REGISTER_NICKNAME = "Alice";
 type AuthStatusTone = "idle" | "loading" | "success" | "error";
 
 export function useDdzApp() {
@@ -29,9 +27,10 @@ export function useDdzApp() {
   const [authStatus, setAuthStatus] = useState(() => (session ? `已登录 ${session.user.nickname}` : "未登录"));
   const [authStatusTone, setAuthStatusTone] = useState<AuthStatusTone>(() => (session ? "success" : "idle"));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [username, setUsername] = useState(DEFAULT_LOGIN_USERNAME);
-  const [nickname, setNickname] = useState(DEFAULT_REGISTER_NICKNAME);
-  const [password, setPassword] = useState(DEFAULT_LOGIN_PASSWORD);
+  // 开发模式预填演示账号（与 API 的 DEMO_USER_ENABLED 演示用户对应），生产构建保持为空
+  const [username, setUsername] = useState(import.meta.env.DEV ? "alice" : "");
+  const [nickname, setNickname] = useState(import.meta.env.DEV ? "Alice" : "");
+  const [password, setPassword] = useState(import.meta.env.DEV ? "secret123" : "");
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [historyStatus, setHistoryStatus] = useState("等待登录");
@@ -45,6 +44,12 @@ export function useDdzApp() {
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
+  const [theme, setTheme] = useState<ThemeId>(() => loadTheme());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    saveTheme(theme);
+  }, [theme]);
 
   const api = useMemo(
     () =>
@@ -370,11 +375,13 @@ export function useDdzApp() {
     setPassword,
     setReplayPlaying,
     setReplayStep,
+    setTheme,
     setUsername,
     snapshot,
     status,
     submitAuth,
     tableControls,
+    theme,
     turnTimer,
     username
   };

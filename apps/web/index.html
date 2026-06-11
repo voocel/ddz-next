@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DDZ Next</title>
+    <script>
+      // 首帧前恢复持久化主题，避免从默认卡通闪到像素（主题 id 与 src/theme.ts 保持一致）
+      try {
+        var ddzTheme = localStorage.getItem("ddz-theme");
+        if (ddzTheme === "cartoon" || ddzTheme === "pixel") {
+          document.documentElement.dataset.theme = ddzTheme;
+        }
+      } catch (error) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

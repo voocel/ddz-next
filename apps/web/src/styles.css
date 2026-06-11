@@ -22,12 +22,47 @@
   --r-m: 16px;
   --r-l: 24px;
   --pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --asset-bg-lobby: url("/assets/images/themes/cartoon/bg_lobby.jpg");
+  --asset-ribbon: url("/assets/images/themes/cartoon/ribbon_title.png");
 
   color: #f5f1e6;
   background: #101915;
   font-family:
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Inter, ui-sans-serif, system-ui,
     -apple-system, sans-serif;
+}
+
+/* ===== 田园像素主题：覆写 token，硬边像素质感 ===== */
+
+:root[data-theme="pixel"] {
+  --sun-1: #ffd95e;
+  --sun-2: #f5a623;
+  --sun-3: #e07b00;
+  --sun-edge: #8a4a00;
+  --grass-1: #8fd45a;
+  --grass-2: #63ab3f;
+  --grass-3: #3f7d2c;
+  --grass-edge: #2a5a1c;
+  --sky-1: #9adcf0;
+  --sky-2: #4aa3d4;
+  --ink: #3a2a18;
+  --ink-soft: rgba(58, 42, 24, 0.72);
+  --cream: #f8efd4;
+  --cream-2: #efe2b8;
+  --wood-1: #c08b4a;
+  --wood-2: #91612a;
+  --wood-3: #5e3d14;
+  --red: #d9442e;
+  --r-s: 2px;
+  --r-m: 3px;
+  --r-l: 4px;
+  --pop: steps(3, end);
+  --asset-bg-lobby: url("/assets/images/themes/pixel/bg_lobby.jpg");
+  --asset-ribbon: url("/assets/images/themes/pixel/ribbon_title.png");
+}
+
+:root[data-theme="pixel"] img {
+  image-rendering: pixelated;
 }
 
 * {
@@ -132,7 +167,7 @@ input {
   place-items: center;
   overflow: hidden;
   background:
-    url("/assets/images/generated/lobby/bg_lobby.jpg") center / cover no-repeat,
+    var(--asset-bg-lobby) center / cover no-repeat,
     linear-gradient(180deg, var(--sky-1) 0%, var(--sky-2) 52%, var(--grass-2) 52%, var(--grass-3) 100%);
 }
 
@@ -239,7 +274,7 @@ input {
   gap: 14px;
   overflow: hidden;
   background:
-    url("/assets/images/generated/lobby/bg_lobby.jpg") center / cover no-repeat,
+    var(--asset-bg-lobby) center / cover no-repeat,
     linear-gradient(180deg, var(--sky-1) 0%, var(--sky-2) 52%, var(--grass-2) 52%, var(--grass-3) 100%);
 }
 
@@ -597,7 +632,7 @@ input {
   letter-spacing: 4px;
   text-shadow: 0 2px 0 rgba(80, 40, 0, 0.45);
   white-space: nowrap;
-  background: url("/assets/images/generated/lobby/ribbon_title.png") center / 100% 100% no-repeat;
+  background: var(--asset-ribbon) center / 100% 100% no-repeat;
   filter: drop-shadow(0 5px 10px rgba(50, 28, 4, 0.35));
   transform: translateX(-50%);
 }
@@ -1026,4 +1061,41 @@ h2 {
   .table-action-dock {
     gap: 12px;
   }
+}
+
+/* ===== 田园像素主题：硬边覆写（果冻按钮与药丸件转为像素方块） ===== */
+
+:root[data-theme="pixel"] .btn-jelly {
+  border-radius: 4px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.3);
+  background: var(--jelly-bottom);
+  box-shadow:
+    0 4px 0 var(--jelly-edge),
+    inset 0 4px 0 var(--jelly-top),
+    inset 4px 0 0 rgba(255, 255, 255, 0.18),
+    inset -4px -4px 0 rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme="pixel"] .btn-jelly:hover {
+  filter: brightness(1.08);
+  transform: none;
+}
+
+:root[data-theme="pixel"] .btn-jelly:active {
+  transform: translateY(4px);
+  box-shadow:
+    0 0 0 var(--jelly-edge),
+    inset 0 4px 0 rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="pixel"] .player-plate,
+:root[data-theme="pixel"] .coin-chip,
+:root[data-theme="pixel"] .hud-button,
+:root[data-theme="pixel"] .table-chip,
+:root[data-theme="pixel"] .timer-chip,
+:root[data-theme="pixel"] .room-medal,
+:root[data-theme="pixel"] .room-enter,
+:root[data-theme="pixel"] .modal-close,
+:root[data-theme="pixel"] .player-plate img {
+  border-radius: 4px;
 }

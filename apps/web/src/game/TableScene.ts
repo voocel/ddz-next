@@ -15,6 +15,7 @@ import {
   parseReplayCardIds
 } from "./tablePresentation";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
+import { themeAsset, type ThemeId } from "../theme";
 
 export interface TableGameBridge {
   applyEvent(event: GameEvent): void;
@@ -23,6 +24,7 @@ export interface TableGameBridge {
 
 interface TableSceneOptions {
   readonly localPlayerId: string;
+  readonly theme: ThemeId;
   readonly onPass: () => void;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
@@ -95,19 +97,20 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   preload(): void {
-    this.load.image("table-bg", "/assets/images/generated/lobby/bg_table.jpg");
-    this.load.image("card-back", "/assets/images/generated/lobby/card_back.png");
+    const asset = (file: string) => themeAsset(this.options.theme, file);
+    this.load.image("table-bg", asset("bg_table.jpg"));
+    this.load.image("card-back", asset("card_back.png"));
     this.load.image("coin", "/assets/images/coin.png");
-    this.load.image("suit-hearts", "/assets/images/generated/lobby/suit_heart.png");
-    this.load.image("suit-diamonds", "/assets/images/generated/lobby/suit_diamond.png");
-    this.load.image("suit-spades", "/assets/images/generated/lobby/suit_spade.png");
-    this.load.image("suit-clubs", "/assets/images/generated/lobby/suit_club.png");
-    this.load.image("joker-big", "/assets/images/generated/lobby/joker_big.png");
-    this.load.image("joker-small", "/assets/images/generated/lobby/joker_small.png");
-    this.load.image("ribbon-title", "/assets/images/generated/lobby/ribbon_title.png");
-    this.load.image("play-button", "/assets/images/generated/lobby/btn_pill_orange.png");
-    this.load.image("pass-button", "/assets/images/generated/lobby/btn_pill_green.png");
-    this.load.image("tip-button", "/assets/images/generated/lobby/btn_pill_blue.png");
+    this.load.image("suit-hearts", asset("suit_heart.png"));
+    this.load.image("suit-diamonds", asset("suit_diamond.png"));
+    this.load.image("suit-spades", asset("suit_spade.png"));
+    this.load.image("suit-clubs", asset("suit_club.png"));
+    this.load.image("joker-big", asset("joker_big.png"));
+    this.load.image("joker-small", asset("joker_small.png"));
+    this.load.image("ribbon-title", asset("ribbon_title.png"));
+    this.load.image("play-button", asset("btn_pill_orange.png"));
+    this.load.image("pass-button", asset("btn_pill_green.png"));
+    this.load.image("tip-button", asset("btn_pill_blue.png"));
 
     this.load.audio("sound-click", "/assets/audio/click.mp3");
     this.load.audio("sound-select", "/assets/audio/select.mp3");
@@ -536,10 +539,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
         }
       );
       const offline = !player.connected ? "  已离线" : "";
+      // 对手的余牌数由牌背堆徽章展示，文字行不再重复
+      const handInfo = isLocal ? `手牌 ${player.handCount}  ` : "";
       const meta = this.add.text(
         position.x - 54,
         position.y - 4,
-        `${showReady ? (player.ready ? "已准备  " : "未准备  ") : ""}手牌 ${player.handCount}  分 ${player.score}${offline}`,
+        `${showReady ? (player.ready ? "已准备  " : "未准备  ") : ""}${handInfo}分 ${player.score}${offline}`,
         {
           ...TEXT_STYLE,
           fontSize: "12px",
@@ -548,7 +553,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       );
 
       if (!isLocal) {
-        this.addCardBackStack(seatsLayer, position.x + 35, position.y + 19, player.handCount);
+        this.addCardBackStack(seatsLayer, position.x, position.y + 67, player.handCount);
       }
       seatsLayer.add([plate, coin, label, meta]);
     });
@@ -729,7 +734,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
         color: INK_SOFT
       });
 
-      this.addCardBackStack(seatsLayer, position.x + 35, position.y + 19, 5);
+      // 回放数据不含逐步手牌数，不渲染牌背堆，避免显示假数量
       seatsLayer.add([plate, coin, label, meta]);
     });
   }
@@ -752,7 +757,10 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const color = red ? "#c41f1f" : "#171717";
     const suit = readCardSuit(label);
     const rank = suit ? label.slice(0, -1) : label;
-    const radius = Math.max(5, Math.round(width * 0.08));
+    // 像素主题用直角硬边底板，卡通主题用圆角奶油底板
+    const pixelTheme = this.options.theme === "pixel";
+    const radius = pixelTheme ? 2 : Math.max(5, Math.round(width * 0.08));
+    const innerRadius = pixelTheme ? 2 : Math.max(3, radius - 2);
     const container = this.add.container(x, y);
     const graphics = this.add.graphics();
 
@@ -761,11 +769,17 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     graphics.fillStyle(0xfffbef, 1);
     graphics.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
     graphics.fillStyle(0xf3ead6, 1);
-    graphics.fillRoundedRect(-width / 2 + 4, -height / 2 + 4, width - 8, height - 8, Math.max(3, radius - 2));
-    graphics.lineStyle(options.selected ? 3 : 1, options.selected ? 0xf4c542 : 0xb68f5a, options.selected ? 1 : 0.72);
+    graphics.fillRoundedRect(-width / 2 + 4, -height / 2 + 4, width - 8, height - 8, innerRadius);
+    graphics.lineStyle(
+      options.selected ? 3 : pixelTheme ? 2 : 1,
+      options.selected ? 0xf4c542 : pixelTheme ? 0x3a2a18 : 0xb68f5a,
+      options.selected ? 1 : pixelTheme ? 0.9 : 0.72
+    );
     graphics.strokeRoundedRect(-width / 2 + 1, -height / 2 + 1, width - 2, height - 2, radius);
-    graphics.lineStyle(1, 0xffffff, 0.56);
-    graphics.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, Math.max(3, radius - 2));
+    if (!pixelTheme) {
+      graphics.lineStyle(1, 0xffffff, 0.56);
+      graphics.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, innerRadius);
+    }
 
     container.add(graphics);
 
@@ -861,24 +875,30 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     container.add([portrait, topText, bottomText]);
   }
 
+  /** 对手手牌：一张牌一张背的紧凑横排，余牌数徽章叠在中央 */
   private addCardBackStack(layer: Phaser.GameObjects.Container, x: number, y: number, count: number): void {
-    const visibleCards = Math.min(4, Math.max(0, count));
+    if (count <= 0) {
+      return;
+    }
+
+    const visibleCards = Math.min(20, count);
+    const overlapOffset = 11;
+    const startX = x - ((visibleCards - 1) * overlapOffset) / 2;
     for (let index = 0; index < visibleCards; index += 1) {
-      const cardBack = this.add
-        .image(x + index * 10, y, "card-back")
-        .setDisplaySize(28, 41)
-        .setAngle(-8 + index * 4);
+      const cardBack = this.add.image(startX + index * overlapOffset, y, "card-back").setDisplaySize(36, 50);
       layer.add(cardBack);
     }
 
-    const countText = this.add.text(x + 58, y - 9, `x${count}`, {
-      ...TEXT_STYLE,
-      fontSize: "12px",
-      fontStyle: "900",
-      color: "#ffffff",
-      stroke: INK,
-      strokeThickness: 3
-    });
+    const countText = this.add
+      .text(x, y, `${count}`, {
+        ...TEXT_STYLE,
+        fontSize: "17px",
+        fontStyle: "900",
+        color: "#ffffff",
+        stroke: INK,
+        strokeThickness: 4
+      })
+      .setOrigin(0.5);
     layer.add(countText);
   }
 

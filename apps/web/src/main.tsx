@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { formatDateTime, formatDelta, formatRoundDelta, formatTurnTimer } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
+import { nextTheme, themeAsset, themeLabel } from "./theme";
 import "./styles.css";
 
 const PhaserTable = lazy(async () => {
@@ -72,11 +73,13 @@ function App() {
     setPassword,
     setReplayPlaying,
     setReplayStep,
+    setTheme,
     setUsername,
     snapshot,
     status,
     submitAuth,
     tableControls,
+    theme,
     turnTimer,
     username
   } = useDdzApp();
@@ -84,8 +87,8 @@ function App() {
   if (!session) {
     return (
       <main className="auth-screen">
-        <img className="auth-mascot mascot-left" src="/assets/images/hall_user2.png" alt="" />
-        <img className="auth-mascot mascot-right" src="/assets/images/hall_user.png" alt="" />
+        <img className="auth-mascot mascot-left" src={themeAsset(theme, "mascot_left.png")} alt="" />
+        <img className="auth-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
         <section className="auth-card">
           <img className="auth-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
           <form className="auth-form" onSubmit={submitAuth}>
@@ -197,8 +200,8 @@ function App() {
         </header>
 
         <section className="lobby-stage">
-          <img className="stage-mascot mascot-left" src="/assets/images/hall_user2.png" alt="" />
-          <img className="stage-mascot mascot-right" src="/assets/images/hall_user.png" alt="" />
+          <img className="stage-mascot mascot-left" src={themeAsset(theme, "mascot_left.png")} alt="" />
+          <img className="stage-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
           <div className="stage-center">
             <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
             <button type="button" className="btn-jelly btn-orange btn-xl" onClick={matchRoom}>
@@ -212,21 +215,27 @@ function App() {
           <nav className="feature-bar">
             <button type="button" onClick={() => setLobbyModal("history")}>
               <span className="feature-icon">
-                <img src="/assets/images/generated/lobby/icon_history.png" alt="" />
+                <img src={themeAsset(theme, "icon_history.png")} alt="" />
               </span>
               <span>战绩</span>
             </button>
             <button type="button" onClick={() => setLobbyModal("ledger")}>
               <span className="feature-icon">
-                <img src="/assets/images/generated/lobby/icon_ledger.png" alt="" />
+                <img src={themeAsset(theme, "icon_ledger.png")} alt="" />
               </span>
               <span>流水</span>
             </button>
             <button type="button" onClick={() => setLobbyModal("replay")}>
               <span className="feature-icon">
-                <img src="/assets/images/generated/lobby/icon_replay.png" alt="" />
+                <img src={themeAsset(theme, "icon_replay.png")} alt="" />
               </span>
               <span>回放</span>
+            </button>
+            <button type="button" onClick={() => setTheme(nextTheme(theme))}>
+              <span className="feature-icon">
+                <img src={themeAsset(theme, "icon_theme.png")} alt="" />
+              </span>
+              <span>{themeLabel(theme)}</span>
             </button>
           </nav>
         </section>
@@ -312,6 +321,7 @@ function App() {
           onPass={handlePass}
           replay={selectedReplay}
           replayStep={replayStep}
+          theme={theme}
           onPlay={handlePlay}
         />
       </Suspense>

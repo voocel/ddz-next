@@ -3,6 +3,7 @@ import type { CardId } from "@ddz/domain";
 import type { GameEvent, RoundReplayDto } from "@ddz/protocol";
 import { createTableGame } from "./game/createTableGame";
 import type { TableGameBridge } from "./game/TableScene";
+import type { ThemeId } from "./theme";
 
 interface PhaserTableProps {
   readonly events: readonly GameEvent[];
@@ -10,10 +11,11 @@ interface PhaserTableProps {
   readonly onPass: () => void;
   readonly replay: RoundReplayDto | null;
   readonly replayStep: number;
+  readonly theme: ThemeId;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep, onPlay }: PhaserTableProps) {
+export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep, theme, onPlay }: PhaserTableProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const bridgeRef = useRef<TableGameBridge | null>(null);
   const lastAppliedRef = useRef<GameEvent | null>(null);
@@ -28,6 +30,7 @@ export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep,
 
     const tableGame = createTableGame(hostRef.current, {
       localPlayerId,
+      theme,
       onPass: () => callbacksRef.current.onPass(),
       onPlay: (cards) => callbacksRef.current.onPlay(cards)
     });
@@ -40,7 +43,7 @@ export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep,
       tableGame.destroy();
       bridgeRef.current = null;
     };
-  }, [localPlayerId]);
+  }, [localPlayerId, theme]);
 
   useEffect(() => {
     if (replay) {
