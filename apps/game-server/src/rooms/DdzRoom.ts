@@ -17,6 +17,7 @@ import { decideTimeoutAction } from "./timeoutAction.js";
 interface JoinOptions {
   accessToken?: string;
   roomCode?: string;
+  quickStart?: boolean;
 }
 
 interface RoomCreateOptions extends JoinOptions {
@@ -29,6 +30,7 @@ interface RoomCreateOptions extends JoinOptions {
 
 const DEFAULT_BOT_MOVE_DELAY_MS = 500;
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
+const QUICK_START_BOT_COUNT = 2;
 // 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
 const SETTLEMENT_DISPLAY_MS = 5000;
 // 同一玩家新连接踢掉旧会话时使用的自定义关闭码
@@ -71,7 +73,7 @@ export class DdzRoom extends Room {
     this.roomCode = readRoomCode(options);
     this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient);
     await this.persistence.requireJoinableRoom();
-    const botCount = readBotCount(options.botCount);
+    const botCount = readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount);
     this.maxClients = 3 - botCount;
     this.addBots(botCount);
     this.turnScheduler = new RoomTurnScheduler({
@@ -752,6 +754,16 @@ function readBotCount(value: unknown): number {
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
     throw new Error("Bot count must be an integer between 0 and 2.");
+  }
+  return value;
+}
+
+function readQuickStart(value: unknown): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error("Quick start must be a boolean.");
   }
   return value;
 }

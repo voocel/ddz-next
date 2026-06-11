@@ -154,9 +154,110 @@ function authHeaders(accessToken: string): Record<string, string> {
 }
 
 function readErrorMessage(body: unknown): string {
-  if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
-    return body.message;
+  if (!body || typeof body !== "object") {
+    return "请求失败，请稍后重试。";
   }
 
-  return "Authentication request failed.";
+  const issueMessage = readFirstIssueMessage(body);
+  if (issueMessage) {
+    return issueMessage;
+  }
+
+  if ("message" in body && typeof body.message === "string") {
+    return localizeApiMessage(body.message);
+  }
+
+  return "请求失败，请稍后重试。";
+}
+
+function localizeApiMessage(message: string): string {
+  switch (message) {
+    case "Invalid username or password.":
+      return "用户名或密码错误。";
+    case "Username already exists.":
+      return "用户名已存在。";
+    case "Username must be 3-32 letters, numbers, underscores, or hyphens.":
+      return "用户名只能包含 3-32 位字母、数字、下划线或短横线。";
+    case "Invalid login request.":
+      return "请检查用户名和密码。";
+    case "Invalid register request.":
+      return "请检查注册信息。";
+    default:
+      return message;
+  }
+}
+
+function readFirstIssueMessage(body: object): string | null {
+  if (!("issues" in body) || !Array.isArray(body.issues)) {
+    return null;
+  }
+
+  for (const issue of body.issues) {
+    const message = localizeIssue(issue);
+    if (message) {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function localizeIssue(issue: unknown): string | null {
+  if (!issue || typeof issue !== "object") {
+    return null;
+  }
+
+  const field = readIssueField(issue);
+  const code = readStringProperty(issue, "code");
+  const minimum = readNumberProperty(issue, "minimum");
+  const maximum = readNumberProperty(issue, "maximum");
+  const label = field ? FIELD_LABELS[field] : null;
+
+  if (!label) {
+    return null;
+  }
+
+  if (code === "too_small") {
+    if (field === "nickname") {
+      return "昵称不能为空。";
+    }
+    if (typeof minimum === "number") {
+      return `${label}至少 ${minimum} 位。`;
+    }
+  }
+
+  if (code === "too_big" && typeof maximum === "number") {
+    return `${label}不能超过 ${maximum} 位。`;
+  }
+
+  if (code === "invalid_type") {
+    return `${label}不能为空。`;
+  }
+
+  return `${label}格式不正确。`;
+}
+
+const FIELD_LABELS = {
+  username: "用户名",
+  nickname: "昵称",
+  password: "密码"
+} as const;
+
+type KnownField = keyof typeof FIELD_LABELS;
+
+function readIssueField(issue: object): KnownField | null {
+  if (!("path" in issue) || !Array.isArray(issue.path)) {
+    return null;
+  }
+
+  const [field] = issue.path;
+  return typeof field === "string" && field in FIELD_LABELS ? (field as KnownField) : null;
+}
+
+function readStringProperty(value: object, key: string): string | null {
+  return key in value && typeof value[key as keyof typeof value] === "string" ? value[key as keyof typeof value] : null;
+}
+
+function readNumberProperty(value: object, key: string): number | null {
+  return key in value && typeof value[key as keyof typeof value] === "number" ? value[key as keyof typeof value] : null;
 }

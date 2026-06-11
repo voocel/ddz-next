@@ -214,6 +214,18 @@ input {
   text-align: center;
 }
 
+.form-status-loading {
+  color: var(--wood-3);
+}
+
+.form-status-success {
+  color: var(--grass-edge);
+}
+
+.form-status-error {
+  color: #b3261e;
+}
+
 /* ===== 大厅 ===== */
 
 .lobby-screen {

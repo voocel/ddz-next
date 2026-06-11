@@ -7,6 +7,7 @@ interface GameClientOptions {
   readonly playerId: string;
   readonly accessToken: string;
   readonly roomCode: string;
+  readonly quickStart?: boolean;
   readonly onEvent: (event: GameEvent) => void;
   readonly onStatus: (status: string) => void;
   /** 房间被服务端/网络异常关闭（非本地主动离开）时回调 */
@@ -46,7 +47,8 @@ export function createGameClient(options: GameClientOptions) {
         const client = new Client(options.endpoint);
         const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
-          roomCode: options.roomCode
+          roomCode: options.roomCode,
+          quickStart: options.quickStart === true
         });
         if (gen !== generation) {
           // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接
@@ -89,6 +91,12 @@ export function createGameClient(options: GameClientOptions) {
           }
           options.onStatus(`房间错误 ${code}: ${message}`);
         });
+
+        if (options.quickStart === true) {
+          joined.send("command", {
+            type: "ready"
+          });
+        }
       } catch (error) {
         if (gen !== generation) {
           return;

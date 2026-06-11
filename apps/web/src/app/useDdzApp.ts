@@ -17,15 +17,21 @@ import type { AuthMode, TurnTimerState } from "./types";
 import { useReplayPlayback } from "./useReplayPlayback";
 import { useTurnTimerTicker } from "./useTurnTimerTicker";
 
+const DEFAULT_LOGIN_USERNAME = "alice";
+const DEFAULT_LOGIN_PASSWORD = "secret123";
+const DEFAULT_REGISTER_NICKNAME = "Alice";
+type AuthStatusTone = "idle" | "loading" | "success" | "error";
+
 export function useDdzApp() {
   const [session, setSession] = useState<LoginResponse | null>(() => readStoredSession());
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [status, setStatus] = useState("等待登录");
   const [authStatus, setAuthStatus] = useState(() => (session ? `已登录 ${session.user.nickname}` : "未登录"));
+  const [authStatusTone, setAuthStatusTone] = useState<AuthStatusTone>(() => (session ? "success" : "idle"));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [username, setUsername] = useState("");
-  const [nickname, setNickname] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(DEFAULT_LOGIN_USERNAME);
+  const [nickname, setNickname] = useState(DEFAULT_REGISTER_NICKNAME);
+  const [password, setPassword] = useState(DEFAULT_LOGIN_PASSWORD);
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [historyStatus, setHistoryStatus] = useState("等待登录");
@@ -36,6 +42,7 @@ export function useDdzApp() {
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [coinLedgers, setCoinLedgers] = useState<CoinLedgerItemDto[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<RoomDto | null>(null);
+  const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
 
@@ -48,6 +55,7 @@ export function useDdzApp() {
           setSession(null);
           clearStoredSession();
           setAuthStatus("登录已过期，请重新登录");
+          setAuthStatusTone("error");
         }
       }),
     []
@@ -106,10 +114,12 @@ export function useDdzApp() {
         playerId: session?.user.id ?? "",
         accessToken: session?.accessToken ?? "",
         roomCode: selectedRoom?.code ?? "",
+        quickStart: selectedRoomQuickStart,
         onStatus: setStatus,
         onDropped: (code) => {
           // 房间异常断开：清理游戏状态回大厅，并在大厅提示
           setSelectedRoom(null);
+          setSelectedRoomQuickStart(false);
           setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
         },
         onEvent: (event) => {
@@ -131,7 +141,7 @@ export function useDdzApp() {
           setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
-    [refreshHistory, selectedRoom?.code, session?.accessToken, session?.user.id]
+    [refreshHistory, selectedRoom?.code, selectedRoomQuickStart, session?.accessToken, session?.user.id]
   );
 
   const tableControls = useMemo(
@@ -154,8 +164,9 @@ export function useDdzApp() {
   }, []);
 
   const enterRoom = useCallback(
-    (room: RoomDto): void => {
+    (room: RoomDto, options: { readonly quickStart?: boolean } = {}): void => {
       setSelectedRoom(room);
+      setSelectedRoomQuickStart(options.quickStart === true);
       resetRoomState();
       clearReplay();
       setStatus(`准备进入房间 ${room.code}`);
@@ -173,6 +184,7 @@ export function useDdzApp() {
       setRoundHistory([]);
       setCoinLedgers([]);
       setSelectedRoom(null);
+      setSelectedRoomQuickStart(false);
       clearReplay();
       resetRoomState();
     },
@@ -208,7 +220,8 @@ export function useDdzApp() {
   const submitAuth = useCallback(
     async (event: FormEvent<HTMLFormElement>): Promise<void> => {
       event.preventDefault();
-      setAuthStatus("提交中");
+      setAuthStatus(authMode === "login" ? "正在登录..." : "正在注册...");
+      setAuthStatusTone("loading");
 
       try {
         const response =
@@ -225,11 +238,13 @@ export function useDdzApp() {
         setSession(response);
         storeSession(response);
         setAuthStatus(`已登录 ${response.user.nickname}`);
+        setAuthStatusTone("success");
         setRoomStatus("加载房间中");
       } catch (error) {
         setSession(null);
         clearStoredSession();
-        setAuthStatus(error instanceof Error ? error.message : "认证失败");
+        setAuthStatus(error instanceof Error ? error.message : authMode === "login" ? "登录失败，请稍后重试。" : "注册失败，请稍后重试。");
+        setAuthStatusTone("error");
       }
     },
     [api, authMode, nickname, password, username]
@@ -240,6 +255,7 @@ export function useDdzApp() {
     setSession(null);
     clearStoredSession();
     setAuthStatus("未登录");
+    setAuthStatusTone("idle");
   }, []);
 
   const leaveRoom = useCallback((): void => {
@@ -249,6 +265,7 @@ export function useDdzApp() {
 
     // 置空 selectedRoom 后，连接副作用会负责断开与游戏状态清理
     setSelectedRoom(null);
+    setSelectedRoomQuickStart(false);
     clearReplay();
     void refreshRooms();
   }, [clearReplay, refreshRooms, selectedRoom]);
@@ -273,13 +290,15 @@ export function useDdzApp() {
       return;
     }
 
-    setRoomStatus("匹配房间中");
+    setRoomStatus("快速开始中");
     try {
-      const response = await api.matchRoom(session.accessToken);
-      enterRoom(response.room);
-      setRoomStatus(`已匹配房间 ${response.room.code}`);
+      const response = await api.createRoom(session.accessToken);
+      enterRoom(response.room, {
+        quickStart: true
+      });
+      setRoomStatus(`已快速开始 ${response.room.code}`);
     } catch (error) {
-      setRoomStatus(error instanceof Error ? error.message : "匹配房间失败");
+      setRoomStatus(error instanceof Error ? error.message : "快速开始失败");
     }
   }, [api, enterRoom, session]);
 
@@ -319,6 +338,7 @@ export function useDdzApp() {
   return {
     authMode,
     authStatus,
+    authStatusTone,
     clearReplay,
     client,
     coinLedgers,

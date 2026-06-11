@@ -38,6 +38,14 @@ pnpm --filter @ddz/api dev
 pnpm --filter @ddz/web dev
 ```
 
+如果本机数据库已经启动，也可以在一个终端里启动完整开发栈：
+
+```bash
+./start.sh
+```
+
+打开 Web 后点击“快速开始”会自动创建带两个机器人的测试房间；“创建房间”仍然创建普通真人房间。
+
 本地默认使用已安装的 PostgreSQL：`localhost:5433`，用户 `postgres`，密码 `123456`，数据库名 `ddz`。如果本机还没有数据库，先创建一次：
 
 ```bash
@@ -46,7 +54,7 @@ createdb -h localhost -p 5433 -U postgres ddz
 
 `docker-compose.yml` 只保留为备用 PostgreSQL 方案；当前项目不依赖 Redis。
 
-完整链路冒烟需要先启动真实数据库、API 和 Game Server，不会使用 mock 或模拟成功路径。单人本地验证建议用两个机器人补位启动游戏服。以下命令分别在不同终端运行：
+完整链路冒烟需要先启动真实数据库、API 和 Game Server，不会使用 mock 或模拟成功路径。以下命令分别在不同终端运行：
 
 ```bash
 pnpm --filter @ddz/api dev

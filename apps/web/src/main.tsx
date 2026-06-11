@@ -40,6 +40,7 @@ function App() {
   const {
     authMode,
     authStatus,
+    authStatusTone,
     clearReplay,
     client,
     coinLedgers,
@@ -96,6 +97,8 @@ function App() {
                 placeholder="例如 alice"
                 minLength={3}
                 maxLength={32}
+                autoComplete="username"
+                required
               />
             </label>
             {authMode === "register" ? (
@@ -107,6 +110,8 @@ function App() {
                   placeholder="例如 Alice"
                   minLength={1}
                   maxLength={32}
+                  autoComplete="nickname"
+                  required
                 />
               </label>
             ) : null}
@@ -119,6 +124,8 @@ function App() {
                 placeholder="至少 6 位"
                 minLength={6}
                 maxLength={128}
+                autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                required
               />
             </label>
             <div className="auth-actions">
@@ -133,7 +140,9 @@ function App() {
                 {authMode === "login" ? "注册新账号" : "返回登录"}
               </button>
             </div>
-            <p className="form-status">{authStatus}</p>
+            <p className={`form-status form-status-${authStatusTone}`} aria-live="polite">
+              {authStatus}
+            </p>
           </form>
         </section>
       </main>
