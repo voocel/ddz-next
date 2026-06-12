@@ -46,7 +46,7 @@ export class PrismaHistoryRepository implements HistoryRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async listRoundsByUserId(userId: string, limit: number): Promise<readonly RoundHistoryRecord[]> {
-    return this.prisma.round.findMany({
+    const rounds = (await this.prisma.round.findMany({
       where: {
         players: {
           some: {
@@ -60,11 +60,12 @@ export class PrismaHistoryRepository implements HistoryRepository {
       },
       take: limit,
       select: roundHistorySelect
-    }) as Promise<RoundHistoryRecord[]>;
+    })) as RoundHistoryRecord[];
+    return this.attachNicknames(rounds);
   }
 
   async findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null> {
-    return this.prisma.round.findFirst({
+    const round = (await this.prisma.round.findFirst({
       where: {
         id: roundId,
         players: {
@@ -75,7 +76,46 @@ export class PrismaHistoryRepository implements HistoryRepository {
         }
       },
       select: roundReplaySelect
-    }) as Promise<RoundReplayRecord | null>;
+    })) as RoundReplayRecord | null;
+    if (!round) {
+      return null;
+    }
+    const [enriched] = await this.attachNicknames([round]);
+    return enriched ?? round;
+  }
+
+  /** RoundPlayer.playerId 对真人即 User.id（bot 为 "bot:N" 无对应用户），批量回填昵称 */
+  private async attachNicknames<T extends RoundHistoryRecord>(rounds: T[]): Promise<T[]> {
+    const humanIds = [
+      ...new Set(
+        rounds.flatMap((round) =>
+          round.players.filter((player) => player.playerKind === "human").map((player) => player.playerId)
+        )
+      )
+    ];
+    if (!humanIds.length) {
+      return rounds;
+    }
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        id: {
+          in: humanIds
+        }
+      },
+      select: {
+        id: true,
+        nickname: true
+      }
+    });
+    const nicknames = new Map(users.map((user) => [user.id, user.nickname]));
+    return rounds.map((round) => ({
+      ...round,
+      players: round.players.map((player) => {
+        const nickname = nicknames.get(player.playerId);
+        return nickname === undefined ? player : { ...player, nickname };
+      })
+    }));
   }
 
   async listCoinLedgersByUserId(userId: string, limit: number): Promise<readonly CoinLedgerRecord[]> {

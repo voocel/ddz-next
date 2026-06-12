@@ -29,6 +29,28 @@ describe("table presentation", () => {
     expect(formatActor("long-human-player", "p0")).toBe("long-hum...");
   });
 
+  it("prefers nickname over truncated id for other humans", () => {
+    expect(formatActor("cuid-of-bob-very-long", "p0", "Bob")).toBe("Bob");
+    expect(formatActor("p0", "p0", "Alice")).toBe("你");
+    expect(formatActor("bot:room:1", "p0", "ignored")).toBe("机器人1");
+  });
+
+  it("uses snapshot nickname in prompts and feedback", () => {
+    const withBob: GameSnapshotDto = {
+      ...snapshot("playing", "cuid-of-bob-very-long"),
+      players: [
+        { id: "p0", kind: "human", seat: 0, ready: true, handCount: 17, connected: true, score: 0 },
+        { id: "cuid-of-bob-very-long", kind: "human", seat: 1, ready: true, handCount: 17, connected: true, score: 0, nickname: "Bob" },
+        { id: "bot:room:2", kind: "bot", seat: 2, ready: true, handCount: 17, connected: true, score: 0 }
+      ]
+    };
+
+    expect(describePhasePrompt(withBob, "p0")).toBe("等待 Bob 出牌");
+    expect(describeEventFeedback({ type: "player_passed", playerId: "cuid-of-bob-very-long", snapshot: withBob }, "p0")).toBe(
+      "Bob 过牌"
+    );
+  });
+
   it("describes settlement rows in seat order", () => {
     expect(describeSettlement(settledSnapshot(), "p0")).toEqual([
       "赢家 你",

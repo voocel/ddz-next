@@ -355,7 +355,15 @@ function App() {
         </button>
         <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
         <span className="hud-spacer" />
-        <span className="table-chip timer-chip">{turnTimer ? formatTurnTimer(turnTimer, session.user.id) : ""}</span>
+        <span className="table-chip timer-chip">
+          {turnTimer
+            ? formatTurnTimer(
+                turnTimer,
+                session.user.id,
+                snapshot?.players.find((player) => player.id === turnTimer.playerId)?.nickname
+              )
+            : ""}
+        </span>
       </header>
 
       {tableControls.ready || tableControls.bid || tableControls.rob ? (

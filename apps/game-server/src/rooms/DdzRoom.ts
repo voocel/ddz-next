@@ -53,6 +53,8 @@ export class DdzRoom extends Room {
   private roomCode!: string;
   private botMoveDelayMs = DEFAULT_BOT_MOVE_DELAY_MS;
   private botIds: PlayerId[] = [];
+  /** 展示用昵称表（来自 JWT claims），快照下发时注入 */
+  private readonly nicknames = new Map<PlayerId, string>();
   private turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS;
   private failed = false;
 
@@ -105,7 +107,7 @@ export class DdzRoom extends Room {
           playerId: event.playerId,
           deadlineAt: event.deadlineAt,
           durationMs: event.durationMs,
-          snapshot: toSnapshotDto(event.snapshot)
+          snapshot: this.snapshotDto(event.snapshot)
         } satisfies GameEvent);
       },
       turnTimeoutMs: this.turnTimeoutMs
@@ -158,6 +160,9 @@ export class DdzRoom extends Room {
     }
 
     const playerId = claims.sub;
+    if (claims.nickname) {
+      this.nicknames.set(playerId, claims.nickname);
+    }
     const reconnecting = this.table.hasPlayer(playerId);
     const seat = this.table.addPlayer(playerId);
     this.table.setConnected(playerId, true);
@@ -196,7 +201,7 @@ export class DdzRoom extends Room {
         type: "player_joined",
         playerId,
         seat,
-        snapshot: toSnapshotDto(snapshot)
+        snapshot: this.snapshotDto(snapshot)
       } satisfies GameEvent);
     }
 
@@ -294,7 +299,7 @@ export class DdzRoom extends Room {
       type: "player_connection_changed",
       playerId,
       connected,
-      snapshot: toSnapshotDto(this.table.snapshot())
+      snapshot: this.snapshotDto(this.table.snapshot())
     } satisfies GameEvent);
   }
 
@@ -368,7 +373,8 @@ export class DdzRoom extends Room {
       });
       this.broadcast("event", {
         type: "player_ready",
-        playerId: result.playerId
+        playerId: result.playerId,
+        snapshot: this.snapshotDto(result.snapshot)
       } satisfies GameEvent);
       this.broadcastPersonalSnapshot("round_started", result.snapshot);
       this.turnScheduler.scheduleTurnTimer(result.snapshot);
@@ -388,7 +394,8 @@ export class DdzRoom extends Room {
     });
     this.broadcast("event", {
       type: "player_ready",
-      playerId: result.playerId
+      playerId: result.playerId,
+      snapshot: this.snapshotDto(result.snapshot)
     } satisfies GameEvent);
     this.broadcastPersonalSnapshot("snapshot", result.snapshot);
     this.turnScheduler.scheduleTurnTimer(result.snapshot);
@@ -414,7 +421,7 @@ export class DdzRoom extends Room {
       playerId: result.playerId,
       called: result.called,
       redealt: result.redealt,
-      snapshot: toSnapshotDto(result.snapshot),
+      snapshot: this.snapshotDto(result.snapshot),
       hand: toCardsDto(this.table.getHand(playerId))
     }));
     this.turnScheduler.scheduleTurnTimer(result.snapshot);
@@ -442,7 +449,7 @@ export class DdzRoom extends Room {
       robbed: result.robbed,
       decided: result.decided,
       landlordId: result.landlordId,
-      snapshot: toSnapshotDto(result.snapshot),
+      snapshot: this.snapshotDto(result.snapshot),
       hand: toCardsDto(this.table.getHand(playerId))
     }));
     this.turnScheduler.scheduleTurnTimer(result.snapshot);
@@ -476,7 +483,7 @@ export class DdzRoom extends Room {
       this.broadcastPersonalEvent((playerId) => ({
         type: "round_settled",
         settlement: toSettlementDto(snapshot.settlement!),
-        snapshot: toSnapshotDto(snapshot),
+        snapshot: this.snapshotDto(snapshot),
         hand: toCardsDto(this.table.getHand(playerId))
       }));
       this.turnScheduler.cancelAll();
@@ -506,7 +513,7 @@ export class DdzRoom extends Room {
       client.send("event", {
         type: "cards_played",
         play: toPublicPlayDto(play),
-        snapshot: toSnapshotDto(snapshot),
+        snapshot: this.snapshotDto(snapshot),
         hand: toCardsDto(this.table.getHand(playerId))
       } satisfies GameEvent);
     }
@@ -533,7 +540,7 @@ export class DdzRoom extends Room {
     this.broadcast("event", {
       type: "player_passed",
       playerId,
-      snapshot: toSnapshotDto(snapshot)
+      snapshot: this.snapshotDto(snapshot)
     } satisfies GameEvent);
     this.turnScheduler.scheduleTurnTimer(snapshot);
     this.turnScheduler.scheduleBotTurn(snapshot);
@@ -611,6 +618,10 @@ export class DdzRoom extends Room {
     }
   }
 
+  private snapshotDto(snapshot: GameSnapshot) {
+    return toSnapshotDto(snapshot, this.nicknames);
+  }
+
   /** 结算画面停留一段时间后再重开下一局，否则客户端的结算界面会一闪而过。 */
   private startNextRound(): void {
     this.clock.setTimeout(() => {
@@ -662,7 +673,7 @@ export class DdzRoom extends Room {
       playerId: timer.playerId,
       deadlineAt: timer.deadlineAt,
       durationMs: timer.durationMs,
-      snapshot: toSnapshotDto(snapshot)
+      snapshot: this.snapshotDto(snapshot)
     } satisfies GameEvent);
   }
 
@@ -674,7 +685,7 @@ export class DdzRoom extends Room {
 
     client.send("event", {
       type: "snapshot",
-      snapshot: toSnapshotDto(this.table.snapshot()),
+      snapshot: this.snapshotDto(this.table.snapshot()),
       hand: toCardsDto(this.table.getHand(playerId))
     } satisfies GameEvent);
   }
@@ -688,7 +699,7 @@ export class DdzRoom extends Room {
 
       client.send("event", {
         type,
-        snapshot: toSnapshotDto(snapshot),
+        snapshot: this.snapshotDto(snapshot),
         hand: toCardsDto(this.table.getHand(playerId))
       } satisfies GameEvent);
     }

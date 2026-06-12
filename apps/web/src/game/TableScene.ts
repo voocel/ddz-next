@@ -302,16 +302,31 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.updatePlayControls();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
     const action = replay.actions[currentStep];
-    const snapshot = action ? parseReplaySnapshot(action.payload.snapshot) : null;
+    const replayNickname = (playerId: string): string | undefined =>
+      replay.players.find((player) => player.playerId === playerId)?.nickname;
+    const parsed = action ? parseReplaySnapshot(action.payload.snapshot) : null;
+    // 历史快照 payload 不存昵称，渲染前从回放玩家列表补齐
+    const snapshot = parsed
+      ? {
+          ...parsed,
+          players: parsed.players.map((player) =>
+            player.nickname === undefined && replayNickname(player.id) !== undefined
+              ? { ...player, nickname: replayNickname(player.id) }
+              : player
+          )
+        }
+      : null;
+    const replayActor = (playerId: string): string =>
+      formatActor(playerId, this.options.localPlayerId, replayNickname(playerId));
     if (snapshot) {
       this.snapshot = snapshot;
       this.renderSnapshotViews(snapshot);
-      this.setFeedback(action ? formatReplayAction(action) : "暂无回放事件");
+      this.setFeedback(action ? formatReplayAction(action, replayActor) : "暂无回放事件");
     } else {
       this.renderReplaySeats(replay);
       this.renderLandlordCards(null);
       this.settlementLayer?.setVisible(false);
-      this.setFeedback(action ? `历史事件缺少快照: ${formatReplayAction(action)}` : "暂无回放事件");
+      this.setFeedback(action ? `历史事件缺少快照: ${formatReplayAction(action, replayActor)}` : "暂无回放事件");
     }
 
     if (snapshot?.lastPlay) {
@@ -530,7 +545,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const label = this.add.text(
         position.x - 54,
         position.y - 28,
-        `${formatActor(player.id, this.options.localPlayerId)}${landlord}`,
+        `${formatActor(player.id, this.options.localPlayerId, player.nickname)}${landlord}`,
         {
           ...TEXT_STYLE,
           fontSize: "14px",
@@ -720,7 +735,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const label = this.add.text(
         position.x - 54,
         position.y - 28,
-        formatActor(player.playerId, this.options.localPlayerId),
+        formatActor(player.playerId, this.options.localPlayerId, player.nickname),
         {
           ...TEXT_STYLE,
           fontSize: "14px",

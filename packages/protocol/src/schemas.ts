@@ -32,6 +32,8 @@ export const cardSchema = z
 
 export const playerSnapshotSchema = z.object({
   id: z.string().min(1),
+  // 展示用昵称；旧快照/bot 可能缺省，前端按 id 规则兜底
+  nickname: z.string().min(1).optional(),
   kind: z.enum(["human", "bot"]),
   seat: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   ready: z.boolean(),
@@ -169,7 +171,8 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("player_ready"),
-    playerId: z.string().min(1)
+    playerId: z.string().min(1),
+    snapshot: gameSnapshotSchema
   }),
   z.object({
     type: z.literal("round_started"),
@@ -342,6 +345,7 @@ export const roundHistoryActionSchema = z.object({
 
 export const roundHistoryPlayerSchema = z.object({
   playerId: z.string().min(1),
+  nickname: z.string().min(1).optional(),
   playerKind: z.enum(["human", "bot"]),
   seat: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   score: z.number().int(),

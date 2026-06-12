@@ -1,5 +1,5 @@
 import type { RoundHistoryItemDto } from "@ddz/protocol";
-import { shortId } from "../game/tablePresentation";
+import { formatActor } from "../game/tablePresentation";
 import type { TurnTimerState } from "./types";
 
 export function formatRoundDelta(round: RoundHistoryItemDto, userId: string): string {
@@ -20,8 +20,7 @@ export function formatDateTime(value: string): string {
   }).format(new Date(value));
 }
 
-export function formatTurnTimer(timer: TurnTimerState, localPlayerId: string): string {
+export function formatTurnTimer(timer: TurnTimerState, localPlayerId: string, nickname?: string): string {
   const seconds = Math.ceil(timer.remainingMs / 1000);
-  const owner = timer.playerId === localPlayerId ? "你" : shortId(timer.playerId);
-  return `${owner} ${seconds}s`;
+  return `${formatActor(timer.playerId, localPlayerId, nickname)} ${seconds}s`;
 }

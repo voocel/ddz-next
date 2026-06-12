@@ -31,10 +31,19 @@ export function toPublicPlayDto(play: PublicPlay) {
   };
 }
 
-export function toSnapshotDto(snapshot: GameSnapshot): GameSnapshotDto {
+export function toSnapshotDto(
+  snapshot: GameSnapshot,
+  nicknames?: ReadonlyMap<string, string>
+): GameSnapshotDto {
   return {
     phase: snapshot.phase,
-    players: snapshot.players.map((player) => ({ ...player })),
+    players: snapshot.players.map((player) => {
+      const nickname = nicknames?.get(player.id);
+      return {
+        ...player,
+        ...(nickname === undefined ? {} : { nickname })
+      };
+    }),
     currentPlayerId: snapshot.currentPlayerId,
     landlordId: snapshot.landlordId,
     bidCandidateId: snapshot.bidCandidateId,

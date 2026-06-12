@@ -18,6 +18,7 @@ export interface RoundHistoryActionRecord {
 
 export interface RoundHistoryPlayerRecord {
   readonly playerId: string;
+  readonly nickname?: string;
   readonly playerKind: "human" | "bot";
   readonly seat: 0 | 1 | 2;
   readonly score: number;
@@ -101,6 +102,7 @@ function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
     endedAt: round.endedAt?.toISOString() ?? null,
     players: round.players.map((player) => ({
       playerId: player.playerId,
+      ...(player.nickname === undefined ? {} : { nickname: player.nickname }),
       playerKind: player.playerKind,
       seat: player.seat,
       score: player.score,
