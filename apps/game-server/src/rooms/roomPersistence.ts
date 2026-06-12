@@ -41,6 +41,15 @@ export class RoomPersistence {
     }
   }
 
+  /** 周期心跳：重申当前状态以刷新 Room.updatedAt，活房免于被孤儿清扫误杀。 */
+  async heartbeat(): Promise<void> {
+    if (this.syncedStatus === null || this.syncedStatus === "closed") {
+      return;
+    }
+
+    await this.roomStatusClient.updateRoomStatus(this.roomCode, this.syncedStatus);
+  }
+
   /** 房间销毁时把 DB 状态收尾为 closed，避免停留在 playing。 */
   async closeRoom(): Promise<void> {
     if (this.syncedStatus === "closed") {

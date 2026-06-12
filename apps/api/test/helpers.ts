@@ -134,6 +134,8 @@ export class InMemoryGameActionRepository implements GameActionRepository {
   readonly mutations = new Map<string, GameActionMutationRecord>();
   /** roomId → 最新崩溃恢复状态（与真实仓库的 RoomLiveState upsert 对应） */
   readonly liveStates = new Map<string, unknown>();
+  /** 与真实仓库一致：closed 房跳过状态写入（dispose 竞态守卫） */
+  readonly closedRoomIds = new Set<string>();
   readonly settlements: Array<{
     roundId: string;
     landlordId: string;
@@ -176,10 +178,6 @@ export class InMemoryGameActionRepository implements GameActionRepository {
       return existingMutation;
     }
 
-    if (input.state) {
-      this.liveStates.set(input.roomId, input.state);
-    }
-
     const roomEvents = input.roomEvents.map((event) => this.createRoomEvent(input.roomId, event));
     const actions: GameActionRecord[] = [];
     let round = await this.findOpenRoundByRoomId(input.roomId);
@@ -210,6 +208,11 @@ export class InMemoryGameActionRepository implements GameActionRepository {
           this.rounds[index] = round;
         }
       }
+    }
+
+    // 镜像 Prisma 事务语义：动作全部成功后才写状态，closed 房跳过
+    if (input.state && !this.closedRoomIds.has(input.roomId)) {
+      this.liveStates.set(input.roomId, input.state);
     }
 
     const mutation = {

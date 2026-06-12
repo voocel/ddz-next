@@ -13,6 +13,12 @@ import type {
 } from "@ddz/domain";
 import { z } from "zod";
 
+/**
+ * 同一玩家新连接踢掉旧会话时的自定义 WebSocket 关闭码，game-server 与 web 共用。
+ * 4000-4010 已被 Colyseus CloseCode 占用（4002 = WITH_ERROR），自定义码必须避开。
+ */
+export const DUPLICATE_SESSION_CLOSE_CODE = 4100;
+
 // 与 @ddz/domain 共享的 schema 一律从 domain 常量派生并用 satisfies 锁定输出类型，
 // domain 改动时这里会编译期报错，防止两份定义漂移。
 export const rankSchema = z.enum(RANKS) satisfies z.ZodType<Rank>;

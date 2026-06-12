@@ -115,6 +115,32 @@ describe("RoomPersistence", () => {
     ]);
   });
 
+  it("re-asserts the synced status on heartbeat and skips before first sync or after close", async () => {
+    const roomStatusClient = new FakeRoomStatusClient();
+    const gameActionClient = new FakeGameActionClient();
+    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+
+    // 尚未同步过任何状态：心跳无事可做
+    await persistence.heartbeat();
+    expect(roomStatusClient.statusUpdates).toEqual([]);
+
+    await persistence.recordMutation({
+      actions: [{ type: "player_ready", playerId: "p0", payload: {} }],
+      snapshot: createSnapshot("playing")
+    });
+    await persistence.heartbeat();
+    // 同状态重申一次，刷新 DB updatedAt
+    expect(roomStatusClient.statusUpdates).toEqual([
+      { roomCode: "ROOM01", status: "playing" },
+      { roomCode: "ROOM01", status: "playing" }
+    ]);
+
+    await persistence.closeRoom();
+    await persistence.heartbeat();
+    expect(roomStatusClient.statusUpdates).toHaveLength(3);
+    expect(roomStatusClient.statusUpdates[2]).toEqual({ roomCode: "ROOM01", status: "closed" });
+  });
+
   it("wraps persistence failures with an explicit room persistence error", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();

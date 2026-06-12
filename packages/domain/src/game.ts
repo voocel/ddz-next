@@ -721,8 +721,14 @@ function validateTableState(state: GameTableState): void {
     fail("duplicate player ids");
   }
   const seats = new Set(state.players.map((player) => player.seat));
-  if (state.players.some((player, _, all) => player.seat < 0 || player.seat >= all.length) || seats.size !== state.players.length) {
+  if (
+    state.players.some((player, _, all) => !Number.isInteger(player.seat) || player.seat < 0 || player.seat >= all.length) ||
+    seats.size !== state.players.length
+  ) {
     fail("seats must be unique and contiguous from 0");
+  }
+  if (state.players.some((player) => !Number.isInteger(player.score))) {
+    fail("scores must be integers");
   }
 
   const belongs = (playerId: PlayerId | null, label: string): void => {
@@ -733,11 +739,32 @@ function validateTableState(state: GameTableState): void {
   belongs(state.currentPlayerId, "currentPlayerId");
   belongs(state.landlordId, "landlordId");
   belongs(state.bidCandidateId, "bidCandidateId");
+  belongs(state.lastPlay?.playerId ?? null, "lastPlay player");
   for (const playerId of state.robQueue) {
     belongs(playerId, "robQueue entry");
   }
   for (const playerId of Object.keys(state.playCounts)) {
     belongs(playerId, "playCounts entry");
+  }
+
+  const requireCount = (value: number, label: string): void => {
+    if (!Number.isInteger(value) || value < 0) {
+      fail(`${label} must be a non-negative integer`);
+    }
+  };
+  requireCount(state.passCount, "passCount");
+  requireCount(state.bidAttempts, "bidAttempts");
+  requireCount(state.robIndex, "robIndex");
+  requireCount(state.robCount, "robCount");
+  requireCount(state.bombCount, "bombCount");
+  for (const count of Object.values(state.playCounts)) {
+    requireCount(count, "playCounts value");
+  }
+  if (state.passCount > 2) {
+    fail("passCount out of range");
+  }
+  if (new Set(state.robQueue).size !== state.robQueue.length) {
+    fail("robQueue has duplicate players");
   }
 
   // landlordCards 是已并入地主手牌的公开拷贝，唯一性只看手牌 + 未发底牌
@@ -751,6 +778,9 @@ function validateTableState(state: GameTableState): void {
       if (state.landlordId !== null || state.bidCandidateId !== null || state.currentPlayerId === null || state.bottomCards.length !== 3) {
         fail("inconsistent bidding state");
       }
+      if (state.landlordCards.length !== 0 || state.lastPlay !== null || state.settlement !== null) {
+        fail("bidding state carries leftover round data");
+      }
       break;
     case "robbing":
       if (state.landlordId !== null || state.bidCandidateId === null || state.currentPlayerId === null) {
@@ -759,21 +789,45 @@ function validateTableState(state: GameTableState): void {
       if (state.bottomCards.length !== 3 || state.robIndex >= state.robQueue.length) {
         fail("inconsistent rob queue state");
       }
+      // 抢地主轮转的核心不变量：当前决策者必须是队列指针指向的玩家
+      if (state.currentPlayerId !== state.robQueue[state.robIndex]) {
+        fail("currentPlayerId must match the rob queue position");
+      }
+      if (state.landlordCards.length !== 0 || state.lastPlay !== null || state.settlement !== null) {
+        fail("robbing state carries leftover round data");
+      }
       break;
     case "playing":
       if (state.landlordId === null || state.currentPlayerId === null || state.bottomCards.length !== 0 || state.landlordCards.length !== 3) {
         fail("inconsistent playing state");
+      }
+      // 手牌打空的瞬间即转 settled，playing 相位不存在空手牌或已有结算
+      if (state.settlement !== null || state.players.some((player) => player.hand.length === 0)) {
+        fail("playing state must have no settlement and non-empty hands");
       }
       break;
     case "settled":
       if (state.landlordId === null || state.settlement === null || state.currentPlayerId !== null) {
         fail("inconsistent settled state");
       }
+      if (state.bottomCards.length !== 0 || state.landlordCards.length !== 3) {
+        fail("inconsistent settled card state");
+      }
       break;
     case "waiting":
     case "ready":
       if (state.players.some((player) => player.hand.length > 0) || state.currentPlayerId !== null || state.landlordId !== null) {
         fail(`inconsistent ${state.phase} state`);
+      }
+      if (
+        state.bidCandidateId !== null ||
+        state.lastPlay !== null ||
+        state.settlement !== null ||
+        state.bottomCards.length !== 0 ||
+        state.landlordCards.length !== 0 ||
+        state.robQueue.length !== 0
+      ) {
+        fail(`${state.phase} state carries leftover round data`);
       }
       break;
   }

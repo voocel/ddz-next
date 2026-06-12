@@ -75,15 +75,18 @@ describe("RoomService", () => {
     expect(updated.room.status).toBe("playing");
   });
 
-  it("treats same-status updates as idempotent", async () => {
-    const service = new RoomService(new InMemoryRoomRepository());
+  it("touches updatedAt on same-status updates so heartbeats fend off the orphan sweep", async () => {
+    const rooms = new InMemoryRoomRepository();
+    const service = new RoomService(rooms);
     await service.createRoom({
       code: "OPEN04"
     });
+    const before = rooms.records[0]!.updatedAt.getTime();
 
     const updated = await service.updateRoomStatus("OPEN04", "open");
 
     expect(updated.room.status).toBe("open");
+    expect(rooms.records[0]!.updatedAt.getTime()).toBeGreaterThan(before);
   });
 
   it("rejects status transitions out of the closed terminal state", async () => {

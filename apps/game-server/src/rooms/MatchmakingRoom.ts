@@ -1,6 +1,6 @@
 import { matchMaker, Room, type Client } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
-import type { MatchmakingEvent } from "@ddz/protocol";
+import { DUPLICATE_SESSION_CLOSE_CODE, type MatchmakingEvent } from "@ddz/protocol";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { InMemoryMatchQueue, planMatchSize, type MatchQueue, type MatchQueueEntry } from "../matchmaking/matchQueue.js";
 
@@ -16,7 +16,6 @@ interface JoinOptions {
 
 const DEFAULT_MATCH_TIMEOUT_MS = 8_000;
 const DEFAULT_CHECK_INTERVAL_MS = 1_000;
-const DUPLICATE_SESSION_CLOSE_CODE = 4002;
 
 /**
  * 全局匹配房：玩家加入即入队，凑满 3 真人立即开局，

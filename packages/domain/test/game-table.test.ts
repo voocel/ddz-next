@@ -391,5 +391,59 @@ describe("GameTable dump/restore", () => {
 
     // 当前玩家不在座
     expect(() => new GameTable().restore({ ...state, currentPlayerId: "ghost" })).toThrow("not seated");
+
+    // lastPlay 出牌人不在座
+    expect(() =>
+      new GameTable().restore({ ...state, lastPlay: { playerId: "ghost", cards: state.players[0]!.hand.slice(0, 1) } })
+    ).toThrow("lastPlay player");
+
+    // playing 相位不允许空手牌或已有结算
+    const emptyHand = {
+      ...state,
+      players: state.players.map((player, index) => (index === 1 ? { ...player, hand: [] } : player))
+    };
+    expect(() => new GameTable().restore(emptyHand)).toThrow("non-empty hands");
+
+    // 计数字段必须是非负整数
+    expect(() => new GameTable().restore({ ...state, bombCount: -1 })).toThrow("non-negative integer");
+    expect(() => new GameTable().restore({ ...state, passCount: 3 })).toThrow("passCount out of range");
+  });
+
+  it("rejects corrupted robbing and inter-round states", () => {
+    const robbing = readyThreePlayers();
+    robbing.bidLandlord("p0", true);
+    robbing.robLandlord("p1", true);
+    const robState = robbing.dump();
+
+    // 抢地主轮转指针与当前玩家脱节
+    expect(() => new GameTable().restore({ ...robState, robIndex: 0 })).toThrow("rob queue position");
+    // 抢地主队列出现重复玩家
+    expect(() =>
+      new GameTable().restore({ ...robState, robQueue: [robState.robQueue[1]!, robState.robQueue[1]!] })
+    ).toThrow("duplicate players");
+
+    // 局间相位不允许残留上一局的牌局数据
+    const settled = readyThreePlayers();
+    settled.bidLandlord("p0", true);
+    settled.robLandlord("p1", false);
+    settled.robLandlord("p2", false);
+    while (settled.snapshot().phase === "playing") {
+      const snapshot = settled.snapshot();
+      const current = snapshot.currentPlayerId!;
+      if (current === snapshot.landlordId) {
+        settled.playCards(current, [settled.getHand(current)[0]!.id]);
+      } else {
+        settled.pass(current);
+      }
+    }
+    const interRound = settled.dump();
+    settled.resetForNextRound();
+    const cleanState = settled.dump();
+    expect(() => new GameTable().restore({ ...cleanState, settlement: interRound.settlement })).toThrow(
+      "leftover round data"
+    );
+    expect(() => new GameTable().restore({ ...cleanState, landlordCards: interRound.landlordCards })).toThrow(
+      "leftover round data"
+    );
   });
 });

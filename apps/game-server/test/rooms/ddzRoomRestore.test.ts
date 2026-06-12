@@ -46,7 +46,7 @@ describe("DdzRoom crash recovery", () => {
     await fixture.room.onDispose();
   });
 
-  it("restores an inter-round room and re-readies bots", async () => {
+  it("restores an inter-round room, releases offline human seats and re-readies bots", async () => {
     const code = "RESTO3";
     const table = playingTable(code);
     sweepToSettlement(table);
@@ -58,7 +58,9 @@ describe("DdzRoom crash recovery", () => {
 
     const players = fixture.internals().table.snapshot().players as { id: string; kind: string; ready: boolean }[];
     expect(players.filter((player) => player.kind === "bot").every((player) => player.ready)).toBe(true);
-    expect(players.find((player) => player.id === "human-1")?.ready).toBe(false);
+    // 局间相位的离线真人直接让座（永远等不到其 ready），重连走正常入房路径
+    expect(players.find((player) => player.id === "human-1")).toBeUndefined();
+    expect(fixture.internals().nicknames.has("human-1")).toBe(false);
     // bot 补 ready 走正常持久化路径
     expect(
       fixture.gameActions.flatMap((record) => record.actions.map((action) => action.type)).filter((type) => type === "player_ready")
@@ -96,10 +98,45 @@ describe("DdzRoom crash recovery", () => {
     const failed = createRoomFixture(code, stateResponse(code, "closed", null));
     await expect(failed.room.onCreate(failed.options)).rejects.toThrow("closed");
 
-    // onCreate 失败不触发 onDispose，注册必须已自清，否则房间码被永久占用
+    // onCreate 失败需立即自清注册，否则房间码被永久占用
     const retry = createRoomFixture(code, stateResponse(code, "open", null));
     await expect(retry.room.onCreate(retry.options)).resolves.toBeUndefined();
     await retry.room.onDispose();
+  });
+
+  it("never touches the DB when a failed-create zombie gets auto-disposed", async () => {
+    const code = "RESTO8";
+    const zombie = createRoomFixture(code, stateResponse(code, "playing", null));
+    await expect(zombie.room.onCreate(zombie.options)).rejects.toThrow("no recoverable state");
+
+    // Colyseus 对 onCreate 失败的实例约 15s 后仍会触发 onDispose（autoDispose），
+    // 此时绝不能 PATCH closed——那会删掉别人（或可恢复牌局）的状态行
+    await zombie.room.onDispose();
+    expect(zombie.statusUpdates).toEqual([]);
+  });
+
+  it("keeps the registration until closeRoom completes on dispose", async () => {
+    const code = "RESTO9";
+    const table = playingTable(code);
+    const first = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
+    await first.room.onCreate(first.options);
+
+    // 卡住 closed 上报：dispose 期间同码建房必须仍被注册表拒绝，
+    // 否则新实例会在状态行删除前恢复，旧实例随后的 PATCH closed 把它的状态行也删掉
+    let releaseClose: () => void = () => {};
+    first.gateNextStatusUpdate(new Promise<void>((resolve) => (releaseClose = resolve)));
+    const disposing = first.room.onDispose();
+
+    const second = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
+    await expect(second.room.onCreate(second.options)).rejects.toThrow("already live");
+
+    releaseClose();
+    await disposing;
+    expect(first.statusUpdates).toEqual(["closed"]);
+
+    const third = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
+    await expect(third.room.onCreate(third.options)).resolves.toBeUndefined();
+    await third.room.onDispose();
   });
 });
 
@@ -155,8 +192,12 @@ interface RoomFixture {
   readonly room: DdzRoom;
   readonly options: Record<string, unknown>;
   readonly broadcast: ReturnType<typeof vi.fn>;
-  readonly clock: { setTimeout: ReturnType<typeof vi.fn> };
+  readonly clock: { setTimeout: ReturnType<typeof vi.fn>; setInterval: ReturnType<typeof vi.fn> };
   readonly gameActions: RecordGameActionsInput[];
+  /** 房间上报过的状态序列（updateRoomStatus 调用记录） */
+  readonly statusUpdates: string[];
+  /** 让下一次 updateRoomStatus 挂起到给定 promise 解决，用于验证 dispose 期间的竞态 */
+  gateNextStatusUpdate(gate: Promise<void>): void;
   internals(): Record<string, never> & {
     table: GameTable;
     botIds: string[];
@@ -174,9 +215,12 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
   const internals = room as unknown as Record<string, unknown>;
   const broadcast = vi.fn();
   const clock = {
-    setTimeout: vi.fn(() => ({ clear: vi.fn() }))
+    setTimeout: vi.fn(() => ({ clear: vi.fn() })),
+    setInterval: vi.fn(() => ({ clear: vi.fn() }))
   };
   const gameActions: RecordGameActionsInput[] = [];
+  const statusUpdates: string[] = [];
+  let statusGate: Promise<void> | null = null;
 
   fixtureSequence += 1;
   Object.defineProperty(room, "roomId", { value: `colyseus-${fixtureSequence}`, configurable: true });
@@ -196,7 +240,14 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
       async getRoomState(): Promise<InternalRoomStateResponse> {
         return response;
       },
-      async updateRoomStatus(): Promise<void> {}
+      async updateRoomStatus(_code: string, status: string): Promise<void> {
+        if (statusGate) {
+          const gate = statusGate;
+          statusGate = null;
+          await gate;
+        }
+        statusUpdates.push(status);
+      }
     },
     gameActionClient: {
       async recordGameActions(input: RecordGameActionsInput): Promise<void> {
@@ -211,6 +262,10 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
     broadcast,
     clock,
     gameActions,
+    statusUpdates,
+    gateNextStatusUpdate: (gate: Promise<void>) => {
+      statusGate = gate;
+    },
     internals: () => internals as ReturnType<RoomFixture["internals"]>,
     flushTasks: async () => {
       await (internals.tasks as { enqueue(task: () => Promise<void>): Promise<void> }).enqueue(async () => {});

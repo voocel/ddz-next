@@ -2,7 +2,7 @@ import type { Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
 import { GameTable } from "@ddz/domain";
-import { clientCommandSchema } from "@ddz/protocol";
+import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
 import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
@@ -34,10 +34,8 @@ const DEFAULT_TURN_TIMEOUT_MS = 20_000;
 const QUICK_START_BOT_COUNT = 2;
 // 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
 const SETTLEMENT_DISPLAY_MS = 5000;
-// 撮合房创建后玩家迟迟未入场的自毁时限
-const MATCHED_ROOM_EMPTY_TIMEOUT_MS = 60_000;
-// 同一玩家新连接踢掉旧会话时使用的自定义关闭码
-const DUPLICATE_SESSION_CLOSE_CODE = 4002;
+// 活跃房间刷新 DB updatedAt 的心跳间隔，须远小于 API 侧 30min 的孤儿清扫时限
+const HEARTBEAT_INTERVAL_MS = 10 * 60_000;
 
 /**
  * 单进程内 roomCode → roomId 注册表。
@@ -65,6 +63,8 @@ export class DdzRoom extends Room {
   private readonly nicknames = new Map<PlayerId, string>();
   private turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS;
   private failed = false;
+  /** onCreate 是否完整成功：失败实例随后仍会被 autoDispose 收割，onDispose 据此跳过 DB 收尾 */
+  private created = false;
 
   /** join 前校验 JWT，返回的 claims 会作为 client.auth 传入 onJoin。 */
   static override async onAuth(token: string, options: JoinOptions | undefined): Promise<AccessTokenClaims> {
@@ -93,8 +93,11 @@ export class DdzRoom extends Room {
 
     try {
       await this.setupRoom(options);
+      this.created = true;
     } catch (error) {
-      // onCreate 抛错不会触发 onDispose，注册项需在此自清
+      // onCreate 抛错后 MatchMaker 不清理实例，构造器注册的 dispose 监听与
+      // __init 武装的 autoDispose 定时器（约 15s）仍会触发 onDispose——
+      // 注册项在此先行自清，onDispose 再以 created 标志跳过 DB 收尾
       this.releaseLiveRegistration();
       throw error;
     }
@@ -122,9 +125,6 @@ export class DdzRoom extends Room {
         matchBotCount ?? (readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount));
       this.maxClients = 3 - botCount;
       this.addBots(botCount);
-      if (matchBotCount !== null) {
-        this.scheduleEmptyRoomSelfDestruct();
-      }
     }
 
     this.turnScheduler = new RoomTurnScheduler({
@@ -155,6 +155,11 @@ export class DdzRoom extends Room {
     this.onMessage("command", async (client, payload) => {
       await this.tasks.enqueue(() => this.handleCommand(client, payload));
     });
+    // 长期空闲（局间挂机）的活房没有动作落库，靠心跳免于被孤儿清扫误杀；
+    // 空房生命周期则交给 Colyseus autoDispose（预留座位感知，过期即处置）
+    this.clock.setInterval(() => {
+      void this.heartbeat();
+    }, HEARTBEAT_INTERVAL_MS);
 
     if (state) {
       // scheduler 就绪后才能恢复牌局推进
@@ -171,17 +176,20 @@ export class DdzRoom extends Room {
   }
 
   async onDispose(): Promise<void> {
-    this.releaseLiveRegistration();
     this.turnScheduler?.cancelAll();
-    // failRoom 已上报 closed；onCreate 失败时 persistence 可能尚未初始化
-    if (this.failed || !this.persistence) {
-      return;
-    }
-
     try {
+      // onCreate 失败的僵尸实例不拥有该房间码，绝不能动 DB（否则会把
+      // 别的实例或可恢复牌局标记 closed 并删掉状态行）；failRoom 已自行上报 closed
+      if (!this.created || this.failed) {
+        return;
+      }
       await this.persistence.closeRoom();
     } catch (error) {
       console.error(`[DdzRoom ${this.roomCode}] Failed to close room on dispose.`, error);
+    } finally {
+      // 必须等 closed 落库后才释放注册：先释放会让并发建房在状态行删除前
+      // 恢复出第二个实例，随后旧实例的 PATCH closed 又会删掉新实例的状态行
+      this.releaseLiveRegistration();
     }
   }
 
@@ -214,9 +222,10 @@ export class DdzRoom extends Room {
         this.table.setConnected(player.id, false);
       }
     }
+    // 局间相位没有手牌，离线真人直接让座（与"等待期离开即让座"语义一致），
+    // 否则他们永远无法 ready，房间会卡死；牌局中的离线真人保留座位等重连
+    this.releaseOfflineHumanSeats();
     this.maxClients = 3 - this.botIds.length;
-    // 恢复房从未有人 join 过，autoDispose 永不触发；无人回来则自毁交清扫收尾
-    this.scheduleEmptyRoomSelfDestruct();
   }
 
   /** 按恢复出的相位接续牌局推进 */
@@ -242,13 +251,34 @@ export class DdzRoom extends Room {
     }
   }
 
-  /** 服务端创建且无人入场的房不会触发 autoDispose，定时自毁兜底 */
-  private scheduleEmptyRoomSelfDestruct(): void {
-    this.clock.setTimeout(() => {
-      if (this.clients.length === 0) {
-        void this.disconnect();
+  /** 局间相位释放离线真人的座位，返回是否有人让座 */
+  private releaseOfflineHumanSeats(): boolean {
+    if (!this.canReleaseSeatBeforeRound()) {
+      return false;
+    }
+
+    let released = false;
+    for (const player of this.table.snapshot().players) {
+      if (player.kind === "human" && !this.hasActiveSession(player.id)) {
+        this.table.removePlayerBeforeRound(player.id);
+        this.nicknames.delete(player.id);
+        released = true;
       }
-    }, MATCHED_ROOM_EMPTY_TIMEOUT_MS);
+    }
+    return released;
+  }
+
+  /** 周期心跳：有人在房则刷新 DB updatedAt，失败不致命（孤儿清扫有 30min 余量） */
+  private async heartbeat(): Promise<void> {
+    if (this.failed || this.clients.length === 0) {
+      return;
+    }
+
+    try {
+      await this.persistence.heartbeat();
+    } catch (error) {
+      console.error(`[DdzRoom ${this.roomCode}] Heartbeat failed.`, error);
+    }
   }
 
   private async handleJoin(client: Client, options: JoinOptions): Promise<void> {
@@ -268,12 +298,13 @@ export class DdzRoom extends Room {
     }
 
     const playerId = claims.sub;
-    if (claims.nickname) {
-      this.nicknames.set(playerId, claims.nickname);
-    }
     const reconnecting = this.table.hasPlayer(playerId);
     const seat = this.table.addPlayer(playerId);
     this.table.setConnected(playerId, true);
+    // 入座成功后才登记昵称，满房被拒的玩家不该在昵称表与恢复信封里留痕
+    if (claims.nickname) {
+      this.nicknames.set(playerId, claims.nickname);
+    }
     // 同一玩家的旧会话在新连接生效后踢掉，避免双开占座
     const staleSessions = [...(this.playerSessions.get(playerId) ?? [])].filter((sessionId) => sessionId !== client.sessionId);
     this.clientPlayers.set(client.sessionId, playerId);
@@ -737,8 +768,10 @@ export class DdzRoom extends Room {
         if (this.failed || this.table.snapshot().phase !== "settled") {
           return;
         }
-        const snapshot = this.table.resetForNextRound();
-        this.broadcastPersonalSnapshot("snapshot", snapshot);
+        this.table.resetForNextRound();
+        // 上一局中途掉线的真人此刻让座，否则其永不 ready 会卡死下一局
+        this.releaseOfflineHumanSeats();
+        this.broadcastPersonalSnapshot("snapshot", this.table.snapshot());
         await this.readyBots();
       });
     }, SETTLEMENT_DISPLAY_MS);

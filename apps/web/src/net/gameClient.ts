@@ -1,6 +1,6 @@
 import { Client, type Room } from "@colyseus/sdk";
 import type { CardId } from "@ddz/domain";
-import { gameEventSchema, type GameEvent } from "@ddz/protocol";
+import { DUPLICATE_SESSION_CLOSE_CODE, gameEventSchema, type GameEvent } from "@ddz/protocol";
 
 interface GameClientOptions {
   readonly endpoint: string;
@@ -16,8 +16,6 @@ interface GameClientOptions {
 
 /** Colyseus 主动离开的正常关闭码 */
 const NORMAL_LEAVE_CODE = 1000;
-/** 同一玩家新连接踢掉旧会话（与 game-server DUPLICATE_SESSION_CLOSE_CODE 对应） */
-const DUPLICATE_SESSION_CLOSE_CODE = 4002;
 /** 房间内部故障关闭（failRoom disconnect(1011)，DB 已 closed） */
 const ROOM_FAILED_CLOSE_CODE = 1011;
 

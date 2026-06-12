@@ -93,13 +93,8 @@ export class RoomService {
       throw new RoomError("Room not found.", 404);
     }
 
-    // 同状态更新视为幂等，直接返回；非法转移拒绝
-    if (current.status === status) {
-      return {
-        room: toRoomDto(current)
-      };
-    }
-    if (!ROOM_STATUS_TRANSITIONS[current.status].includes(status)) {
+    // 同状态更新仍写库以刷新 updatedAt：game-server 以此作活跃心跳，免于孤儿清扫；非法转移拒绝
+    if (current.status !== status && !ROOM_STATUS_TRANSITIONS[current.status].includes(status)) {
       throw new RoomError(`Cannot change room status from ${current.status} to ${status}.`, 409);
     }
 
