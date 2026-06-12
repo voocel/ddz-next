@@ -26,9 +26,10 @@ if (demoUser.enabled) {
   );
 }
 
-// 空房清扫：open 状态长期无活动（无人加入/游戏服宕机残留）的房间定期收尾为 closed
+// 房间清扫：从未使用的 open 房 15 分钟收尾；崩溃后无人回来恢复的 playing 孤儿房 30 分钟收尾
 const ROOM_SWEEP_INTERVAL_MS = 5 * 60_000;
 const ROOM_MAX_IDLE_MS = 15 * 60_000;
+const ROOM_ORPHAN_PLAYING_MS = 30 * 60_000;
 const sweepTimer = setInterval(() => {
   void dependencies.roomService
     .closeStaleRooms(ROOM_MAX_IDLE_MS)
@@ -39,6 +40,16 @@ const sweepTimer = setInterval(() => {
     })
     .catch((error) => {
       server.log.error(error, "Failed to sweep stale rooms.");
+    });
+  void dependencies.roomService
+    .closeOrphanPlayingRooms(ROOM_ORPHAN_PLAYING_MS)
+    .then((count) => {
+      if (count > 0) {
+        server.log.info({ count }, "Closed orphan playing rooms.");
+      }
+    })
+    .catch((error) => {
+      server.log.error(error, "Failed to sweep orphan playing rooms.");
     });
 }, ROOM_SWEEP_INTERVAL_MS);
 // unref：清扫定时器不阻止进程退出，停机时无需显式清理

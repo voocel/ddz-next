@@ -89,6 +89,36 @@ interface PlayerState {
   score: number;
 }
 
+export interface GameTablePlayerState {
+  readonly id: PlayerId;
+  readonly kind: PlayerKind;
+  readonly seat: SeatIndex;
+  readonly ready: boolean;
+  readonly connected: boolean;
+  readonly hand: readonly CardId[];
+  readonly score: number;
+}
+
+/** GameTable 的完整可序列化状态（含手牌），用于崩溃恢复。牌以 CardId 存储，restore 时重建。 */
+export interface GameTableState {
+  readonly phase: GamePhase;
+  readonly players: readonly GameTablePlayerState[];
+  readonly currentPlayerId: PlayerId | null;
+  readonly landlordId: PlayerId | null;
+  readonly bidCandidateId: PlayerId | null;
+  readonly landlordCards: readonly CardId[];
+  readonly bottomCards: readonly CardId[];
+  readonly lastPlay: { readonly playerId: PlayerId; readonly cards: readonly CardId[] } | null;
+  readonly settlement: Settlement | null;
+  readonly passCount: number;
+  readonly bidAttempts: number;
+  readonly robQueue: readonly PlayerId[];
+  readonly robIndex: number;
+  readonly robCount: number;
+  readonly bombCount: number;
+  readonly playCounts: Readonly<Record<PlayerId, number>>;
+}
+
 export class GameTable {
   private readonly players = new Map<PlayerId, PlayerState>();
   private phase: GamePhase = "waiting";
@@ -409,6 +439,80 @@ export class GameTable {
     };
   }
 
+  /** 导出完整内部状态（含手牌）供崩溃恢复使用，与 snapshot() 的公开视图互补。 */
+  dump(): GameTableState {
+    return {
+      phase: this.phase,
+      players: [...this.players.values()]
+        .sort((a, b) => a.seat - b.seat)
+        .map((player) => ({
+          id: player.id,
+          kind: player.kind,
+          seat: player.seat,
+          ready: player.ready,
+          connected: player.connected,
+          hand: player.hand.map((card) => card.id),
+          score: player.score
+        })),
+      currentPlayerId: this.currentPlayerId,
+      landlordId: this.landlordId,
+      bidCandidateId: this.bidCandidateId,
+      landlordCards: this.landlordCards.map((card) => card.id),
+      bottomCards: this.bottomCards.map((card) => card.id),
+      lastPlay: this.lastPlay
+        ? { playerId: this.lastPlay.playerId, cards: this.lastPlay.cards.map((card) => card.id) }
+        : null,
+      settlement: this.settlement,
+      passCount: this.passCount,
+      bidAttempts: this.bidAttempts,
+      robQueue: [...this.robQueue],
+      robIndex: this.robIndex,
+      robCount: this.robCount,
+      bombCount: this.bombCount,
+      playCounts: Object.fromEntries(this.playCounts)
+    };
+  }
+
+  /** 崩溃恢复：在全新实例上还原 dump() 导出的状态，结构非法即抛错。 */
+  restore(state: GameTableState): void {
+    if (this.players.size > 0 || this.phase !== "waiting") {
+      throw new Error("Can only restore into a fresh table.");
+    }
+
+    validateTableState(state);
+
+    for (const player of state.players) {
+      this.players.set(player.id, {
+        id: player.id,
+        kind: player.kind,
+        seat: player.seat,
+        ready: player.ready,
+        connected: player.connected,
+        hand: parseCardIds(player.hand),
+        score: player.score
+      });
+    }
+
+    this.phase = state.phase;
+    this.currentPlayerId = state.currentPlayerId;
+    this.landlordId = state.landlordId;
+    this.bidCandidateId = state.bidCandidateId;
+    this.landlordCards = parseCardIds(state.landlordCards);
+    this.bottomCards = parseCardIds(state.bottomCards);
+    this.lastPlay = state.lastPlay ? rebuildPlay(state.lastPlay) : null;
+    this.settlement = state.settlement;
+    this.passCount = state.passCount;
+    this.bidAttempts = state.bidAttempts;
+    this.robQueue = [...state.robQueue];
+    this.robIndex = state.robIndex;
+    this.robCount = state.robCount;
+    this.bombCount = state.bombCount;
+    this.playCounts.clear();
+    for (const [playerId, count] of Object.entries(state.playCounts)) {
+      this.playCounts.set(playerId, count);
+    }
+  }
+
   /** 结算后开启下一局：保留玩家与累计分，清空牌局状态，回到 ready/waiting。 */
   resetForNextRound(): GameSnapshot {
     if (this.phase !== "settled") {
@@ -584,6 +688,94 @@ export class GameTable {
       spring,
       players: settlementPlayers
     };
+  }
+}
+
+/** lastPlay 只存 CardId，重建时确定性重算 combination；牌型非法说明数据已损坏。 */
+function rebuildPlay(play: { readonly playerId: PlayerId; readonly cards: readonly CardId[] }): PublicPlay {
+  const cards = sortCards(parseCardIds(play.cards), "asc");
+  const combination = identifyCombination(cards);
+  if (!combination) {
+    throw new Error("Restored lastPlay is not a valid combination.");
+  }
+  return { playerId: play.playerId, cards, combination };
+}
+
+function validateTableState(state: GameTableState): void {
+  const fail = (reason: string): never => {
+    throw new Error(`Invalid table state: ${reason}`);
+  };
+
+  if (!GAME_PHASES.includes(state.phase)) {
+    fail(`unknown phase ${state.phase}`);
+  }
+  if (state.phase !== "waiting" && state.players.length !== 3) {
+    fail(`phase ${state.phase} requires 3 players`);
+  }
+  if (state.players.length > 3) {
+    fail("too many players");
+  }
+
+  const playerIds = new Set(state.players.map((player) => player.id));
+  if (playerIds.size !== state.players.length) {
+    fail("duplicate player ids");
+  }
+  const seats = new Set(state.players.map((player) => player.seat));
+  if (state.players.some((player, _, all) => player.seat < 0 || player.seat >= all.length) || seats.size !== state.players.length) {
+    fail("seats must be unique and contiguous from 0");
+  }
+
+  const belongs = (playerId: PlayerId | null, label: string): void => {
+    if (playerId !== null && !playerIds.has(playerId)) {
+      fail(`${label} ${playerId} is not seated`);
+    }
+  };
+  belongs(state.currentPlayerId, "currentPlayerId");
+  belongs(state.landlordId, "landlordId");
+  belongs(state.bidCandidateId, "bidCandidateId");
+  for (const playerId of state.robQueue) {
+    belongs(playerId, "robQueue entry");
+  }
+  for (const playerId of Object.keys(state.playCounts)) {
+    belongs(playerId, "playCounts entry");
+  }
+
+  // landlordCards 是已并入地主手牌的公开拷贝，唯一性只看手牌 + 未发底牌
+  const dealtIds = [...state.players.flatMap((player) => player.hand), ...state.bottomCards];
+  if (new Set(dealtIds).size !== dealtIds.length) {
+    fail("duplicate cards across hands and bottom cards");
+  }
+
+  switch (state.phase) {
+    case "bidding":
+      if (state.landlordId !== null || state.bidCandidateId !== null || state.currentPlayerId === null || state.bottomCards.length !== 3) {
+        fail("inconsistent bidding state");
+      }
+      break;
+    case "robbing":
+      if (state.landlordId !== null || state.bidCandidateId === null || state.currentPlayerId === null) {
+        fail("inconsistent robbing state");
+      }
+      if (state.bottomCards.length !== 3 || state.robIndex >= state.robQueue.length) {
+        fail("inconsistent rob queue state");
+      }
+      break;
+    case "playing":
+      if (state.landlordId === null || state.currentPlayerId === null || state.bottomCards.length !== 0 || state.landlordCards.length !== 3) {
+        fail("inconsistent playing state");
+      }
+      break;
+    case "settled":
+      if (state.landlordId === null || state.settlement === null || state.currentPlayerId !== null) {
+        fail("inconsistent settled state");
+      }
+      break;
+    case "waiting":
+    case "ready":
+      if (state.players.some((player) => player.hand.length > 0) || state.currentPlayerId !== null || state.landlordId !== null) {
+        fail(`inconsistent ${state.phase} state`);
+      }
+      break;
   }
 }
 

@@ -1,32 +1,27 @@
-import type { GameActionType } from "@ddz/protocol";
+import type { GameActionType, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { ApiSyncConfig } from "./config.js";
 
+export interface RecordGameActionsInput {
+  roomCode: string;
+  mutationId: string;
+  actions: readonly {
+    playerId: string | null;
+    playerKind: "human" | "bot" | null;
+    type: GameActionType;
+    payload: Record<string, unknown>;
+  }[];
+  /** 崩溃恢复状态，与动作同事务落库 */
+  state?: RoomLiveStateEnvelope;
+}
+
 export interface GameActionClient {
-  recordGameActions(input: {
-    roomCode: string;
-    mutationId: string;
-    actions: readonly {
-      playerId: string | null;
-      playerKind: "human" | "bot" | null;
-      type: GameActionType;
-      payload: Record<string, unknown>;
-    }[];
-  }): Promise<void>;
+  recordGameActions(input: RecordGameActionsInput): Promise<void>;
 }
 
 export class HttpGameActionClient implements GameActionClient {
   constructor(private readonly config: ApiSyncConfig) {}
 
-  async recordGameActions(input: {
-    roomCode: string;
-    mutationId: string;
-    actions: readonly {
-      playerId: string | null;
-      playerKind: "human" | "bot" | null;
-      type: GameActionType;
-      payload: Record<string, unknown>;
-    }[];
-  }): Promise<void> {
+  async recordGameActions(input: RecordGameActionsInput): Promise<void> {
     const response = await this.fetchWithRetry(new URL("/internal/game-actions", this.config.endpoint), {
       method: "POST",
       headers: {

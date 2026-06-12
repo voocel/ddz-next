@@ -11,7 +11,7 @@ import type {
 } from "@ddz/protocol";
 import { getTableControlsState } from "../game/controlsState";
 import { createApiClient } from "../net/apiClient";
-import { createGameClient } from "../net/gameClient";
+import { createGameClient, isRecoverableDropCode } from "../net/gameClient";
 import { createMatchmakingClient } from "../net/matchmakingClient";
 import { clearStoredSession, readStoredSession, storeSession } from "./sessionStorage";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
@@ -20,6 +20,15 @@ import { useReplayPlayback } from "./useReplayPlayback";
 import { useTurnTimerTicker } from "./useTurnTimerTicker";
 
 type AuthStatusTone = "idle" | "loading" | "success" | "error";
+
+const RECONNECT_RETRY_MS = 2_000;
+const RECONNECT_DEADLINE_MS = 15_000;
+
+function delay(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, durationMs);
+  });
+}
 
 export function useDdzApp() {
   const [session, setSession] = useState<LoginResponse | null>(() => readStoredSession());
@@ -48,6 +57,8 @@ export function useDdzApp() {
   const [matchQueue, setMatchQueue] = useState<{ waiting: number; position: number } | null>(null);
   const matchClientRef = useRef<ReturnType<typeof createMatchmakingClient> | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => loadTheme());
+  // 断线自动重连：记录触发时间戳，副作用循环按 deadline 重试（游戏服重启恢复牌局的入口）
+  const [reconnectRequest, setReconnectRequest] = useState<number | null>(null);
 
   /** 静默退出匹配队列（取消、进房、登出时复用） */
   const stopMatching = useCallback((): void => {
@@ -132,10 +143,16 @@ export function useDdzApp() {
         quickStart: selectedRoomQuickStart,
         onStatus: setStatus,
         onDropped: (code) => {
-          // 房间异常断开：清理游戏状态回大厅，并在大厅提示
-          setSelectedRoom(null);
-          setSelectedRoomQuickStart(false);
-          setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
+          // 被踢/房间故障：重连必败或会互踢，直接回大厅
+          if (!isRecoverableDropCode(code)) {
+            setSelectedRoom(null);
+            setSelectedRoomQuickStart(false);
+            setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
+            return;
+          }
+          // 网络抖动或游戏服重启：留在牌桌自动重连，服务端会恢复牌局并补发快照
+          setStatus("连接已断开，正在重连…");
+          setReconnectRequest(Date.now());
         },
         onEvent: (event) => {
           if ("snapshot" in event) {
@@ -176,6 +193,7 @@ export function useDdzApp() {
     setSnapshot(null);
     setTurnTimer(null);
     setEvents([]);
+    setReconnectRequest(null);
   }, []);
 
   const enterRoom = useCallback(
@@ -365,6 +383,38 @@ export function useDdzApp() {
     };
   }, [client, resetRoomState, selectedRoom, session]);
 
+  // 断线自动重连循环：2s 间隔重试至 15s，成功则服务端补发快照无缝恢复，超时回大厅
+  useEffect(() => {
+    if (reconnectRequest === null || !session || !selectedRoom) {
+      return;
+    }
+
+    let cancelled = false;
+    const deadline = reconnectRequest + RECONNECT_DEADLINE_MS;
+    const run = async (): Promise<void> => {
+      while (!cancelled && Date.now() < deadline) {
+        if (await client.connect()) {
+          if (!cancelled) {
+            setReconnectRequest(null);
+          }
+          return;
+        }
+        await delay(RECONNECT_RETRY_MS);
+      }
+      if (!cancelled) {
+        setReconnectRequest(null);
+        setSelectedRoom(null);
+        setSelectedRoomQuickStart(false);
+        setRoomStatus("重连失败，请重新进入房间");
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, reconnectRequest, selectedRoom, session]);
+
   useReplayPlayback({
     replayPlaying,
     replayStep,
@@ -395,6 +445,7 @@ export function useDdzApp() {
     matchRoom,
     nickname,
     password,
+    reconnecting: reconnectRequest !== null,
     refreshHistory,
     refreshRooms,
     replayPlaying,

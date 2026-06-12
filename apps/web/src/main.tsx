@@ -59,6 +59,7 @@ function App() {
     matchRoom,
     nickname,
     password,
+    reconnecting,
     refreshHistory,
     refreshRooms,
     replayPlaying,
@@ -354,6 +355,7 @@ function App() {
           ← 离开
         </button>
         <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
+        {reconnecting ? <span className="table-chip">重连中…</span> : null}
         <span className="hud-spacer" />
         <span className="table-chip timer-chip">
           {turnTimer

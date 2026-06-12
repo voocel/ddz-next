@@ -63,22 +63,6 @@ describe("RoomService", () => {
     expect(rooms.records.find((room) => room.code === "USED01")?.status).toBe("open");
   });
 
-  it("requires rooms to be open before the realtime server can join them", async () => {
-    const rooms = new InMemoryRoomRepository();
-    const service = new RoomService(rooms);
-
-    await service.createRoom({
-      code: "OPEN03"
-    });
-    const joinable = await service.requireJoinableRoom("open03");
-    expect(joinable.room.code).toBe("OPEN03");
-
-    await service.updateRoomStatus("OPEN03", "playing");
-    await expect(service.requireJoinableRoom("OPEN03")).rejects.toMatchObject({
-      statusCode: 404
-    } satisfies Partial<RoomError>);
-  });
-
   it("updates room status by code", async () => {
     const service = new RoomService(new InMemoryRoomRepository());
     await service.createRoom({
@@ -132,5 +116,51 @@ describe("RoomService", () => {
     ).rejects.toMatchObject({
       statusCode: 409
     } satisfies Partial<RoomError>);
+  });
+  it("returns room state for crash recovery and clears it on close", async () => {
+    const rooms = new InMemoryRoomRepository();
+    const service = new RoomService(rooms);
+
+    await service.createRoom({
+      code: "LIVE01"
+    });
+    rooms.liveStates.set("LIVE01", { state: { version: 1 }, updatedAt: new Date() });
+
+    const withState = await service.getRoomState("live01");
+    expect(withState.room.code).toBe("LIVE01");
+    expect(withState.state).toEqual({ version: 1 });
+
+    // 关房删行：closed 后状态不再可恢复
+    await service.updateRoomStatus("LIVE01", "closed");
+    const afterClose = await service.getRoomState("LIVE01");
+    expect(afterClose.room.status).toBe("closed");
+    expect(afterClose.state).toBeNull();
+
+    await expect(service.getRoomState("MISSIN")).rejects.toMatchObject({
+      statusCode: 404
+    } satisfies Partial<RoomError>);
+  });
+
+  it("closes orphan playing rooms whose live state stopped refreshing", async () => {
+    const rooms = new InMemoryRoomRepository();
+    const service = new RoomService(rooms);
+
+    await service.createRoom({ code: "ORPHA1" });
+    await service.updateRoomStatus("ORPHA1", "playing");
+    rooms.records[0] = { ...rooms.records[0]!, updatedAt: new Date(Date.now() - 60 * 60_000) };
+    rooms.liveStates.set("ORPHA1", { state: { version: 1 }, updatedAt: new Date(Date.now() - 60 * 60_000) });
+
+    // 活跃房：状态行刚刷新过
+    await service.createRoom({ code: "ALIVE1" });
+    await service.updateRoomStatus("ALIVE1", "playing");
+    rooms.records[1] = { ...rooms.records[1]!, updatedAt: new Date(Date.now() - 60 * 60_000) };
+    rooms.liveStates.set("ALIVE1", { state: { version: 1 }, updatedAt: new Date() });
+
+    const closed = await service.closeOrphanPlayingRooms(30 * 60_000);
+
+    expect(closed).toBe(1);
+    expect(rooms.records.find((room) => room.code === "ORPHA1")?.status).toBe("closed");
+    expect(rooms.liveStates.has("ORPHA1")).toBe(false);
+    expect(rooms.records.find((room) => room.code === "ALIVE1")?.status).toBe("playing");
   });
 });

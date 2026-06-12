@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import type { RoomLiveStateEnvelope } from "@ddz/protocol";
 import { GameActionError } from "./errors.js";
 import type {
   GameActionMutationRecord,
@@ -96,6 +97,7 @@ export class PrismaGameActionRepository implements GameActionRepository {
     actionFingerprint: string;
     roomEvents: readonly RoomEventInput[];
     roundActions: readonly RoundActionInput[];
+    state: RoomLiveStateEnvelope | null;
   }): Promise<GameActionMutationRecord> {
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -171,6 +173,21 @@ export class PrismaGameActionRepository implements GameActionRepository {
         },
         select: mutationSelect
       });
+
+      if (input.state) {
+        // dispose 竞态守卫：房间已 closed 时不再写恢复状态（关房流程已删行）
+        const room = await tx.room.findUnique({
+          where: { id: input.roomId },
+          select: { status: true }
+        });
+        if (room && room.status !== "closed") {
+          await tx.roomLiveState.upsert({
+            where: { roomId: input.roomId },
+            update: { state: input.state as unknown as Prisma.InputJsonValue },
+            create: { roomId: input.roomId, state: input.state as unknown as Prisma.InputJsonValue }
+          });
+        }
+      }
 
       return toMutationRecord(mutation);
       });

@@ -1,5 +1,5 @@
 import type { GameSnapshot, PlayerId } from "@ddz/domain";
-import type { GameActionType, RoomStatus } from "@ddz/protocol";
+import type { GameActionType, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import { randomUUID } from "node:crypto";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
@@ -19,12 +19,10 @@ export class RoomPersistence {
   constructor(
     private readonly roomCode: string,
     private readonly roomStatusClient: RoomStatusClient,
-    private readonly gameActionClient: GameActionClient
+    private readonly gameActionClient: GameActionClient,
+    /** 每次落库随动作携带的崩溃恢复信封；房间串行队列保证与 snapshot 同刻一致 */
+    private readonly dumpState: () => RoomLiveStateEnvelope
   ) {}
-
-  async requireJoinableRoom(): Promise<void> {
-    await this.roomStatusClient.requireJoinableRoom(this.roomCode);
-  }
 
   async recordMutation(input: {
     readonly actions: readonly PendingRoomAction[];
@@ -34,7 +32,8 @@ export class RoomPersistence {
       await this.gameActionClient.recordGameActions({
         roomCode: this.roomCode,
         mutationId: this.nextMutationId(),
-        actions: input.actions.map((action) => this.toRecordedAction(action, input.snapshot))
+        actions: input.actions.map((action) => this.toRecordedAction(action, input.snapshot)),
+        state: this.dumpState()
       });
       await this.syncStatusAfterSnapshot(input.snapshot);
     } catch (error) {

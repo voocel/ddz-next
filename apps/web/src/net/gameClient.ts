@@ -16,12 +16,23 @@ interface GameClientOptions {
 
 /** Colyseus 主动离开的正常关闭码 */
 const NORMAL_LEAVE_CODE = 1000;
+/** 同一玩家新连接踢掉旧会话（与 game-server DUPLICATE_SESSION_CLOSE_CODE 对应） */
+const DUPLICATE_SESSION_CLOSE_CODE = 4002;
+/** 房间内部故障关闭（failRoom disconnect(1011)，DB 已 closed） */
+const ROOM_FAILED_CLOSE_CODE = 1011;
+
+/** 该关闭码是否值得自动重连：被踢会与新会话互踢，故障房重试必败 */
+export function isRecoverableDropCode(code: number): boolean {
+  return code !== DUPLICATE_SESSION_CLOSE_CODE && code !== ROOM_FAILED_CLOSE_CODE;
+}
 
 export function createGameClient(options: GameClientOptions) {
   let room: Room | null = null;
   // 世代号：每次 connect/disconnect 自增，旧连接的异步回调据此失效，
   // 避免快速进出房间时旧连接覆盖新状态。
   let generation = 0;
+  // 快速开始只在首次入房时自动准备；断线重连回到牌局中再补发会被拒绝
+  let quickStartPending = options.quickStart === true;
 
   const disconnect = (): void => {
     generation += 1;
@@ -30,7 +41,8 @@ export function createGameClient(options: GameClientOptions) {
   };
 
   return {
-    async connect() {
+    /** 返回是否成功入房：断线自动重连需要失败信号决定是否继续重试 */
+    async connect(): Promise<boolean> {
       const gen = ++generation;
       try {
         if (!options.playerId.trim()) {
@@ -53,10 +65,13 @@ export function createGameClient(options: GameClientOptions) {
         if (gen !== generation) {
           // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接
           void joined.leave();
-          return;
+          return false;
         }
 
         room = joined;
+        // 关闭 SDK 内建的会话级重连：服务器崩溃后旧 roomId 已不存在，按旧会话重试必败；
+        // 关闭后异常断开会直接触发 onLeave(code)，由应用层 joinOrCreate 重连（同时覆盖服务端牌局恢复）
+        joined.reconnection.enabled = false;
         options.onStatus(`已进入房间 ${options.roomCode}`);
 
         joined.onMessage("event", (payload: unknown) => {
@@ -92,16 +107,19 @@ export function createGameClient(options: GameClientOptions) {
           options.onStatus(`房间错误 ${code}: ${message}`);
         });
 
-        if (options.quickStart === true) {
+        if (quickStartPending) {
+          quickStartPending = false;
           joined.send("command", {
             type: "ready"
           });
         }
+        return true;
       } catch (error) {
         if (gen !== generation) {
-          return;
+          return false;
         }
         options.onStatus(error instanceof Error ? error.message : "连接失败");
+        return false;
       }
     },
     disconnect,

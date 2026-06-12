@@ -4,7 +4,7 @@ import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@dd
 import { GameTable } from "@ddz/domain";
 import { clientCommandSchema } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
-import type { GameEvent } from "@ddz/protocol";
+import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
@@ -38,6 +38,14 @@ const SETTLEMENT_DISPLAY_MS = 5000;
 const MATCHED_ROOM_EMPTY_TIMEOUT_MS = 60_000;
 // 同一玩家新连接踢掉旧会话时使用的自定义关闭码
 const DUPLICATE_SESSION_CLOSE_CODE = 4002;
+
+/**
+ * 单进程内 roomCode → roomId 注册表。
+ * Colyseus 并发 joinOrCreate 的串行锁有 0.5s 超时逃逸：恢复路径含 API 往返，
+ * 超时后第二个请求会为同一 roomCode 再建实例（双实例脑裂），这里同步兜底拒绝。
+ * 多进程部署需换成共享存储 claim，本期单进程足够。
+ */
+const liveRoomsByCode = new Map<string, string>();
 
 export class DdzRoom extends Room {
   /** join 前 JWT 校验所需的配置，进程启动时注入。 */
@@ -76,21 +84,49 @@ export class DdzRoom extends Room {
     this.botMoveDelayMs = readBotMoveDelayMs(options.botMoveDelayMs);
     this.turnTimeoutMs = readTurnTimeoutMs(options.turnTimeoutMs);
     this.roomCode = readRoomCode(options);
-    this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient);
-    await this.persistence.requireJoinableRoom();
-    const matchBotCount = readMatchBotCount(options.matchBotCount);
-    const botCount =
-      matchBotCount ?? (readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount));
-    this.maxClients = 3 - botCount;
-    this.addBots(botCount);
-    if (matchBotCount !== null) {
-      // 撮合房由服务端预创建；若玩家始终未入场则自毁，避免空房常驻
-      this.clock.setTimeout(() => {
-        if (this.clients.length === 0) {
-          void this.disconnect();
-        }
-      }, MATCHED_ROOM_EMPTY_TIMEOUT_MS);
+
+    // 同步注册必须在首个 await 之前，并发建房才能被立即拒绝
+    if (liveRoomsByCode.has(this.roomCode)) {
+      throw new Error(`Room ${this.roomCode} is already live in this process.`);
     }
+    liveRoomsByCode.set(this.roomCode, this.roomId);
+
+    try {
+      await this.setupRoom(options);
+    } catch (error) {
+      // onCreate 抛错不会触发 onDispose，注册项需在此自清
+      this.releaseLiveRegistration();
+      throw error;
+    }
+  }
+
+  private async setupRoom(options: RoomCreateOptions): Promise<void> {
+    this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient, () =>
+      this.dumpLiveState()
+    );
+
+    // 一次调用同时拿到房间状态与恢复信封：有信封 ⇒ 旧进程崩溃残留，走恢复
+    const { room, state } = await options.roomStatusClient.getRoomState(this.roomCode);
+    if (room.status === "closed") {
+      throw new Error(`Room ${this.roomCode} is closed.`);
+    }
+
+    if (state) {
+      this.restoreFromState(state);
+    } else {
+      if (room.status !== "open") {
+        throw new Error(`Room ${this.roomCode} is ${room.status} with no recoverable state.`);
+      }
+      const matchBotCount = readMatchBotCount(options.matchBotCount);
+      const botCount =
+        matchBotCount ?? (readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount));
+      this.maxClients = 3 - botCount;
+      this.addBots(botCount);
+      if (matchBotCount !== null) {
+        this.scheduleEmptyRoomSelfDestruct();
+      }
+    }
+
     this.turnScheduler = new RoomTurnScheduler({
       botIds: this.botIds,
       botMoveDelayMs: this.botMoveDelayMs,
@@ -119,6 +155,11 @@ export class DdzRoom extends Room {
     this.onMessage("command", async (client, payload) => {
       await this.tasks.enqueue(() => this.handleCommand(client, payload));
     });
+
+    if (state) {
+      // scheduler 就绪后才能恢复牌局推进
+      this.resumeRestoredGame();
+    }
   }
 
   async onJoin(client: Client, options: JoinOptions): Promise<void> {
@@ -130,6 +171,7 @@ export class DdzRoom extends Room {
   }
 
   async onDispose(): Promise<void> {
+    this.releaseLiveRegistration();
     this.turnScheduler?.cancelAll();
     // failRoom 已上报 closed；onCreate 失败时 persistence 可能尚未初始化
     if (this.failed || !this.persistence) {
@@ -141,6 +183,72 @@ export class DdzRoom extends Room {
     } catch (error) {
       console.error(`[DdzRoom ${this.roomCode}] Failed to close room on dispose.`, error);
     }
+  }
+
+  private releaseLiveRegistration(): void {
+    if (this.roomCode && liveRoomsByCode.get(this.roomCode) === this.roomId) {
+      liveRoomsByCode.delete(this.roomCode);
+    }
+  }
+
+  /** 每次落库随动作携带的崩溃恢复信封 */
+  private dumpLiveState(): RoomLiveStateEnvelope {
+    return {
+      version: 1,
+      table: this.table.dump(),
+      nicknames: Object.fromEntries(this.nicknames)
+    };
+  }
+
+  /** 崩溃恢复：还原牌桌、bot 名单、昵称表与座位容量；真人连接需等待重连 */
+  private restoreFromState(state: RoomLiveStateEnvelope): void {
+    this.table.restore(state.table);
+    for (const [playerId, nickname] of Object.entries(state.nicknames)) {
+      this.nicknames.set(playerId, nickname);
+    }
+    for (const player of state.table.players) {
+      if (player.kind === "bot") {
+        // 必须 push 进现有数组：turnScheduler 持有的是数组引用
+        this.botIds.push(player.id);
+      } else {
+        this.table.setConnected(player.id, false);
+      }
+    }
+    this.maxClients = 3 - this.botIds.length;
+    // 恢复房从未有人 join 过，autoDispose 永不触发；无人回来则自毁交清扫收尾
+    this.scheduleEmptyRoomSelfDestruct();
+  }
+
+  /** 按恢复出的相位接续牌局推进 */
+  private resumeRestoredGame(): void {
+    const snapshot = this.table.snapshot();
+    switch (snapshot.phase) {
+      case "bidding":
+      case "robbing":
+      case "playing":
+        // 回合计时重置为满额；当前玩家若是 bot 或始终未归队，由 bot 调度/超时代打推进
+        this.turnScheduler.scheduleTurnTimer(snapshot);
+        this.turnScheduler.scheduleBotTurn(snapshot);
+        return;
+      case "settled":
+        // 结算与 state 同事务落库，已入账；停留结算画面后照常开下一局
+        this.startNextRound();
+        return;
+      case "waiting":
+      case "ready":
+        // 正常流程里 bot 由 addBots/readyBots 补 ready，恢复后同样补齐
+        void this.tasks.enqueue(() => this.readyBots());
+        return;
+    }
+  }
+
+  /** 服务端创建且无人入场的房不会触发 autoDispose，定时自毁兜底 */
+  private scheduleEmptyRoomSelfDestruct(): void {
+    this.clock.setTimeout(() => {
+      if (this.clients.length === 0) {
+        void this.disconnect();
+      }
+    }, MATCHED_ROOM_EMPTY_TIMEOUT_MS);
   }
 
   private async handleJoin(client: Client, options: JoinOptions): Promise<void> {

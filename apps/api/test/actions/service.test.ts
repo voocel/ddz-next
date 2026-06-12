@@ -274,7 +274,61 @@ describe("GameActionService", () => {
     expect(repository.actions).toHaveLength(0);
     expect(repository.settlements).toHaveLength(0);
   });
+
+  it("stores the live state envelope alongside actions and stays idempotent on retry", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.rooms.set("ROOM09", "room-9");
+    const service = new GameActionService(repository);
+
+    const request = {
+      roomCode: "ROOM09",
+      mutationId: mutationId(9),
+      actions: [
+        {
+          playerId: "user-1",
+          playerKind: "human" as const,
+          type: "player_joined" as const,
+          payload: { seat: 0 }
+        }
+      ],
+      state: liveStateEnvelope()
+    };
+
+    await service.record(request);
+    expect(repository.liveStates.get("room-9")).toEqual(request.state);
+    expect(repository.mutations.size).toBe(1);
+
+    // 幂等重试：命中已有 mutation 提前返回，不重复落任何记录
+    await service.record(request);
+    expect(repository.mutations.size).toBe(1);
+    expect(repository.roomEvents).toHaveLength(1);
+  });
 });
+
+function liveStateEnvelope() {
+  return {
+    version: 1 as const,
+    table: {
+      phase: "waiting" as const,
+      players: [],
+      currentPlayerId: null,
+      landlordId: null,
+      bidCandidateId: null,
+      landlordCards: [],
+      bottomCards: [],
+      lastPlay: null,
+      settlement: null,
+      passCount: 0,
+      bidAttempts: 0,
+      robQueue: [],
+      robIndex: 0,
+      robCount: 0,
+      bombCount: 0,
+      playCounts: {}
+    },
+    nicknames: { "user-1": "Alice" }
+  };
+}
 
 function mutationId(index: number): string {
   return `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`;

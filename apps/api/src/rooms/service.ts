@@ -25,11 +25,14 @@ export interface CreateRoomInput {
 export interface RoomRepository {
   listOpenRooms(limit: number): Promise<readonly RoomRecord[]>;
   findRoomByCode(code: string): Promise<RoomRecord | null>;
-  findOpenRoomByCode(code: string): Promise<RoomRecord | null>;
   createRoom(input: CreateRoomInput): Promise<RoomRecord>;
   updateRoomStatusByCode(code: string, status: RoomStatus): Promise<RoomRecord | null>;
   /** 关闭 updatedAt 早于 cutoff 且从未被使用过（无事件无对局）的 open 房，返回关闭数量 */
   closeStaleOpenRooms(cutoff: Date): Promise<number>;
+  /** 读取崩溃恢复状态（信封原样返回，无行则 null） */
+  findLiveStateByCode(code: string): Promise<unknown | null>;
+  /** 关闭恢复状态长期未刷新（game-server 宕机后无人回来）的 playing 孤儿房并删状态行 */
+  closeOrphanPlayingRooms(cutoff: Date): Promise<number>;
 }
 
 export class RoomService {
@@ -64,14 +67,22 @@ export class RoomService {
     return this.rooms.closeStaleOpenRooms(new Date(Date.now() - maxIdleMs));
   }
 
-  async requireJoinableRoom(code: string): Promise<RoomResponse> {
-    const room = await this.rooms.findOpenRoomByCode(normalizeRoomCode(code));
+  /** 清扫崩溃后无人回来恢复的 playing 孤儿房 */
+  async closeOrphanPlayingRooms(maxIdleMs: number): Promise<number> {
+    return this.rooms.closeOrphanPlayingRooms(new Date(Date.now() - maxIdleMs));
+  }
+
+  /** 崩溃恢复查询：房间 + 完整牌局状态（手牌敏感，仅 internal 通道使用） */
+  async getRoomState(code: string): Promise<{ room: RoomDto; state: unknown | null }> {
+    const room = await this.rooms.findRoomByCode(normalizeRoomCode(code));
     if (!room) {
-      throw new RoomError("Room is not open for joining.", 404);
+      throw new RoomError("Room not found.", 404);
     }
 
+    const state = room.status === "closed" ? null : await this.rooms.findLiveStateByCode(room.code);
     return {
-      room: toRoomDto(room)
+      room: toRoomDto(room),
+      state
     };
   }
 

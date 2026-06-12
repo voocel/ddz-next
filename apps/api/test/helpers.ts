@@ -1,4 +1,4 @@
-import type { RoomActionType, RoundActionType } from "@ddz/protocol";
+import type { RoomActionType, RoomLiveStateEnvelope, RoundActionType } from "@ddz/protocol";
 import type { AuthUserRecord, CreateUserInput, UserRepository } from "../src/auth/service";
 import type {
   GameActionMutationRecord,
@@ -40,6 +40,8 @@ export class InMemoryRoomRepository implements RoomRepository {
   readonly records: RoomRecord[] = [];
   /** 标记"已被使用"（有事件/对局）的房间码，清扫时跳过 */
   readonly usedCodes = new Set<string>();
+  /** 崩溃恢复状态：code → { state, updatedAt } */
+  readonly liveStates = new Map<string, { state: unknown; updatedAt: Date }>();
 
   async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.records
@@ -50,10 +52,6 @@ export class InMemoryRoomRepository implements RoomRepository {
 
   async findRoomByCode(code: string): Promise<RoomRecord | null> {
     return this.records.find((room) => room.code === code) ?? null;
-  }
-
-  async findOpenRoomByCode(code: string): Promise<RoomRecord | null> {
-    return this.records.find((room) => room.code === code && room.status === "open") ?? null;
   }
 
   async createRoom(input: CreateRoomInput): Promise<RoomRecord> {
@@ -82,6 +80,9 @@ export class InMemoryRoomRepository implements RoomRepository {
       updatedAt: new Date(current.updatedAt.getTime() + 1000)
     };
     this.records[index] = updated;
+    if (status === "closed") {
+      this.liveStates.delete(code);
+    }
     return updated;
   }
   async closeStaleOpenRooms(cutoff: Date): Promise<number> {
@@ -98,6 +99,31 @@ export class InMemoryRoomRepository implements RoomRepository {
     });
     return count;
   }
+
+  async findLiveStateByCode(code: string): Promise<unknown | null> {
+    return this.liveStates.get(code)?.state ?? null;
+  }
+
+  async closeOrphanPlayingRooms(cutoff: Date): Promise<number> {
+    let count = 0;
+    this.records.forEach((room, index) => {
+      if (room.status !== "playing" || room.updatedAt.getTime() >= cutoff.getTime()) {
+        return;
+      }
+      const liveState = this.liveStates.get(room.code);
+      if (liveState && liveState.updatedAt.getTime() >= cutoff.getTime()) {
+        return;
+      }
+      this.records[index] = {
+        ...room,
+        status: "closed",
+        updatedAt: new Date()
+      };
+      this.liveStates.delete(room.code);
+      count += 1;
+    });
+    return count;
+  }
 }
 
 export class InMemoryGameActionRepository implements GameActionRepository {
@@ -106,6 +132,8 @@ export class InMemoryGameActionRepository implements GameActionRepository {
   readonly roomEvents: RoomEventRecord[] = [];
   readonly actions: GameActionRecord[] = [];
   readonly mutations = new Map<string, GameActionMutationRecord>();
+  /** roomId → 最新崩溃恢复状态（与真实仓库的 RoomLiveState upsert 对应） */
+  readonly liveStates = new Map<string, unknown>();
   readonly settlements: Array<{
     roundId: string;
     landlordId: string;
@@ -141,10 +169,15 @@ export class InMemoryGameActionRepository implements GameActionRepository {
     actionFingerprint: string;
     roomEvents: readonly RoomEventInput[];
     roundActions: readonly RoundActionInput[];
+    state: RoomLiveStateEnvelope | null;
   }): Promise<GameActionMutationRecord> {
     const existingMutation = await this.findMutation(input.roomId, input.mutationId);
     if (existingMutation) {
       return existingMutation;
+    }
+
+    if (input.state) {
+      this.liveStates.set(input.roomId, input.state);
     }
 
     const roomEvents = input.roomEvents.map((event) => this.createRoomEvent(input.roomId, event));

@@ -1,5 +1,16 @@
 import { COMBINATION_KINDS, GAME_PHASES, RANKS, SUITS } from "@ddz/domain";
-import type { Card, Combination, GamePhase, GameSnapshot, PublicPlay, Rank, Settlement, Suit } from "@ddz/domain";
+import type {
+  Card,
+  Combination,
+  GamePhase,
+  GameSnapshot,
+  GameTablePlayerState,
+  GameTableState,
+  PublicPlay,
+  Rank,
+  Settlement,
+  Suit
+} from "@ddz/domain";
 import { z } from "zod";
 
 // 与 @ddz/domain 共享的 schema 一律从 domain 常量派生并用 satisfies 锁定输出类型，
@@ -295,10 +306,60 @@ export const recordGameActionSchema = z.object({
   payload: z.record(z.string(), z.unknown())
 });
 
+export const gameTablePlayerStateSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["human", "bot"]),
+  seat: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+  ready: z.boolean(),
+  connected: z.boolean(),
+  hand: z.array(cardIdSchema).max(20),
+  score: z.number().int()
+}) satisfies z.ZodType<GameTablePlayerState>;
+
+// 崩溃恢复用的完整牌桌状态（含手牌）。安全红线：只经 internal 通道传输，绝不并入公开响应/action payload。
+export const gameTableStateSchema = z.object({
+  phase: gamePhaseSchema,
+  players: z.array(gameTablePlayerStateSchema).max(3),
+  currentPlayerId: z.string().min(1).nullable(),
+  landlordId: z.string().min(1).nullable(),
+  bidCandidateId: z.string().min(1).nullable(),
+  landlordCards: z.array(cardIdSchema).max(3),
+  bottomCards: z.array(cardIdSchema).max(3),
+  lastPlay: z
+    .object({
+      playerId: z.string().min(1),
+      cards: z.array(cardIdSchema).min(1).max(20)
+    })
+    .nullable(),
+  settlement: settlementSchema.nullable(),
+  passCount: z.number().int().min(0).max(2),
+  bidAttempts: z.number().int().min(0),
+  robQueue: z.array(z.string().min(1)).max(2),
+  robIndex: z.number().int().min(0),
+  robCount: z.number().int().min(0),
+  bombCount: z.number().int().min(0),
+  playCounts: z.record(z.string(), z.number().int().min(0))
+}) satisfies z.ZodType<GameTableState>;
+
+/** 牌局恢复信封：版本号留迁移余地；nicknames 是 DdzRoom 从 JWT 收集的展示昵称 */
+export interface RoomLiveStateEnvelope {
+  readonly version: 1;
+  readonly table: GameTableState;
+  readonly nicknames: Readonly<Record<string, string>>;
+}
+
+export const roomLiveStateEnvelopeSchema = z.object({
+  version: z.literal(1),
+  table: gameTableStateSchema,
+  nicknames: z.record(z.string(), z.string().min(1))
+}) satisfies z.ZodType<RoomLiveStateEnvelope>;
+
 export const recordGameActionRequestSchema = z.object({
   roomCode: z.string().min(4).max(12).regex(/^[A-Z0-9]+$/),
   mutationId: z.string().uuid(),
-  actions: z.array(recordGameActionSchema).min(1)
+  actions: z.array(recordGameActionSchema).min(1),
+  // 同事务 upsert 到 RoomLiveState，供崩溃恢复
+  state: roomLiveStateEnvelopeSchema.optional()
 });
 
 export const roundSettledPayloadSchema = z.object({
@@ -313,8 +374,9 @@ export const roomResponseSchema = z.object({
   room: roomSchema
 });
 
-export const internalRoomJoinResponseSchema = z.object({
-  room: roomSchema
+export const internalRoomStateResponseSchema = z.object({
+  room: roomSchema,
+  state: roomLiveStateEnvelopeSchema.nullable()
 });
 
 // 匹配通道服务端推送：排队状态 / 撮合成功 / 撮合失败
@@ -405,7 +467,7 @@ export type RecordGameActionRequest = z.infer<typeof recordGameActionRequestSche
 export type RoomDto = z.infer<typeof roomSchema>;
 export type RoomListResponse = z.infer<typeof roomListResponseSchema>;
 export type RoomResponse = z.infer<typeof roomResponseSchema>;
-export type InternalRoomJoinResponse = z.infer<typeof internalRoomJoinResponseSchema>;
+export type InternalRoomStateResponse = z.infer<typeof internalRoomStateResponseSchema>;
 export type MatchmakingEvent = z.infer<typeof matchmakingEventSchema>;
 export type RoomStatus = z.infer<typeof roomStatusSchema>;
 export type SettlementDto = z.infer<typeof settlementSchema>;

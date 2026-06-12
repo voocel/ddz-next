@@ -14,7 +14,7 @@ describe("HttpRoomStatusClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("requires rooms to exist and be open before realtime room creation", async () => {
+  it("reads room state for fresh rooms and crash recovery", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse(200, {
         room: {
@@ -23,12 +23,15 @@ describe("HttpRoomStatusClient", () => {
           status: "open",
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z"
-        }
+        },
+        state: null
       })
     );
 
-    await expect(new HttpRoomStatusClient(config).requireJoinableRoom("ROOM01")).resolves.toBeUndefined();
-    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/ROOM01/joinable", config.endpoint), {
+    const result = await new HttpRoomStatusClient(config).getRoomState("ROOM01");
+    expect(result.room.status).toBe("open");
+    expect(result.state).toBeNull();
+    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/ROOM01/state", config.endpoint), {
       method: "GET",
       headers: {
         "x-ddz-internal-token": "internal-test-token"
@@ -54,16 +57,16 @@ describe("HttpRoomStatusClient", () => {
     });
   });
 
-  it("rejects rooms that the API does not expose as joinable", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(404, { message: "Room is not open for joining." }));
+  it("surfaces API errors when reading room state", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(404, { message: "Room not found." }));
 
-    await expect(new HttpRoomStatusClient(config).requireJoinableRoom("ROOM01")).rejects.toThrow(
-      "Room ROOM01 is not joinable: 404 Room is not open for joining."
+    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).rejects.toThrow(
+      "Failed to read state for room ROOM01: 404 Room not found."
     );
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("retries joinable checks after retryable API failures", async () => {
+  it("retries room state reads after retryable API failures", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(503, { message: "busy" }))
@@ -75,11 +78,12 @@ describe("HttpRoomStatusClient", () => {
             status: "open",
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z"
-          }
+          },
+          state: null
         })
       );
 
-    await expect(new HttpRoomStatusClient(config).requireJoinableRoom("ROOM01")).resolves.toBeUndefined();
+    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).resolves.toMatchObject({ state: null });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -93,7 +97,7 @@ describe("HttpRoomStatusClient", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects malformed joinable responses", async () => {
+  it("rejects malformed room state responses", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse(200, {
         room: {
@@ -106,8 +110,8 @@ describe("HttpRoomStatusClient", () => {
       })
     );
 
-    await expect(new HttpRoomStatusClient(config).requireJoinableRoom("ROOM01")).rejects.toThrow(
-      "Room ROOM01 joinability response does not match the requested open room."
+    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).rejects.toThrow(
+      "Invalid room state response for ROOM01"
     );
   });
 });

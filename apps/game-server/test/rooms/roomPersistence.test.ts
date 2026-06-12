@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GameSnapshot } from "@ddz/domain";
+import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import type { GameActionClient } from "../../src/api/gameActionClient";
 import type { RoomStatusClient } from "../../src/api/roomStatusClient";
 import { RoomPersistence, RoomPersistenceError } from "../../src/rooms/roomPersistence";
@@ -8,7 +9,7 @@ describe("RoomPersistence", () => {
   it("records actions with snapshots and syncs changed room status once", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient);
+    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
     const playingSnapshot = createSnapshot("playing");
 
     await persistence.recordMutation({
@@ -52,13 +53,15 @@ describe("RoomPersistence", () => {
       playerId: "bot:room:1",
       playerKind: "bot"
     });
+    // 每个 mutation 都随动作携带崩溃恢复信封
+    expect(gameActionClient.records.every((record) => record.state?.version === 1)).toBe(true);
     expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "ROOM01", status: "playing" }]);
   });
 
   it("uses explicit player kind overrides for players already removed from snapshots", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient);
+    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await persistence.recordMutation({
       actions: [
@@ -86,7 +89,7 @@ describe("RoomPersistence", () => {
   it("closes and records failed rooms", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient);
+    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await persistence.closeFailedRoom("persist failed", createSnapshot("playing"));
 
@@ -116,7 +119,7 @@ describe("RoomPersistence", () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
     gameActionClient.failRecords = true;
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient);
+    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await expect(
       persistence.recordMutation({
@@ -134,16 +137,45 @@ describe("RoomPersistence", () => {
 });
 
 class FakeRoomStatusClient implements RoomStatusClient {
-  readonly joinableRooms: string[] = [];
   readonly statusUpdates: { readonly roomCode: string; readonly status: string }[] = [];
 
-  async requireJoinableRoom(roomCode: string): Promise<void> {
-    this.joinableRooms.push(roomCode);
+  async createRoom(): Promise<RoomDto> {
+    throw new Error("Not used in these tests.");
   }
 
-  async updateRoomStatus(roomCode: string, status: string): Promise<void> {
+  async getRoomState(roomCode: string): Promise<InternalRoomStateResponse> {
+    throw new Error(`Not used in these tests: ${roomCode}`);
+  }
+
+  async updateRoomStatus(roomCode: string, status: RoomStatus): Promise<void> {
     this.statusUpdates.push({ roomCode, status });
   }
+}
+
+/** 与 DdzRoom.dumpLiveState 同构的最小信封 */
+function liveStateEnvelope(): RoomLiveStateEnvelope {
+  return {
+    version: 1,
+    table: {
+      phase: "waiting",
+      players: [],
+      currentPlayerId: null,
+      landlordId: null,
+      bidCandidateId: null,
+      landlordCards: [],
+      bottomCards: [],
+      lastPlay: null,
+      settlement: null,
+      passCount: 0,
+      bidAttempts: 0,
+      robQueue: [],
+      robIndex: 0,
+      robCount: 0,
+      bombCount: 0,
+      playCounts: {}
+    },
+    nicknames: {}
+  };
 }
 
 class FakeGameActionClient implements GameActionClient {

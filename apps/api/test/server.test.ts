@@ -174,12 +174,6 @@ describe("API auth routes", () => {
       }
     });
 
-    const anonymousJoinable = await app.inject({
-      method: "GET",
-      url: "/internal/rooms/ROOM02/joinable"
-    });
-    expect(anonymousJoinable.statusCode).toBe(401);
-
     const register = await app.inject({
       method: "POST",
       url: "/auth/register",
@@ -200,16 +194,6 @@ describe("API auth routes", () => {
         code: "ROOM02"
       }
     });
-
-    const joinable = await app.inject({
-      method: "GET",
-      url: "/internal/rooms/ROOM02/joinable",
-      headers: {
-        "x-ddz-internal-token": "internal-test-token"
-      }
-    });
-    expect(joinable.statusCode).toBe(200);
-    expect(joinable.json().room.code).toBe("ROOM02");
 
     const rejected = await app.inject({
       method: "PATCH",
@@ -233,14 +217,23 @@ describe("API auth routes", () => {
     expect(updated.statusCode).toBe(200);
     expect(updated.json().room.status).toBe("playing");
 
-    const noLongerJoinable = await app.inject({
+    // 崩溃恢复查询：无 token 拒绝；有 token 返回房间与状态（无状态行时为 null）
+    const anonymousState = await app.inject({
       method: "GET",
-      url: "/internal/rooms/ROOM02/joinable",
+      url: "/internal/rooms/ROOM02/state"
+    });
+    expect(anonymousState.statusCode).toBe(401);
+
+    const state = await app.inject({
+      method: "GET",
+      url: "/internal/rooms/ROOM02/state",
       headers: {
         "x-ddz-internal-token": "internal-test-token"
       }
     });
-    expect(noLongerJoinable.statusCode).toBe(404);
+    expect(state.statusCode).toBe(200);
+    expect(state.json().room.code).toBe("ROOM02");
+    expect(state.json().state).toBeNull();
 
     await app.close();
   });

@@ -124,7 +124,8 @@ export function buildServer(dependencies: ServerDependencies) {
     return dependencies.roomService.createRoom();
   });
 
-  app.get("/internal/rooms/:code/joinable", async (request) => {
+  // 崩溃恢复查询：state 含手牌，绝不能挪到公开路由
+  app.get("/internal/rooms/:code/state", async (request) => {
     requireInternal(request.headers, dependencies.internalConfig.token);
 
     const code = (request.params as { code?: string }).code;
@@ -132,7 +133,7 @@ export function buildServer(dependencies: ServerDependencies) {
       throw new ApiError("Room code is required.", 400);
     }
 
-    return dependencies.roomService.requireJoinableRoom(code);
+    return dependencies.roomService.getRoomState(code);
   });
 
   app.get("/me/rounds", async (request) => {

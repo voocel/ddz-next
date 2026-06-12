@@ -1,4 +1,11 @@
-import type { GameActionType, RecordGameAction, RecordGameActionRequest, RoomActionType, RoundActionType } from "@ddz/protocol";
+import type {
+  GameActionType,
+  RecordGameAction,
+  RecordGameActionRequest,
+  RoomActionType,
+  RoomLiveStateEnvelope,
+  RoundActionType
+} from "@ddz/protocol";
 import { roundSettledPayloadSchema } from "@ddz/protocol";
 import { createActionFingerprint } from "./actionFingerprint.js";
 import { GameActionError } from "./errors.js";
@@ -60,6 +67,8 @@ export interface GameActionRepository {
     actionFingerprint: string;
     roomEvents: readonly RoomEventInput[];
     roundActions: readonly RoundActionInput[];
+    /** 崩溃恢复状态，与动作同事务 upsert；幂等命中时无需补写（首次提交已含） */
+    state: RoomLiveStateEnvelope | null;
   }): Promise<GameActionMutationRecord>;
 }
 
@@ -87,7 +96,8 @@ export class GameActionService {
       mutationId: input.mutationId,
       actionFingerprint,
       roomEvents: planned.roomEvents,
-      roundActions: planned.roundActions
+      roundActions: planned.roundActions,
+      state: input.state ?? null
     });
 
     return toRecordGameActionResult(result);

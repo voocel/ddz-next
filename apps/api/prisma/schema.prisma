@@ -27,6 +27,16 @@ model Room {
   rounds    Round[]
   events    RoomEvent[]
   mutations GameActionMutation[]
+  liveState RoomLiveState?
+}
+
+// 进行中牌局的完整状态（含手牌），仅供 game-server 崩溃恢复；
+// 与 game actions 同事务 upsert，房间关闭时删除——状态行存在 ⇔ 崩溃可恢复
+model RoomLiveState {
+  roomId    String   @id
+  room      Room     @relation(fields: [roomId], references: [id])
+  state     Json
+  updatedAt DateTime @updatedAt
 }
 
 model RoomEvent {

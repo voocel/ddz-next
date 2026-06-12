@@ -266,3 +266,130 @@ describe("GameTable multipliers and multi-round", () => {
     expect(() => table.resetForNextRound()).toThrow("Cannot reset during bidding phase.");
   });
 });
+
+describe("GameTable dump/restore", () => {
+  function restoreCopy(table: GameTable): GameTable {
+    const copy = new GameTable();
+    copy.restore(table.dump());
+    return copy;
+  }
+
+  /** 地主出单张、农民双过的确定性打法，把当前局面打到结算。 */
+  function sweepToSettlement(table: GameTable): void {
+    while (table.snapshot().phase === "playing") {
+      const snapshot = table.snapshot();
+      const current = snapshot.currentPlayerId!;
+      if (current === snapshot.landlordId) {
+        table.playCards(current, [table.getHand(current)[0]!.id]);
+      } else {
+        table.pass(current);
+      }
+    }
+  }
+
+  it("restores a mid-bidding table including redeal attempts", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", false);
+
+    const restored = restoreCopy(table);
+    expect(restored.dump()).toEqual(table.dump());
+
+    // bidAttempts 已恢复为 1，再两个不叫即触发重发
+    restored.bidLandlord("p1", false);
+    const result = restored.bidLandlord("p2", false);
+    expect(result.redealt).toBe(true);
+    expect(restored.snapshot().phase).toBe("bidding");
+  });
+
+  it("restores a mid-robbing table and finalizes the landlord correctly", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", true);
+
+    const restored = restoreCopy(table);
+    const result = restored.robLandlord("p2", false);
+
+    expect(result.decided).toBe(true);
+    expect(result.landlordId).toBe("p1");
+    const snapshot = restored.snapshot();
+    expect(snapshot.phase).toBe("playing");
+    // 抢一次 ×2，倍数从恢复的 robCount 延续
+    expect(snapshot.multiplier).toBe(2);
+    expect(restored.getHand("p1")).toHaveLength(20);
+  });
+
+  it("restores a mid-playing table and settles identically to the uninterrupted game", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", true);
+    // 打两手后中断
+    table.playCards("p2", [table.getHand("p2")[0]!.id]);
+    table.pass("p0");
+    table.pass("p1");
+    table.playCards("p2", [table.getHand("p2")[0]!.id]);
+
+    const restored = restoreCopy(table);
+    expect(restored.dump()).toEqual(table.dump());
+
+    sweepToSettlement(table);
+    sweepToSettlement(restored);
+
+    // 春天与炸弹/抢地主倍数依赖 playCounts/robCount/bombCount，恢复后结算必须一致
+    expect(restored.snapshot().settlement).toEqual(table.snapshot().settlement);
+    expect(restored.snapshot().players).toEqual(table.snapshot().players);
+  });
+
+  it("restores a settled table and continues into the next round with scores kept", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", false);
+    sweepToSettlement(table);
+
+    const restored = restoreCopy(table);
+    expect(restored.snapshot().settlement).toEqual(table.snapshot().settlement);
+
+    const totals = table.snapshot().players.map((player) => player.score);
+    const snapshot = restored.resetForNextRound();
+    expect(snapshot.phase).toBe("ready");
+    expect(snapshot.players.map((player) => player.score)).toEqual(totals);
+  });
+
+  it("rejects restoring into a table that is already in use", () => {
+    const source = readyThreePlayers();
+    const used = new GameTable();
+    used.addPlayer("someone");
+    expect(() => used.restore(source.dump())).toThrow("fresh table");
+  });
+
+  it("rejects corrupted states", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", false);
+    table.robLandlord("p2", false);
+    const state = table.dump();
+
+    // 重复牌：把 p1 的第一张改成 p0 的第一张
+    const duplicated = {
+      ...state,
+      players: state.players.map((player, index) =>
+        index === 1 ? { ...player, hand: [state.players[0]!.hand[0]!, ...player.hand.slice(1)] } : player
+      )
+    };
+    expect(() => new GameTable().restore(duplicated)).toThrow("duplicate cards");
+
+    // 座位冲突
+    const seatClash = {
+      ...state,
+      players: state.players.map((player, index) => (index === 1 ? { ...player, seat: 0 as const } : player))
+    };
+    expect(() => new GameTable().restore(seatClash)).toThrow("seats");
+
+    // 相位矛盾：playing 却没有地主
+    expect(() => new GameTable().restore({ ...state, landlordId: null })).toThrow("inconsistent playing state");
+
+    // 当前玩家不在座
+    expect(() => new GameTable().restore({ ...state, currentPlayerId: "ghost" })).toThrow("not seated");
+  });
+});

@@ -1,9 +1,16 @@
-import { internalRoomJoinResponseSchema, roomResponseSchema, type RoomDto, type RoomStatus } from "@ddz/protocol";
+import {
+  internalRoomStateResponseSchema,
+  roomResponseSchema,
+  type InternalRoomStateResponse,
+  type RoomDto,
+  type RoomStatus
+} from "@ddz/protocol";
 import type { ApiSyncConfig } from "./config.js";
 
 export interface RoomStatusClient {
   createRoom(): Promise<RoomDto>;
-  requireJoinableRoom(roomCode: string): Promise<void>;
+  /** 崩溃恢复查询：房间当前状态 + 最近一次落库的完整牌局状态（无则 null） */
+  getRoomState(roomCode: string): Promise<InternalRoomStateResponse>;
   updateRoomStatus(roomCode: string, status: RoomStatus): Promise<void>;
 }
 
@@ -33,8 +40,8 @@ export class HttpRoomStatusClient implements RoomStatusClient {
     return parsed.data.room;
   }
 
-  async requireJoinableRoom(roomCode: string): Promise<void> {
-    const response = await this.fetchWithRetry(new URL(`/internal/rooms/${roomCode}/joinable`, this.config.endpoint), {
+  async getRoomState(roomCode: string): Promise<InternalRoomStateResponse> {
+    const response = await this.fetchWithRetry(new URL(`/internal/rooms/${roomCode}/state`, this.config.endpoint), {
       method: "GET",
       headers: {
         "x-ddz-internal-token": this.config.internalToken
@@ -43,17 +50,15 @@ export class HttpRoomStatusClient implements RoomStatusClient {
 
     const body = await readJsonOrText(response);
     if (!response.ok) {
-      throw new Error(`Room ${roomCode} is not joinable: ${response.status} ${formatResponseBody(body)}`);
+      throw new Error(`Failed to read state for room ${roomCode}: ${response.status} ${formatResponseBody(body)}`);
     }
 
-    const parsed = internalRoomJoinResponseSchema.safeParse(body);
+    const parsed = internalRoomStateResponseSchema.safeParse(body);
     if (!parsed.success) {
-      throw new Error(`Invalid joinable room response for ${roomCode}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+      throw new Error(`Invalid room state response for ${roomCode}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
     }
 
-    if (parsed.data.room.code !== roomCode || parsed.data.room.status !== "open") {
-      throw new Error(`Room ${roomCode} joinability response does not match the requested open room.`);
-    }
+    return parsed.data;
   }
 
   async updateRoomStatus(roomCode: string, status: RoomStatus): Promise<void> {
