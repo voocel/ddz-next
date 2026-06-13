@@ -24,10 +24,11 @@ export function createTableGame(parent: HTMLElement, options: TableGameOptions) 
     height,
     parent,
     backgroundColor: pixelTheme ? "#3f7d2c" : "#4e9e2f",
-    // 像素主题用最近邻缩放保持像素块锐利
-    pixelArt: pixelTheme,
-    antialias: !pixelTheme,
-    antialiasGL: !pixelTheme,
+    // 牌面/文字统一抗锯齿渲染，避免相机非整数缩放下最近邻采样发虚；
+    // 像素主题的辨识度由素材本身（背景/牌背/按钮）承载，高分辨率素材线性缩小反而更干净
+    pixelArt: false,
+    antialias: true,
+    antialiasGL: true,
     roundPixels: true,
     scale: {
       mode: Phaser.Scale.NONE,

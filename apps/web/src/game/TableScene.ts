@@ -106,15 +106,17 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   preload(): void {
     const asset = (file: string) => themeAsset(this.options.theme, file);
+    // 牌面统一用一套清晰素材，不随主题切换；仅牌背随主题变化
+    const faceAsset = (file: string) => themeAsset("cartoon", file);
     this.load.image("table-bg", asset("bg_table.jpg"));
     this.load.image("card-back", asset("card_back.png"));
     this.load.image("coin", "/assets/images/coin.png");
-    this.load.image("suit-hearts", asset("suit_heart.png"));
-    this.load.image("suit-diamonds", asset("suit_diamond.png"));
-    this.load.image("suit-spades", asset("suit_spade.png"));
-    this.load.image("suit-clubs", asset("suit_club.png"));
-    this.load.image("joker-big", asset("joker_big.png"));
-    this.load.image("joker-small", asset("joker_small.png"));
+    this.load.image("suit-hearts", faceAsset("suit_heart.png"));
+    this.load.image("suit-diamonds", faceAsset("suit_diamond.png"));
+    this.load.image("suit-spades", faceAsset("suit_spade.png"));
+    this.load.image("suit-clubs", faceAsset("suit_club.png"));
+    this.load.image("joker-big", faceAsset("joker_big.png"));
+    this.load.image("joker-small", faceAsset("joker_small.png"));
     this.load.image("ribbon-title", asset("ribbon_title.png"));
 
     this.load.audio("sound-click", "/assets/audio/click.mp3");
@@ -136,7 +138,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
 
     this.feedbackText = this.add
-      .text(640, 466, "", {
+      .text(640, 408, "", {
         ...TEXT_STYLE,
         fontSize: "15px",
         backgroundColor: "rgba(74, 42, 16, 0.78)",
@@ -416,6 +418,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
     const cardId = this.findRenderedHandCard(pointer.worldX, pointer.worldY);
     if (!cardId) {
+      // 点击手牌区域外：取消全部已选
+      if (this.selected.size > 0) {
+        this.selected.clear();
+        this.setFeedback("");
+        this.renderHand();
+      }
       return;
     }
     const mode = this.selected.has(cardId) ? "remove" : "add";
@@ -585,7 +593,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     layer.removeAll(true);
     const cards = snapshot?.landlordCards ?? [];
     const revealed = cards.length > 0;
-    const label = this.add.text(640, 88, revealed ? "地主底牌" : "底牌待定", {
+    const label = this.add.text(640, 74, revealed ? "地主底牌" : "底牌待定", {
       ...TEXT_STYLE,
       fontSize: "14px",
       fontStyle: "900",
@@ -751,6 +759,14 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     });
   }
 
+  /**
+   * 牌面文字的纹理超采样倍率。相机为 fit 缩放（非整数倍），文字纹理须按当前
+   * 相机缩放倍率渲染才能 1:1 显示；只取 dpr 会在 zoom>dpr 时上采样发虚。
+   */
+  private cardTextResolution(): number {
+    return Math.max(getTableDevicePixelRatio(), Math.ceil(this.cameras.main.zoom));
+  }
+
   private createCardFace(
     x: number,
     y: number,
@@ -768,29 +784,28 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const color = red ? "#c41f1f" : "#171717";
     const suit = readCardSuit(label);
     const rank = suit ? label.slice(0, -1) : label;
-    // 像素主题用直角硬边底板，卡通主题用圆角奶油底板
-    const pixelTheme = this.options.theme === "pixel";
-    const radius = pixelTheme ? 2 : Math.max(5, Math.round(width * 0.08));
-    const innerRadius = pixelTheme ? 2 : Math.max(3, radius - 2);
+    // 牌面统一圆角奶油底板，不随主题变化（仅牌背受主题影响）
+    const radius = Math.max(5, Math.round(width * 0.08));
+    const innerRadius = Math.max(3, radius - 2);
     const container = this.add.container(x, y);
     const graphics = this.add.graphics();
 
     graphics.fillStyle(0x000000, 0.26);
     graphics.fillRoundedRect(-width / 2 + 3, -height / 2 + 4, width, height, radius);
-    graphics.fillStyle(0xfffbef, 1);
+    // 暖象牙底色 + 轻微内panel，避免纯白卡面过亮
+    graphics.fillStyle(0xf6edd9, 1);
     graphics.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
-    graphics.fillStyle(0xf3ead6, 1);
+    graphics.fillStyle(0xefe4cd, 1);
     graphics.fillRoundedRect(-width / 2 + 4, -height / 2 + 4, width - 8, height - 8, innerRadius);
     graphics.lineStyle(
-      options.selected ? 3 : pixelTheme ? 2 : 1,
-      options.selected ? 0xf4c542 : pixelTheme ? 0x3a2a18 : 0xb68f5a,
-      options.selected ? 1 : pixelTheme ? 0.9 : 0.72
+      options.selected ? 3 : 1,
+      options.selected ? 0xf4c542 : 0xb68f5a,
+      options.selected ? 1 : 0.72
     );
     graphics.strokeRoundedRect(-width / 2 + 1, -height / 2 + 1, width - 2, height - 2, radius);
-    if (!pixelTheme) {
-      graphics.lineStyle(1, 0xffffff, 0.56);
-      graphics.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, innerRadius);
-    }
+    // 内高光收弱，仅留一丝纸面光泽，不要发亮发糊
+    graphics.lineStyle(1, 0xffffff, 0.22);
+    graphics.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, innerRadius);
 
     container.add(graphics);
 
@@ -808,6 +823,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
           fontStyle: "800",
           color: "#1a1206",
           backgroundColor: "#f4c542",
+          resolution: this.cardTextResolution(),
           padding: {
             x: 6,
             y: 2
@@ -831,6 +847,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     fontSize?: string
   ): void {
     const rankSize = fontSize ?? `${Math.max(16, Math.round(width * 0.28))}px`;
+    const res = this.cardTextResolution();
     const cornerX = -width / 2 + Math.max(6, width * 0.1);
     const cornerY = -height / 2 + Math.max(5, height * 0.08);
     const rightX = width / 2 - Math.max(6, width * 0.1);
@@ -841,12 +858,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .setDisplaySize(width * 0.46, width * 0.46)
       .setAlpha(0.94);
     const cornerSuitWidth = Math.max(11, width * 0.17);
-    const topRank = this.add.text(cornerX, cornerY, rank, cardTextStyle(rankSize, color)).setOrigin(0, 0);
+    const topRank = this.add.text(cornerX, cornerY, rank, cardTextStyle(rankSize, color, res)).setOrigin(0, 0);
     const topSuit = this.add
       .image(cornerX + width * 0.02, cornerY + height * 0.22, suitKey)
       .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
       .setOrigin(0, 0);
-    const bottomRank = this.add.text(rightX, rightY, rank, cardTextStyle(rankSize, color)).setOrigin(1, 1);
+    const bottomRank = this.add.text(rightX, rightY, rank, cardTextStyle(rankSize, color, res)).setOrigin(1, 1);
     const bottomSuit = this.add
       .image(rightX - width * 0.02, rightY - height * 0.22, suitKey)
       .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
@@ -865,6 +882,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   ): void {
     const color = red ? "#c41f1f" : "#171717";
     const cornerSize = fontSize ?? `${Math.max(13, Math.round(width * 0.2))}px`;
+    const res = this.cardTextResolution();
     const cornerX = -width / 2 + Math.max(6, width * 0.1);
     const cornerY = -height / 2 + Math.max(6, height * 0.08);
     const rightX = width / 2 - Math.max(6, width * 0.1);
@@ -872,8 +890,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const jokerKey = red ? "joker-big" : "joker-small";
     const portrait = this.add.image(0, height * 0.05, jokerKey);
     portrait.setScale(Math.min((height * 0.62) / portrait.height, (width * 0.66) / portrait.width));
-    const topText = this.add.text(cornerX, cornerY, label, cardTextStyle(cornerSize, color)).setOrigin(0, 0);
-    const bottomText = this.add.text(rightX, rightY, label, cardTextStyle(cornerSize, color)).setOrigin(1, 1);
+    const topText = this.add.text(cornerX, cornerY, label, cardTextStyle(cornerSize, color, res)).setOrigin(0, 0);
+    const bottomText = this.add.text(rightX, rightY, label, cardTextStyle(cornerSize, color, res)).setOrigin(1, 1);
 
     container.add([portrait, topText, bottomText]);
   }
@@ -981,7 +999,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.dragSelection = null;
     if (touched > 0) {
       this.playSound("sound-select");
-      this.setFeedback(describeSelectedCards(this.hand, this.selected));
       this.renderHand();
     }
   }
@@ -1046,12 +1063,13 @@ function suitImageKey(suit: CardSuit): string {
   }
 }
 
-function cardTextStyle(fontSize: string, color: string): Phaser.Types.GameObjects.Text.TextStyle {
+function cardTextStyle(fontSize: string, color: string, resolution: number): Phaser.Types.GameObjects.Text.TextStyle {
   return {
     fontFamily: "Georgia, 'Times New Roman', serif",
     fontSize,
     fontStyle: "900",
-    color
+    color,
+    resolution
   };
 }
 
