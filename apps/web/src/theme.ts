@@ -12,6 +12,23 @@ export function themeAsset(theme: ThemeId, file: string): string {
   return `/assets/images/themes/${theme}/${file}`;
 }
 
+/** 每套主题的默认头像数量（见 scripts/gen_avatars.py） */
+export const AVATAR_COUNT = 12;
+
+/** 把稳定标识（用户/玩家 id）确定性映射到 1..AVATAR_COUNT 的默认头像序号 */
+export function avatarIndex(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return (hash % AVATAR_COUNT) + 1;
+}
+
+/** 按主题取某标识对应的默认头像资源路径 */
+export function avatarAsset(theme: ThemeId, seed: string): string {
+  return themeAsset(theme, `avatar/${avatarIndex(seed)}.png`);
+}
+
 export function isThemeId(value: unknown): value is ThemeId {
   return THEMES.some((theme) => theme.id === value);
 }

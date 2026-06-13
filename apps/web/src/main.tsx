@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { formatDateTime, formatDelta, formatRoundDelta } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
 import type { PhaserTableHandle } from "./PhaserTable";
-import { nextTheme, themeAsset, themeLabel, type ThemeId } from "./theme";
+import { avatarAsset, nextTheme, themeAsset, themeLabel, type ThemeId } from "./theme";
 import "./styles.css";
 
 const PhaserTable = lazy(async () => {
@@ -149,12 +149,12 @@ function App() {
               />
             </label>
             <div className="auth-actions">
-              <button type="submit" className="btn-jelly btn-orange btn-lg">
+              <button type="submit" className="btn-img btn-img-orange btn-img-lg">
                 {authMode === "login" ? "开始游戏" : "注册并登录"}
               </button>
               <button
                 type="button"
-                className="btn-jelly btn-green"
+                className="btn-img btn-img-green"
                 onClick={() => setAuthMode((mode) => (mode === "login" ? "register" : "login"))}
               >
                 {authMode === "login" ? "注册新账号" : "返回登录"}
@@ -200,7 +200,7 @@ function App() {
       <main className="lobby-screen">
         <header className="lobby-hud">
           <div className="player-plate">
-            <img src="/assets/images/avatar/1.png" alt="" />
+            <img src={avatarAsset(theme, session.user.id)} alt="" />
             <div>
               <strong>{session.user.nickname}</strong>
               <span>{session.user.username}</span>
@@ -210,8 +210,21 @@ function App() {
             <img src="/assets/images/coin.png" alt="" />
             {coinLedgers[0]?.balance ?? "-"}
           </span>
+          {matchQueue ? (
+            <div className="match-bar">
+              <span className="match-bar-text">
+                匹配中<span className="match-dots" />
+              </span>
+              <span className="match-bar-meta">
+                队列 {matchQueue.waiting} 人 · 第 {matchQueue.position} 位
+              </span>
+              <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={cancelMatch}>
+                取消匹配
+              </button>
+            </div>
+          ) : null}
           <span className="hud-spacer" />
-          <button type="button" className="hud-button" onClick={logout}>
+          <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={logout}>
             退出
           </button>
         </header>
@@ -221,28 +234,12 @@ function App() {
           <img className="stage-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
           <div className="stage-center">
             <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
-            {matchQueue ? (
-              <>
-                <div className="match-indicator">
-                  匹配中<span className="match-dots" />
-                  <small>
-                    队列 {matchQueue.waiting} 人 · 第 {matchQueue.position} 位
-                  </small>
-                </div>
-                <button type="button" className="btn-jelly btn-green btn-lg" onClick={cancelMatch}>
-                  取消匹配
-                </button>
-              </>
-            ) : (
-              <>
-                <button type="button" className="btn-jelly btn-orange btn-xl" onClick={matchRoom}>
-                  快速开始
-                </button>
-                <button type="button" className="btn-jelly btn-green btn-lg" onClick={createRoom}>
-                  创建房间
-                </button>
-              </>
-            )}
+            <button type="button" className="btn-img btn-img-orange btn-img-xl" onClick={matchRoom}>
+              快速开始
+            </button>
+            <button type="button" className="btn-img btn-img-green btn-img-lg" onClick={createRoom}>
+              创建房间
+            </button>
             <p className="stage-status">{roomStatus}</p>
           </div>
           <nav className="feature-bar">
@@ -276,7 +273,7 @@ function App() {
         <aside className="room-dock">
           <div className="section-heading">
             <h2>牌桌选择</h2>
-            <button type="button" className="hud-button" onClick={refreshRooms}>
+            <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshRooms}>
               刷新
             </button>
           </div>
@@ -302,7 +299,7 @@ function App() {
           <LobbyModal title="最近战绩" onClose={() => setLobbyModal(null)}>
             <div className="section-heading">
               <span className="modal-hint">点击一局进入回放</span>
-              <button type="button" className="hud-button" onClick={refreshHistory}>
+              <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshHistory}>
                 刷新
               </button>
             </div>
@@ -334,7 +331,7 @@ function App() {
           <LobbyModal title="对局回放" onClose={() => setLobbyModal(null)}>
             <div className="section-heading">
               <span className="modal-hint">{replayStatus}</span>
-              <button type="button" className="hud-button" onClick={refreshHistory}>
+              <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshHistory}>
                 刷新
               </button>
             </div>
@@ -363,7 +360,7 @@ function App() {
       <header className="table-hud">
         <button
           type="button"
-          className="hud-button"
+          className="btn-img btn-img-wood btn-img-sm"
           onClick={selectedRoom ? leaveRoom : clearReplay}
           disabled={selectedRoom ? !tableControls.leave : false}
         >
@@ -456,7 +453,7 @@ function App() {
           </span>
           <button
             type="button"
-            className="hud-button"
+            className="btn-img btn-img-wood btn-img-sm"
             disabled={selectedReplay.actions.length <= 1}
             onClick={() => setReplayPlaying((playing) => !playing)}
           >
@@ -464,7 +461,7 @@ function App() {
           </button>
           <button
             type="button"
-            className="hud-button"
+            className="btn-img btn-img-wood btn-img-sm"
             disabled={replayStep <= 0}
             onClick={() => {
               setReplayPlaying(false);
@@ -475,7 +472,7 @@ function App() {
           </button>
           <button
             type="button"
-            className="hud-button"
+            className="btn-img btn-img-wood btn-img-sm"
             disabled={replayStep >= selectedReplay.actions.length - 1}
             onClick={() => {
               setReplayPlaying(false);
@@ -484,7 +481,7 @@ function App() {
           >
             下一步
           </button>
-          <button type="button" className="hud-button" onClick={clearReplay}>
+          <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={clearReplay}>
             {selectedRoom ? "返回牌桌" : "返回大厅"}
           </button>
         </div>

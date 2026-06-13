@@ -27,6 +27,7 @@
   --asset-btn-orange: url("/assets/images/themes/cartoon/btn_pill_orange.png");
   --asset-btn-green: url("/assets/images/themes/cartoon/btn_pill_green.png");
   --asset-btn-blue: url("/assets/images/themes/cartoon/btn_pill_blue.png");
+  --asset-btn-wood: url("/assets/images/themes/cartoon/btn_pill_wood.png");
 
   color: #f5f1e6;
   background: #101915;
@@ -65,6 +66,7 @@
   --asset-btn-orange: url("/assets/images/themes/pixel/btn_pill_orange.png");
   --asset-btn-green: url("/assets/images/themes/pixel/btn_pill_green.png");
   --asset-btn-blue: url("/assets/images/themes/pixel/btn_pill_blue.png");
+  --asset-btn-wood: url("/assets/images/themes/pixel/btn_pill_wood.png");
 }
 
 :root[data-theme="pixel"] img {
@@ -106,70 +108,14 @@ input {
   background: #0f1814;
 }
 
-/* ===== 果冻按钮（卡通三层结构：高光顶 + 主色体 + 厚底边） ===== */
-
-.btn-jelly {
-  --jelly-top: var(--sun-1);
-  --jelly-bottom: var(--sun-3);
-  --jelly-edge: var(--sun-edge);
-  position: relative;
-  padding: 12px 34px;
-  color: #fff;
-  font-size: 17px;
-  font-weight: 900;
-  letter-spacing: 2px;
-  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.22);
-  background: linear-gradient(180deg, var(--jelly-top), var(--jelly-bottom));
-  border-radius: 999px;
-  box-shadow:
-    0 5px 0 var(--jelly-edge),
-    0 12px 20px rgba(70, 38, 6, 0.32),
-    inset 0 2px 0 rgba(255, 255, 255, 0.55),
-    inset 0 -4px 8px rgba(0, 0, 0, 0.1);
-  transition:
-    transform 110ms var(--pop),
-    box-shadow 110ms ease,
-    filter 110ms ease;
-}
-
-.btn-jelly:hover {
-  filter: brightness(1.06);
-  transform: scale(1.04);
-}
-
-.btn-jelly:active {
-  transform: translateY(4px);
-  box-shadow:
-    0 1px 0 var(--jelly-edge),
-    0 4px 8px rgba(70, 38, 6, 0.3),
-    inset 0 2px 0 rgba(255, 255, 255, 0.4);
-}
-
-.btn-green {
-  --jelly-top: var(--grass-1);
-  --jelly-bottom: var(--grass-3);
-  --jelly-edge: var(--grass-edge);
-}
-
-.btn-lg {
-  padding: 14px 44px;
-  font-size: 20px;
-}
-
-.btn-xl {
-  padding: 20px 72px;
-  font-size: clamp(26px, 3vw, 34px);
-  letter-spacing: 6px;
-}
-
 /* 图片素材按钮：牌桌内相位操作（叫/抢/准备/返回）复用与手牌区一致的 PNG 药丸 */
 .btn-img {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 150px;
+  min-width: 150px;
   height: 66px;
-  padding-bottom: 6px;
+  padding: 0 24px 6px;
   color: #fff;
   font-size: 22px;
   font-weight: 900;
@@ -182,6 +128,32 @@ input {
   transition:
     transform 110ms var(--pop),
     filter 110ms ease;
+}
+
+/* 尺寸分级：sm=角落工具按钮（返回/退出/刷新/回放控制），lg=次级动作，xl=大厅主行动 */
+.btn-img-sm {
+  min-width: 76px;
+  height: 42px;
+  padding: 0 16px 4px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  text-indent: 1px;
+}
+
+.btn-img-lg {
+  min-width: 210px;
+  height: 76px;
+  padding: 0 36px 6px;
+  font-size: 24px;
+  letter-spacing: 4px;
+}
+
+.btn-img-xl {
+  min-width: 300px;
+  height: 96px;
+  padding: 0 60px 8px;
+  font-size: clamp(26px, 3vw, 34px);
+  letter-spacing: 6px;
 }
 
 .btn-img:hover {
@@ -204,6 +176,10 @@ input {
 
 .btn-img-blue {
   --btn-face: var(--asset-btn-blue);
+}
+
+.btn-img-wood {
+  --btn-face: var(--asset-btn-wood);
 }
 
 :root[data-theme="pixel"] .btn-img {
@@ -336,6 +312,7 @@ input {
 }
 
 .lobby-hud {
+  position: relative;
   display: flex;
   grid-column: 1 / -1;
   align-items: center;
@@ -411,37 +388,15 @@ input {
   flex: 1;
 }
 
-.hud-button {
-  min-height: 38px;
-  padding: 8px 18px;
-  color: #fff;
-  font-weight: 900;
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
-  background: linear-gradient(180deg, var(--wood-1), var(--wood-3));
-  border-radius: 999px;
-  box-shadow:
-    0 3px 0 #6b3c0e,
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  transition: transform 110ms var(--pop), filter 110ms ease;
-}
-
-.hud-button:hover {
-  filter: brightness(1.1);
-  transform: scale(1.04);
-}
-
-.hud-button:active {
-  transform: translateY(2px);
-  box-shadow: 0 1px 0 #6b3c0e;
-}
-
 /* 舞台 */
 
 .lobby-stage {
   position: relative;
   display: grid;
   min-height: 0;
-  place-items: center;
+  /* safe center：内容超高（矮窗口）时改为顶对齐，避免整体上溢把 logo 压到 hud/挤向下方操作区 */
+  place-items: safe center;
+  overflow: hidden;
 }
 
 .stage-mascot {
@@ -472,6 +427,8 @@ input {
 
 .stage-logo {
   width: min(380px, 56vw);
+  /* 额外下间距让 logo 的投影不会盖到下方匹配框/按钮（投影约下探 24px） */
+  margin-bottom: 14px;
   filter: drop-shadow(0 10px 14px rgba(50, 28, 4, 0.4));
   animation: stage-float 3.6s ease-in-out infinite;
 }
@@ -1140,8 +1097,9 @@ h2 {
     width: min(300px, 72vw);
   }
 
-  .btn-xl {
-    padding: 16px 48px;
+  .btn-img-xl {
+    min-width: 240px;
+    padding: 0 40px 6px;
   }
 
   .player-plate strong {
@@ -1159,34 +1117,10 @@ h2 {
   }
 }
 
-/* ===== 田园像素主题：硬边覆写（果冻按钮与药丸件转为像素方块） ===== */
-
-:root[data-theme="pixel"] .btn-jelly {
-  border-radius: 4px;
-  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.3);
-  background: var(--jelly-bottom);
-  box-shadow:
-    0 4px 0 var(--jelly-edge),
-    inset 0 4px 0 var(--jelly-top),
-    inset 4px 0 0 rgba(255, 255, 255, 0.18),
-    inset -4px -4px 0 rgba(0, 0, 0, 0.16);
-}
-
-:root[data-theme="pixel"] .btn-jelly:hover {
-  filter: brightness(1.08);
-  transform: none;
-}
-
-:root[data-theme="pixel"] .btn-jelly:active {
-  transform: translateY(4px);
-  box-shadow:
-    0 0 0 var(--jelly-edge),
-    inset 0 4px 0 rgba(0, 0, 0, 0.18);
-}
+/* ===== 田园像素主题：硬边覆写（药丸件/小按钮转为像素方块） ===== */
 
 :root[data-theme="pixel"] .player-plate,
 :root[data-theme="pixel"] .coin-chip,
-:root[data-theme="pixel"] .hud-button,
 :root[data-theme="pixel"] .table-chip,
 :root[data-theme="pixel"] .room-medal,
 :root[data-theme="pixel"] .room-enter,
@@ -1195,31 +1129,70 @@ h2 {
   border-radius: 4px;
 }
 
-/* ===== 匹配中指示 ===== */
-
-.match-indicator {
-  display: grid;
-  padding: 14px 40px;
-  color: #fff;
-  font-size: 24px;
-  font-weight: 900;
-  letter-spacing: 4px;
-  text-align: center;
-  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
-  background: linear-gradient(180deg, var(--sun-1), var(--sun-3));
-  border: 3px solid #fff3c2;
-  border-radius: var(--r-l);
+/* 大厅功能图标：圆形奶油徽章 → 像素方块（硬投影 + 顶部高光带） */
+:root[data-theme="pixel"] .feature-icon {
+  border-radius: 4px;
+  background: var(--cream);
   box-shadow:
-    0 5px 0 var(--sun-edge),
-    0 12px 20px rgba(70, 38, 6, 0.32);
-  gap: 4px;
+    0 4px 0 var(--wood-3),
+    inset 0 3px 0 rgba(255, 255, 255, 0.5),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.12);
 }
 
-.match-indicator small {
-  font-size: 13px;
+/* 状态药丸（已进入房间/重连中）：去渐变，扁平奶油方块 */
+:root[data-theme="pixel"] .table-chip {
+  background: var(--cream);
+}
+
+/* ===== 匹配中状态条（大厅顶部 hud 居中） ===== */
+
+.match-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 8px 5px 18px;
+  color: #fff;
+  font-weight: 900;
+  white-space: nowrap;
+  background: linear-gradient(180deg, var(--sun-1), var(--sun-3));
+  border: 2px solid #fff3c2;
+  border-radius: 999px;
+  box-shadow:
+    0 3px 0 var(--sun-edge),
+    0 8px 16px rgba(70, 38, 6, 0.3);
+}
+
+.match-bar-text {
+  font-size: 16px;
+  letter-spacing: 2px;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.22);
+}
+
+.match-bar-meta {
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 1px;
   opacity: 0.92;
+}
+
+:root[data-theme="pixel"] .match-bar {
+  border-radius: 4px;
+  background: var(--sun-2);
+  box-shadow:
+    0 4px 0 var(--sun-edge),
+    inset 0 3px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* 固定占位：省略号动画在固定宽度内变化，不撑动文字/状态条宽度 */
+.match-dots {
+  display: inline-block;
+  width: 1.2em;
+  overflow: hidden;
+  text-align: left;
+  vertical-align: bottom;
 }
 
 .match-dots::after {

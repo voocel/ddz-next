@@ -15,7 +15,7 @@ import {
   parseReplayCardIds
 } from "./tablePresentation";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
-import { themeAsset, type ThemeId } from "../theme";
+import { AVATAR_COUNT, avatarIndex, themeAsset, type ThemeId } from "../theme";
 
 export interface TableGameBridge {
   applyEvent(event: GameEvent): void;
@@ -110,7 +110,10 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const faceAsset = (file: string) => themeAsset("cartoon", file);
     this.load.image("table-bg", asset("bg_table.jpg"));
     this.load.image("card-back", asset("card_back.png"));
-    this.load.image("coin", "/assets/images/coin.png");
+    // 座位头像：每套主题 12 张默认头像，按玩家 id 确定性取用
+    for (let i = 1; i <= AVATAR_COUNT; i += 1) {
+      this.load.image(`avatar-${i}`, asset(`avatar/${i}.png`));
+    }
     this.load.image("suit-hearts", faceAsset("suit_heart.png"));
     this.load.image("suit-diamonds", faceAsset("suit_diamond.png"));
     this.load.image("suit-spades", faceAsset("suit_spade.png"));
@@ -374,6 +377,11 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     return plate;
   }
 
+  /** 座位头像：按玩家 id 确定性取一张主题头像，居中在座位牌左侧 */
+  private createSeatAvatar(x: number, y: number, seed: string): Phaser.GameObjects.Image {
+    return this.add.image(x - 80, y, `avatar-${avatarIndex(seed)}`).setDisplaySize(52, 52);
+  }
+
   private renderHand(): void {
     if (!this.handLayer) {
       return;
@@ -545,7 +553,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const isLocal = player.id === this.options.localPlayerId;
       const active = snapshot.currentPlayerId === player.id;
       const plate = this.createSeatPlate(position.x, position.y, active);
-      const coin = this.add.image(position.x - 82, position.y - 18, "coin").setDisplaySize(28, 28);
+      const avatar = this.createSeatAvatar(position.x, position.y, player.id);
       const landlord = snapshot.landlordId === player.id ? " 👑地主" : "";
       const label = this.add.text(
         position.x - 54,
@@ -575,7 +583,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       if (!isLocal) {
         this.addCardBackStack(seatsLayer, position.x, position.y + 67, player.handCount);
       }
-      seatsLayer.add([plate, coin, label, meta]);
+      seatsLayer.add([plate, avatar, label, meta]);
     });
   }
 
@@ -736,7 +744,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     replay.players.forEach((player) => {
       const position = this.seatPositionFor(player.seat, localSeat);
       const plate = this.createSeatPlate(position.x, position.y, false);
-      const coin = this.add.image(position.x - 82, position.y - 18, "coin").setDisplaySize(28, 28);
+      const avatar = this.createSeatAvatar(position.x, position.y, player.playerId);
       const label = this.add.text(
         position.x - 54,
         position.y - 28,
@@ -755,7 +763,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       });
 
       // 回放数据不含逐步手牌数，不渲染牌背堆，避免显示假数量
-      seatsLayer.add([plate, coin, label, meta]);
+      seatsLayer.add([plate, avatar, label, meta]);
     });
   }
 
