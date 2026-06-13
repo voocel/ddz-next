@@ -1,9 +1,16 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { CardId } from "@ddz/domain";
 import type { GameEvent, RoundReplayDto } from "@ddz/protocol";
 import { createTableGame } from "./game/createTableGame";
 import type { TableGameBridge } from "./game/TableScene";
 import type { ThemeId } from "./theme";
+
+/** 暴露给 React 控制行的命令式接口：出牌/不出/提示依赖画布内的选牌状态，故经此触发 */
+export interface PhaserTableHandle {
+  play(): void;
+  pass(): void;
+  tip(): void;
+}
 
 interface PhaserTableProps {
   readonly events: readonly GameEvent[];
@@ -15,13 +22,26 @@ interface PhaserTableProps {
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep, theme, onPlay }: PhaserTableProps) {
+export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(function PhaserTable(
+  { events, localPlayerId, onPass, replay, replayStep, theme, onPlay },
+  ref
+) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const bridgeRef = useRef<TableGameBridge | null>(null);
   const lastAppliedRef = useRef<GameEvent | null>(null);
   // 回调走 ref，避免父组件重建回调时反复销毁/重建 Phaser 场景
   const callbacksRef = useRef({ onPass, onPlay });
   callbacksRef.current = { onPass, onPlay };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      play: () => bridgeRef.current?.play(),
+      pass: () => bridgeRef.current?.pass(),
+      tip: () => bridgeRef.current?.tip()
+    }),
+    []
+  );
 
   useEffect(() => {
     if (!hostRef.current) {
@@ -77,4 +97,4 @@ export function PhaserTable({ events, localPlayerId, onPass, replay, replayStep,
   }, [replay, replayStep]);
 
   return <section ref={hostRef} className="game-host" />;
-}
+});

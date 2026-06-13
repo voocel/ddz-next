@@ -20,6 +20,12 @@ import { themeAsset, type ThemeId } from "../theme";
 export interface TableGameBridge {
   applyEvent(event: GameEvent): void;
   applyReplay(replay: RoundReplayDto | null, step: number): void;
+  /** 出牌：校验当前选中的牌并提交（操作按钮在 React 控制行，经此触发画布内的选牌逻辑） */
+  play(): void;
+  /** 不出 */
+  pass(): void;
+  /** 提示：自动选中可压过上一手的牌 */
+  tip(): void;
 }
 
 interface TableSceneOptions {
@@ -56,14 +62,17 @@ const TEXT_STYLE = {
 const INK = "#5b3a1e";
 const INK_SOFT = "#7a5a36";
 
-const BUTTON_WIDTH = 132;
-const BUTTON_HEIGHT = 79;
-// 按相对本地玩家的座位渲染：0 = 自己（左下），1 = 下家（右上），2 = 上家（左上）
+// 按相对本地玩家的座位渲染：0 = 自己（左下角），1 = 下家（右上），2 = 上家（左上）
 const RELATIVE_SEAT_POSITIONS = [
-  { x: 176, y: 556 },
+  { x: 130, y: 648 },
   { x: 1064, y: 300 },
   { x: 216, y: 300 }
 ] as const;
+// 出牌展示区回到上半部居中，把下半部让给操作控制行（操作按钮与闹钟现为 HTML 控制行）
+const LAST_PLAY_Y = 330;
+// 手牌横排贴底；选中的牌上抬 20px
+const HAND_RESTING_Y = 632;
+const HAND_SELECTED_Y = 612;
 
 export class TableScene extends Phaser.Scene implements TableGameBridge {
   private readonly selected = new Set<CardId>();
@@ -76,7 +85,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
-  private playControls: (Phaser.GameObjects.Image | Phaser.GameObjects.Text)[] = [];
   private landlordCardsLayer?: Phaser.GameObjects.Container;
   private settlementLayer?: Phaser.GameObjects.Container;
   private handLayer?: Phaser.GameObjects.Container;
@@ -108,9 +116,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.load.image("joker-big", asset("joker_big.png"));
     this.load.image("joker-small", asset("joker_small.png"));
     this.load.image("ribbon-title", asset("ribbon_title.png"));
-    this.load.image("play-button", asset("btn_pill_orange.png"));
-    this.load.image("pass-button", asset("btn_pill_green.png"));
-    this.load.image("tip-button", asset("btn_pill_blue.png"));
 
     this.load.audio("sound-click", "/assets/audio/click.mp3");
     this.load.audio("sound-select", "/assets/audio/select.mp3");
@@ -131,7 +136,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
 
     this.feedbackText = this.add
-      .text(640, 502, "", {
+      .text(640, 466, "", {
         ...TEXT_STYLE,
         fontSize: "15px",
         backgroundColor: "rgba(74, 42, 16, 0.78)",
@@ -171,35 +176,15 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.settlementLayer = this.add.container(0, 0).setDepth(22).setVisible(false);
     this.lastPlayLayer = this.add.container(0, 0);
     this.handLayer = this.add.container(0, 0);
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.beginHandDrag(pointer);
+    });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       this.handleHandDragMove(pointer);
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
       this.finishHandDrag(pointer);
     });
-
-    this.createImageButton(888, 646, "tip-button", "提示", () => {
-      this.applySuggestion();
-    });
-    this.createImageButton(1038, 646, "pass-button", "不出", () => {
-      if (!this.ensureLocalTurn()) {
-        return;
-      }
-      this.playSound("sound-pass");
-      this.options.onPass();
-    });
-    this.createImageButton(1188, 646, "play-button", "出牌", () => {
-      const validation = validateSelectedPlay(this.hand, this.selected, this.snapshot, this.options.localPlayerId);
-      if (!validation.ok) {
-        this.setFeedback(validation.reason);
-        return;
-      }
-      this.playSound("sound-play");
-      this.options.onPlay(validation.cardIds);
-      this.selected.clear();
-      this.renderHand();
-    });
-    this.updatePlayControls();
 
     // 场景就绪前到达的 snapshot/hand/回放在此补渲染，避免白屏
     if (this.replayState) {
@@ -285,7 +270,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
         this.renderLiveState();
       }
       this.setFeedback("");
-      this.updatePlayControls();
       return;
     }
 
@@ -299,7 +283,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.hand = [];
     this.snapshot = null;
     this.renderHand();
-    this.updatePlayControls();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
     const action = replay.actions[currentStep];
     const replayNickname = (playerId: string): string | undefined =>
@@ -338,43 +321,54 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
   }
 
-  private createImageButton(x: number, y: number, texture: string, label: string, onClick: () => void): void {
-    const button = this.add.image(x, y, texture).setDisplaySize(BUTTON_WIDTH, BUTTON_HEIGHT).setInteractive({
-      useHandCursor: true
-    });
-    const buttonLabel = this.add
-      .text(x, y - 3, label, {
-        fontFamily: TEXT_STYLE.fontFamily,
-        fontSize: "19px",
-        fontStyle: "900",
-        color: "#ffffff",
-        stroke: INK,
-        strokeThickness: 4
-      })
-      .setOrigin(0.5);
-    this.playControls.push(button, buttonLabel);
+  /** 出牌：校验当前选中的牌，非法则画布内反馈，合法则提交并清空选牌 */
+  play(): void {
+    const validation = validateSelectedPlay(this.hand, this.selected, this.snapshot, this.options.localPlayerId);
+    if (!validation.ok) {
+      this.setFeedback(validation.reason);
+      return;
+    }
+    this.playSound("sound-play");
+    this.options.onPlay(validation.cardIds);
+    this.selected.clear();
+    this.renderHand();
+  }
 
-    button.on("pointerdown", () => {
-      button.setTint(0xd7f5ff);
-    });
-    button.on("pointerout", () => {
-      button.clearTint();
-    });
-    button.on("pointerup", () => {
-      button.clearTint();
-      this.playSound("sound-click");
-      onClick();
-    });
+  /** 不出 */
+  pass(): void {
+    if (!this.ensureLocalTurn()) {
+      return;
+    }
+    this.playSound("sound-pass");
+    this.options.onPass();
+  }
+
+  /** 提示：选中可压过上一手的牌 */
+  tip(): void {
+    this.applySuggestion();
   }
 
   private createSeatPlate(x: number, y: number, active: boolean): Phaser.GameObjects.Graphics {
     const plate = this.add.graphics();
+    const left = x - 107;
+    const top = y - 37;
+    // 像素主题用硬直角方块 + 厚阴影，卡通主题保留奶油圆角
+    if (this.options.theme === "pixel") {
+      plate.fillStyle(0x3a2a18, active ? 0.9 : 0.6);
+      plate.fillRect(left + 4, top + 5, 214, 74);
+      plate.fillStyle(0xfff3da, 0.97);
+      plate.fillRect(left, top, 214, 74);
+      plate.lineStyle(active ? 4 : 2, active ? 0xffb300 : 0x8c5a22, 1);
+      plate.strokeRect(left, top, 214, 74);
+      return plate;
+    }
+
     plate.fillStyle(0x8c5318, active ? 0.85 : 0.5);
-    plate.fillRoundedRect(x - 107 + 3, y - 37 + 5, 214, 74, 18);
+    plate.fillRoundedRect(left + 3, top + 5, 214, 74, 18);
     plate.fillStyle(0xfff6e0, 0.96);
-    plate.fillRoundedRect(x - 107, y - 37, 214, 74, 18);
+    plate.fillRoundedRect(left, top, 214, 74, 18);
     plate.lineStyle(active ? 4 : 2, active ? 0xffb300 : 0xb9772f, 1);
-    plate.strokeRoundedRect(x - 107, y - 37, 214, 74, 18);
+    plate.strokeRoundedRect(left, top, 214, 74, 18);
     return plate;
   }
 
@@ -395,31 +389,43 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const cardId = card.id as CardId;
       const selected = this.selected.has(cardId);
       const x = startX + index * gap;
-      const y = selected ? 558 : 590;
+      const y = selected ? HAND_SELECTED_Y : HAND_RESTING_Y;
+      // 手牌横向重叠，右侧牌盖在左侧牌上；除最后一张外只露出左侧 gap 宽的可见条。
+      // 命中区限制在可见条，且统一走场景级 pointerdown + findRenderedHandCard 做世界坐标命中，
+      // 不用每张牌各自 setInteractive——大量重叠的 Container 命中区会被 Phaser 整体错位一张。
+      const isLast = index === this.hand.length - 1;
+      const hitWidth = isLast ? cardWidth : gap;
       const cardFace = this.createCardFace(x, y, formatCard(card), isRed(card), {
-        interactive: true,
         selected,
         width: cardWidth,
         height: cardHeight
       });
       this.renderedHandCards.push({
         id: cardId,
-        bounds: new Phaser.Geom.Rectangle(x - cardWidth / 2, y - cardHeight / 2, cardWidth, cardHeight)
-      });
-
-      cardFace.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-        const mode = this.selected.has(cardId) ? "remove" : "add";
-        this.dragSelection = {
-          pointerId: pointer.id,
-          mode,
-          touched: new Set<CardId>(),
-          moved: false
-        };
-        this.applyDragSelection(cardId);
+        bounds: new Phaser.Geom.Rectangle(x - cardWidth / 2, y - cardHeight / 2, hitWidth, cardHeight)
       });
 
       this.handLayer?.add(cardFace);
     });
+  }
+
+  /** 场景级手牌命中：用 findRenderedHandCard 在世界坐标判定，避开 Phaser 重叠 Container 命中区错位 */
+  private beginHandDrag(pointer: Phaser.Input.Pointer): void {
+    if (this.replayMode) {
+      return;
+    }
+    const cardId = this.findRenderedHandCard(pointer.worldX, pointer.worldY);
+    if (!cardId) {
+      return;
+    }
+    const mode = this.selected.has(cardId) ? "remove" : "add";
+    this.dragSelection = {
+      pointerId: pointer.id,
+      mode,
+      touched: new Set<CardId>(),
+      moved: false
+    };
+    this.applyDragSelection(cardId);
   }
 
   private applySuggestion(): void {
@@ -504,25 +510,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.settlementLayer?.setVisible(false);
     this.lastPlayLayer?.removeAll(true);
     this.phaseText?.setText("等待玩家入座").setVisible(true);
-    this.updatePlayControls();
   }
 
   private renderStatus(snapshot: GameSnapshotDto): void {
     this.phaseText
       ?.setText(describePhasePrompt(snapshot, this.options.localPlayerId))
       .setVisible(!snapshot.settlement);
-    this.updatePlayControls();
   }
 
   private setFeedback(message: string): void {
     this.feedbackText?.setText(message).setVisible(message.length > 0);
-  }
-
-  private updatePlayControls(): void {
-    const visible = !this.replayMode && this.snapshot?.phase === "playing";
-    for (const control of this.playControls) {
-      control.setVisible(visible);
-    }
   }
 
   private renderSeats(snapshot: GameSnapshotDto): void {
@@ -678,8 +675,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const source = playerId ? this.findSeatPosition(playerId) : null;
     cards.forEach((card, index) => {
       const x = startX + index * 48;
-      const y = 320;
-      const cardFace = this.createCardFace(x, 320, formatCard(card), isRed(card), {
+      const y = LAST_PLAY_Y;
+      const cardFace = this.createCardFace(x, y, formatCard(card), isRed(card), {
         width: 72,
         height: 100
       });
@@ -710,7 +707,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const startX = 640 - Math.max(0, cardIds.length - 1) * 24;
     cardIds.forEach((cardId, index) => {
       const x = startX + index * 48;
-      const cardFace = this.createCardFace(x, 320, formatCardId(cardId), isRedCardId(cardId), {
+      const cardFace = this.createCardFace(x, LAST_PLAY_Y, formatCardId(cardId), isRedCardId(cardId), {
         fontSize: "17px",
         width: 72,
         height: 100
@@ -762,7 +759,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     options: {
       readonly fontSize?: string;
       readonly height: number;
-      readonly interactive?: boolean;
       readonly selected?: boolean;
       readonly width: number;
     }
@@ -822,14 +818,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     container.setSize(width, height);
-    if (options.interactive) {
-      container.setInteractive(
-        new Phaser.Geom.Rectangle(-width / 2, -height / 2, width, height),
-        Phaser.Geom.Rectangle.Contains,
-        false
-      );
-    }
-
     return container;
   }
 

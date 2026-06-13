@@ -24,6 +24,9 @@
   --pop: cubic-bezier(0.34, 1.56, 0.64, 1);
   --asset-bg-lobby: url("/assets/images/themes/cartoon/bg_lobby.jpg");
   --asset-ribbon: url("/assets/images/themes/cartoon/ribbon_title.png");
+  --asset-btn-orange: url("/assets/images/themes/cartoon/btn_pill_orange.png");
+  --asset-btn-green: url("/assets/images/themes/cartoon/btn_pill_green.png");
+  --asset-btn-blue: url("/assets/images/themes/cartoon/btn_pill_blue.png");
 
   color: #f5f1e6;
   background: #101915;
@@ -59,6 +62,9 @@
   --pop: steps(3, end);
   --asset-bg-lobby: url("/assets/images/themes/pixel/bg_lobby.jpg");
   --asset-ribbon: url("/assets/images/themes/pixel/ribbon_title.png");
+  --asset-btn-orange: url("/assets/images/themes/pixel/btn_pill_orange.png");
+  --asset-btn-green: url("/assets/images/themes/pixel/btn_pill_green.png");
+  --asset-btn-blue: url("/assets/images/themes/pixel/btn_pill_blue.png");
 }
 
 :root[data-theme="pixel"] img {
@@ -154,6 +160,57 @@ input {
   padding: 20px 72px;
   font-size: clamp(26px, 3vw, 34px);
   letter-spacing: 6px;
+}
+
+/* 图片素材按钮：牌桌内相位操作（叫/抢/准备/返回）复用与手牌区一致的 PNG 药丸 */
+.btn-img {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 150px;
+  height: 66px;
+  padding-bottom: 6px;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  text-indent: 3px;
+  text-shadow: 0 2px 0 var(--ink);
+  background: var(--btn-face) center / 100% 100% no-repeat;
+  border: 0;
+  cursor: pointer;
+  transition:
+    transform 110ms var(--pop),
+    filter 110ms ease;
+}
+
+.btn-img:hover {
+  filter: brightness(1.06);
+  transform: translateY(-2px);
+}
+
+.btn-img:active {
+  transform: translateY(3px);
+  filter: brightness(0.94);
+}
+
+.btn-img-orange {
+  --btn-face: var(--asset-btn-orange);
+}
+
+.btn-img-green {
+  --btn-face: var(--asset-btn-green);
+}
+
+.btn-img-blue {
+  --btn-face: var(--asset-btn-blue);
+}
+
+:root[data-theme="pixel"] .btn-img {
+  image-rendering: pixelated;
+  letter-spacing: 2px;
+  text-indent: 2px;
+  text-shadow: 2px 2px 0 var(--ink);
 }
 
 /* ===== 登录页 ===== */
@@ -774,21 +831,60 @@ input {
   display: none;
 }
 
-.timer-chip {
-  color: #8a4b0d;
-  background: linear-gradient(180deg, #fff3c2, #ffd968);
-  border-color: var(--sun-2);
-  box-shadow: 0 3px 0 #c98a12;
-}
-
-.table-action-dock {
+/* 统一控制行：所有阶段（准备/叫抢/出牌）的操作按钮 + 闹钟共用同一行，居中排在手牌正上方 */
+.table-control-row {
   position: absolute;
   left: 50%;
-  bottom: clamp(170px, 30vh, 300px);
+  bottom: clamp(190px, 30vh, 300px);
   z-index: 10;
   display: flex;
-  gap: 20px;
+  align-items: center;
+  gap: 18px;
   transform: translateX(-50%);
+}
+
+/* 闹钟：嵌在控制行中间，秒数叠在主题闹钟素材盘面上 */
+.turn-clock {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+}
+
+.turn-clock img {
+  width: 100%;
+  height: 100%;
+}
+
+.turn-clock-num {
+  position: absolute;
+  top: 54%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 900;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.turn-clock.is-low .turn-clock-num {
+  color: #d23b2e;
+}
+
+.turn-clock.is-wobble {
+  animation: clock-wobble 0.22s ease-in-out infinite;
+}
+
+@keyframes clock-wobble {
+  0%,
+  100% {
+    transform: rotate(-7deg);
+  }
+  50% {
+    transform: rotate(7deg);
+  }
 }
 
 .table-settled-dock {
@@ -1058,7 +1154,7 @@ h2 {
     margin-top: 6px;
   }
 
-  .table-action-dock {
+  .table-control-row {
     gap: 12px;
   }
 }
@@ -1092,7 +1188,6 @@ h2 {
 :root[data-theme="pixel"] .coin-chip,
 :root[data-theme="pixel"] .hud-button,
 :root[data-theme="pixel"] .table-chip,
-:root[data-theme="pixel"] .timer-chip,
 :root[data-theme="pixel"] .room-medal,
 :root[data-theme="pixel"] .room-enter,
 :root[data-theme="pixel"] .modal-close,

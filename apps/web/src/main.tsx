@@ -1,8 +1,9 @@
-import React, { Suspense, lazy, useState } from "react";
+import React, { Suspense, lazy, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { formatDateTime, formatDelta, formatRoundDelta, formatTurnTimer } from "./app/formatters";
+import { formatDateTime, formatDelta, formatRoundDelta } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
-import { nextTheme, themeAsset, themeLabel } from "./theme";
+import type { PhaserTableHandle } from "./PhaserTable";
+import { nextTheme, themeAsset, themeLabel, type ThemeId } from "./theme";
 import "./styles.css";
 
 const PhaserTable = lazy(async () => {
@@ -13,6 +14,18 @@ const PhaserTable = lazy(async () => {
 });
 
 type LobbyModalKind = "history" | "ledger" | "replay";
+
+/** 牌桌闹钟：嵌在控制行中间，秒数叠在主题闹钟素材上；≤5 秒变红，本地玩家回合时摇铃 */
+function TurnClock({ theme, remainingMs, local }: { theme: ThemeId; remainingMs: number; local: boolean }) {
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const low = seconds <= 5;
+  return (
+    <span className={`turn-clock${low ? " is-low" : ""}${low && local ? " is-wobble" : ""}`}>
+      <img src={themeAsset(theme, "clock_alarm.png")} alt="" />
+      <span className="turn-clock-num">{seconds}</span>
+    </span>
+  );
+}
 
 function LobbyModal({
   title,
@@ -38,6 +51,7 @@ function LobbyModal({
 
 function App() {
   const [lobbyModal, setLobbyModal] = useState<LobbyModalKind | null>(null);
+  const tableRef = useRef<PhaserTableHandle | null>(null);
   const {
     authMode,
     authStatus,
@@ -335,6 +349,7 @@ function App() {
     <main className="table-screen">
       <Suspense fallback={<section className="game-host loading-host">加载牌桌</section>}>
         <PhaserTable
+          ref={tableRef}
           events={events}
           localPlayerId={session.user.id}
           onPass={handlePass}
@@ -357,50 +372,78 @@ function App() {
         <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
         {reconnecting ? <span className="table-chip">重连中…</span> : null}
         <span className="hud-spacer" />
-        <span className="table-chip timer-chip">
-          {turnTimer
-            ? formatTurnTimer(
-                turnTimer,
-                session.user.id,
-                snapshot?.players.find((player) => player.id === turnTimer.playerId)?.nickname
-              )
-            : ""}
-        </span>
       </header>
 
-      {tableControls.ready || tableControls.bid || tableControls.rob ? (
-        <div className="table-action-dock">
-          {tableControls.ready ? (
-            <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.ready()}>
-              准备
-            </button>
-          ) : null}
-          {tableControls.bid ? (
-            <>
-              <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.bidLandlord(true)}>
-                叫地主
-              </button>
-              <button type="button" className="btn-jelly btn-green btn-lg" onClick={() => client.bidLandlord(false)}>
-                不叫
-              </button>
-            </>
-          ) : null}
-          {tableControls.rob ? (
-            <>
-              <button type="button" className="btn-jelly btn-orange btn-lg" onClick={() => client.robLandlord(true)}>
-                抢地主
-              </button>
-              <button type="button" className="btn-jelly btn-green btn-lg" onClick={() => client.robLandlord(false)}>
-                不抢
-              </button>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      {!selectedReplay
+        ? (() => {
+            // 所有阶段共用同一控制行：操作按钮居中、闹钟作为中间子元素，位置天然统一
+            const localTurn = turnTimer != null && turnTimer.playerId === session.user.id;
+            const clock =
+              turnTimer != null ? (
+                <TurnClock theme={theme} remainingMs={turnTimer.remainingMs} local={localTurn} />
+              ) : null;
+
+            let buttons: React.ReactNode = null;
+            if (tableControls.ready) {
+              buttons = (
+                <button type="button" className="btn-img btn-img-orange" onClick={() => client.ready()}>
+                  准备
+                </button>
+              );
+            } else if (tableControls.bid) {
+              buttons = (
+                <>
+                  <button type="button" className="btn-img btn-img-orange" onClick={() => client.bidLandlord(true)}>
+                    叫地主
+                  </button>
+                  {clock}
+                  <button type="button" className="btn-img btn-img-green" onClick={() => client.bidLandlord(false)}>
+                    不叫
+                  </button>
+                </>
+              );
+            } else if (tableControls.rob) {
+              buttons = (
+                <>
+                  <button type="button" className="btn-img btn-img-orange" onClick={() => client.robLandlord(true)}>
+                    抢地主
+                  </button>
+                  {clock}
+                  <button type="button" className="btn-img btn-img-green" onClick={() => client.robLandlord(false)}>
+                    不抢
+                  </button>
+                </>
+              );
+            } else if (tableControls.pass) {
+              // 出牌阶段轮到本地玩家：不出 / 闹钟 / 提示 / 出牌（出牌与提示经 ref 触发画布内选牌逻辑）
+              buttons = (
+                <>
+                  <button type="button" className="btn-img btn-img-green" onClick={() => tableRef.current?.pass()}>
+                    不出
+                  </button>
+                  {clock}
+                  <button type="button" className="btn-img btn-img-blue" onClick={() => tableRef.current?.tip()}>
+                    提示
+                  </button>
+                  <button type="button" className="btn-img btn-img-orange" onClick={() => tableRef.current?.play()}>
+                    出牌
+                  </button>
+                </>
+              );
+            }
+
+            // 既无可操作按钮、也无计时（如对手回合的非计时间隙）则不渲染控制行
+            if (buttons == null && clock == null) {
+              return null;
+            }
+            // 仅对手回合：行内只显示闹钟倒计时
+            return <div className="table-control-row">{buttons ?? clock}</div>;
+          })()
+        : null}
 
       {!selectedReplay && snapshot?.phase === "settled" ? (
         <div className="table-settled-dock">
-          <button type="button" className="btn-jelly btn-orange btn-lg" onClick={leaveRoom}>
+          <button type="button" className="btn-img btn-img-orange" onClick={leaveRoom}>
             返回大厅
           </button>
         </div>
