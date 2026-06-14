@@ -15,6 +15,7 @@ import { createGameClient, isRecoverableDropCode } from "../net/gameClient";
 import { createMatchmakingClient } from "../net/matchmakingClient";
 import { clearStoredSession, readStoredSession, storeSession } from "./sessionStorage";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
+import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
 import type { AuthMode, TurnTimerState } from "./types";
 import { useReplayPlayback } from "./useReplayPlayback";
 import { useTurnTimerTicker } from "./useTurnTimerTicker";
@@ -57,6 +58,7 @@ export function useDdzApp() {
   const [matchQueue, setMatchQueue] = useState<{ waiting: number; position: number } | null>(null);
   const matchClientRef = useRef<ReturnType<typeof createMatchmakingClient> | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => loadTheme());
+  const [audioLevels, setAudioLevels] = useState<AudioLevels>(() => loadAudioLevels());
   // 断线自动重连：记录触发时间戳，副作用循环按 deadline 重试（游戏服重启恢复牌局的入口）
   const [reconnectRequest, setReconnectRequest] = useState<number | null>(null);
 
@@ -71,6 +73,10 @@ export function useDdzApp() {
     document.documentElement.dataset.theme = theme;
     saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    saveAudioLevels(audioLevels);
+  }, [audioLevels]);
 
   const api = useMemo(
     () =>
@@ -457,6 +463,8 @@ export function useDdzApp() {
     selectedReplay,
     selectedRoom,
     session,
+    audioLevels,
+    setAudioLevels,
     setAuthMode,
     setNickname,
     setPassword,

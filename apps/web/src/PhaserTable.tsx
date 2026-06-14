@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { CardId } from "@ddz/domain";
 import type { GameEvent, RoundReplayDto } from "@ddz/protocol";
+import type { AudioLevels } from "./audio";
 import { createTableGame } from "./game/createTableGame";
 import type { TableGameBridge } from "./game/TableScene";
 import type { ThemeId } from "./theme";
@@ -21,11 +22,12 @@ interface PhaserTableProps {
   readonly replay: RoundReplayDto | null;
   readonly replayStep: number;
   readonly theme: ThemeId;
+  readonly audioLevels: AudioLevels;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
 export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(function PhaserTable(
-  { events, localPlayerId, onPass, replay, replayStep, theme, onPlay },
+  { events, localPlayerId, onPass, replay, replayStep, theme, audioLevels, onPlay },
   ref
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -34,6 +36,9 @@ export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(funct
   // 回调走 ref，避免父组件重建回调时反复销毁/重建 Phaser 场景
   const callbacksRef = useRef({ onPass, onPlay });
   callbacksRef.current = { onPass, onPlay };
+  // 音量走 ref：初始音效音量随场景创建注入，后续变动经下方 effect 推送，不重建场景
+  const audioRef = useRef(audioLevels);
+  audioRef.current = audioLevels;
 
   useImperativeHandle(
     ref,
@@ -54,6 +59,7 @@ export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(funct
     const tableGame = createTableGame(hostRef.current, {
       localPlayerId,
       theme,
+      audio: audioRef.current,
       onPass: () => callbacksRef.current.onPass(),
       onPlay: (cards) => callbacksRef.current.onPlay(cards)
     });
@@ -98,6 +104,10 @@ export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(funct
   useEffect(() => {
     bridgeRef.current?.applyReplay(replay, replayStep);
   }, [replay, replayStep]);
+
+  useEffect(() => {
+    bridgeRef.current?.setSfxLevel(audioLevels.sfx);
+  }, [audioLevels.sfx]);
 
   return <section ref={hostRef} className="game-host" />;
 });

@@ -788,6 +788,36 @@ input {
   display: none;
 }
 
+/* 牌桌音量控制：音乐/音效两条滑块，chip 风格容器，pointer-events 单独开启 */
+.audio-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 4px 14px;
+  pointer-events: auto;
+  background: linear-gradient(180deg, var(--cream), var(--cream-2));
+  border: 2px solid var(--wood-2);
+  border-radius: 999px;
+  box-shadow: 0 3px 0 var(--wood-3);
+}
+
+.audio-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.audio-slider input[type="range"] {
+  width: 72px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--wood-3);
+}
+
 /* 统一控制行：所有阶段（准备/叫抢/出牌）的操作按钮 + 闹钟共用同一行，居中排在手牌正上方 */
 .table-control-row {
   position: absolute;

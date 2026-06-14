@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import type { CardId } from "@ddz/domain";
+import type { AudioLevels } from "../audio";
 import type { ThemeId } from "../theme";
 import { TableScene } from "./TableScene";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
@@ -7,6 +8,7 @@ import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from 
 interface TableGameOptions {
   readonly localPlayerId: string;
   readonly theme: ThemeId;
+  readonly audio: AudioLevels;
   readonly onPass: () => void;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }

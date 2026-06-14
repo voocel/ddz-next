@@ -3,7 +3,8 @@ import { identifyCombination, suggestPlay, type CardId } from "@ddz/domain";
 import { gameSnapshotSchema } from "@ddz/protocol";
 import type { CardDto, GameEvent, GameSnapshotDto, RoundReplayDto } from "@ddz/protocol";
 import { describeSelectedCards, toDomainCard, validateSelectedPlay } from "./playValidation";
-import { bgmKey, BGM_VOLUME, cardsSoundKey, SOUND_FILES, type SoundKey } from "./sounds";
+import { cardsSoundKey, SOUND_FILES, type SoundKey } from "./sounds";
+import type { AudioLevels } from "../audio";
 import {
   describeEventFeedback,
   describePhasePrompt,
@@ -29,11 +30,14 @@ export interface TableGameBridge {
   tip(): void;
   /** 回合超时提醒：本地玩家剩余时间不多时由 React 控制行触发，播放闹钟音 */
   alertTimeout(): void;
+  /** 设置音效音量（0..1，0 即静音）：React 音效滑块变动时实时下发（背景音乐由 App 级全局管理） */
+  setSfxLevel(level: number): void;
 }
 
 interface TableSceneOptions {
   readonly localPlayerId: string;
   readonly theme: ThemeId;
+  readonly audio: AudioLevels;
   readonly onPass: () => void;
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
@@ -85,8 +89,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private lastPlayLayer?: Phaser.GameObjects.Container;
   private seatsLayer?: Phaser.GameObjects.Container;
   private renderedHandCards: RenderedHandCard[] = [];
-  private bgm: Phaser.Sound.BaseSound | undefined;
-  private bgmStopped = false;
+  private sfxLevel: number;
   private dragSelection:
     | {
         readonly pointerId: number;
@@ -98,6 +101,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   constructor(private readonly options: TableSceneOptions) {
     super("TableScene");
+    this.sfxLevel = options.audio.sfx;
   }
 
   preload(): void {
@@ -128,9 +132,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
-      this.stopBgm();
     });
-    this.startBgm();
     this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
 
     this.feedbackText = this.add
@@ -935,41 +937,19 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.playSound("sound-alarm");
   }
 
-  /** 进入牌桌后按主题循环播放背景音乐；音频上下文若被浏览器锁定则等解锁后再起播 */
-  private startBgm(): void {
-    const key = bgmKey(this.options.theme);
-    const begin = (): void => {
-      if (this.bgm || this.bgmStopped) {
-        return;
-      }
-      // 背景音乐失败只记录日志，不打断游戏（与 playSound 一致）
-      try {
-        this.bgm = this.sound.add(key, { loop: true, volume: BGM_VOLUME });
-        this.bgm.play();
-      } catch (error) {
-        console.warn(`背景音乐播放失败: ${key}`, error);
-      }
-    };
-    if (this.sound.locked) {
-      this.sound.once(Phaser.Sound.Events.UNLOCKED, begin);
-    } else {
-      begin();
-    }
-  }
-
-  /** 离开牌桌时停止背景音乐（destroy 会同时停止播放并释放资源） */
-  private stopBgm(): void {
-    this.bgmStopped = true;
-    this.bgm?.destroy();
-    this.bgm = undefined;
+  /** 实时设置音效音量（背景音乐由 App 级全局管理，不在场景内） */
+  setSfxLevel(level: number): void {
+    this.sfxLevel = level;
   }
 
   private playSound(key: SoundKey): void {
+    if (this.sfxLevel <= 0) {
+      return;
+    }
     // 音效失败只记录日志，不打断游戏流程
     try {
-      const played = this.sound.play(key, {
-        volume: key === "sound-select" ? 0.45 : 0.62
-      });
+      const base = key === "sound-select" ? 0.45 : 0.62;
+      const played = this.sound.play(key, { volume: base * this.sfxLevel });
       if (!played) {
         console.warn(`音效播放失败: ${key}`);
       }

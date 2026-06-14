@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { formatDateTime, formatDelta, formatRoundDelta } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
 import { useTurnAlarm } from "./app/useTurnAlarm";
+import { useBackgroundMusic } from "./app/useBackgroundMusic";
+import type { AudioLevels } from "./audio";
 import type { PhaserTableHandle } from "./PhaserTable";
 import { avatarAsset, nextTheme, themeAsset, themeLabel, type ThemeId } from "./theme";
 import "./styles.css";
@@ -25,6 +27,38 @@ function TurnClock({ theme, remainingMs, local }: { theme: ThemeId; remainingMs:
       <img src={themeAsset(theme, "clock_alarm.png")} alt="" />
       <span className="turn-clock-num">{seconds}</span>
     </span>
+  );
+}
+
+/** 牌桌音量控制：音乐/音效各一条滑块（0~100%，0 即静音），偏好持久化到 localStorage */
+function AudioControls({ levels, onChange }: { levels: AudioLevels; onChange: (next: AudioLevels) => void }) {
+  return (
+    <div className="audio-controls">
+      <label className="audio-slider" title="音乐音量">
+        <span aria-hidden>{levels.music > 0 ? "♪" : "♪̸"}</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(levels.music * 100)}
+          onChange={(event) => onChange({ ...levels, music: Number(event.target.value) / 100 })}
+          aria-label="音乐音量"
+        />
+      </label>
+      <label className="audio-slider" title="音效音量">
+        <span aria-hidden>{levels.sfx > 0 ? "🔊" : "🔇"}</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(levels.sfx * 100)}
+          onChange={(event) => onChange({ ...levels, sfx: Number(event.target.value) / 100 })}
+          aria-label="音效音量"
+        />
+      </label>
+    </div>
   );
 }
 
@@ -54,6 +88,8 @@ function App() {
   const [lobbyModal, setLobbyModal] = useState<LobbyModalKind | null>(null);
   const tableRef = useRef<PhaserTableHandle | null>(null);
   const {
+    audioLevels,
+    setAudioLevels,
     authMode,
     authStatus,
     authStatusTone,
@@ -107,6 +143,8 @@ function App() {
     tableRef.current?.alertTimeout();
   }, []);
   useTurnAlarm(turnTimer, session?.user.id ?? "", handleTurnAlarm);
+  // 全局背景音乐：登录后跨大厅/牌桌持续，不随场景启停（音量由音乐滑块控制）
+  useBackgroundMusic(theme, audioLevels.music, Boolean(session));
 
   if (!session) {
     return (
@@ -231,6 +269,7 @@ function App() {
             </div>
           ) : null}
           <span className="hud-spacer" />
+          <AudioControls levels={audioLevels} onChange={setAudioLevels} />
           <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={logout}>
             退出
           </button>
@@ -360,6 +399,7 @@ function App() {
           replay={selectedReplay}
           replayStep={replayStep}
           theme={theme}
+          audioLevels={audioLevels}
           onPlay={handlePlay}
         />
       </Suspense>
@@ -376,6 +416,7 @@ function App() {
         <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
         {reconnecting ? <span className="table-chip">重连中…</span> : null}
         <span className="hud-spacer" />
+        <AudioControls levels={audioLevels} onChange={setAudioLevels} />
       </header>
 
       {!selectedReplay
