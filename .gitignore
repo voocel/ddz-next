@@ -6,6 +6,7 @@ node_modules
 coverage/
 tasks
 tmp
+.tmp_avatar_gen/
 
 # local env files
 .env
