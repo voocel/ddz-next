@@ -24,6 +24,19 @@ export function avatarIndex(seed: string): number {
   return (hash % AVATAR_COUNT) + 1;
 }
 
+/** 为同桌多名玩家分配不重复头像：撞号则按 1..AVATAR_COUNT 环形探测下一个空位（按传入顺序稳定确定） */
+export function avatarIndexes(seeds: string[]): number[] {
+  const used = new Set<number>();
+  return seeds.map((seed) => {
+    let index = avatarIndex(seed);
+    while (used.has(index) && used.size < AVATAR_COUNT) {
+      index = (index % AVATAR_COUNT) + 1;
+    }
+    used.add(index);
+    return index;
+  });
+}
+
 /** 按主题取某标识对应的默认头像资源路径 */
 export function avatarAsset(theme: ThemeId, seed: string): string {
   return themeAsset(theme, `avatar/${avatarIndex(seed)}.png`);

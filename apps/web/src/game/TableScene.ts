@@ -15,7 +15,7 @@ import {
   parseReplayCardIds
 } from "./tablePresentation";
 import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
-import { AVATAR_COUNT, avatarIndex, themeAsset, type ThemeId } from "../theme";
+import { AVATAR_COUNT, avatarIndexes, themeAsset, type ThemeId } from "../theme";
 
 export interface TableGameBridge {
   applyEvent(event: GameEvent): void;
@@ -378,8 +378,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   /** 座位头像：按玩家 id 确定性取一张主题头像，居中在座位牌左侧 */
-  private createSeatAvatar(x: number, y: number, seed: string): Phaser.GameObjects.Image {
-    return this.add.image(x - 80, y, `avatar-${avatarIndex(seed)}`).setDisplaySize(52, 52);
+  private createSeatAvatar(x: number, y: number, index: number): Phaser.GameObjects.Image {
+    return this.add.image(x - 80, y, `avatar-${index}`).setDisplaySize(52, 52);
   }
 
   private renderHand(): void {
@@ -548,12 +548,13 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const localSeat = snapshot.players.find((player) => player.id === this.options.localPlayerId)?.seat ?? null;
     const showReady = snapshot.phase === "waiting" || snapshot.phase === "ready";
 
-    snapshot.players.forEach((player) => {
+    const seatAvatarIndexes = avatarIndexes(snapshot.players.map((player) => player.id));
+    snapshot.players.forEach((player, seatIndex) => {
       const position = this.seatPositionFor(player.seat, localSeat);
       const isLocal = player.id === this.options.localPlayerId;
       const active = snapshot.currentPlayerId === player.id;
       const plate = this.createSeatPlate(position.x, position.y, active);
-      const avatar = this.createSeatAvatar(position.x, position.y, player.id);
+      const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
       const landlord = snapshot.landlordId === player.id ? " 👑地主" : "";
       const label = this.add.text(
         position.x - 54,
@@ -741,10 +742,11 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     seatsLayer.removeAll(true);
     const localSeat = replay.players.find((player) => player.playerId === this.options.localPlayerId)?.seat ?? null;
 
-    replay.players.forEach((player) => {
+    const seatAvatarIndexes = avatarIndexes(replay.players.map((player) => player.playerId));
+    replay.players.forEach((player, seatIndex) => {
       const position = this.seatPositionFor(player.seat, localSeat);
       const plate = this.createSeatPlate(position.x, position.y, false);
-      const avatar = this.createSeatAvatar(position.x, position.y, player.playerId);
+      const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
       const label = this.add.text(
         position.x - 54,
         position.y - 28,

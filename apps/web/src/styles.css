@@ -1115,6 +1115,11 @@ h2 {
   .table-control-row {
     gap: 12px;
   }
+
+  /* 窄屏允许 hud 换行，配合匹配条独占一行（match-bar 媒体覆写见下，须置于其基础规则之后才生效） */
+  .lobby-hud {
+    flex-wrap: wrap;
+  }
 }
 
 /* ===== 田园像素主题：硬边覆写（药丸件/小按钮转为像素方块） ===== */
@@ -1184,6 +1189,17 @@ h2 {
   box-shadow:
     0 4px 0 var(--sun-edge),
     inset 0 3px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* 窄屏：匹配条脱离绝对居中，改为 hud 内独占一行，避免与左右元素重叠（须在基础 .match-bar 之后） */
+@media (max-width: 720px) {
+  .match-bar {
+    position: static;
+    transform: none;
+    order: 9;
+    flex-basis: 100%;
+    justify-content: center;
+  }
 }
 
 /* 固定占位：省略号动画在固定宽度内变化，不撑动文字/状态条宽度 */
