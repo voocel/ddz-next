@@ -3,6 +3,7 @@ import { identifyCombination, suggestPlay, type CardId } from "@ddz/domain";
 import { gameSnapshotSchema } from "@ddz/protocol";
 import type { CardDto, GameEvent, GameSnapshotDto, RoundReplayDto } from "@ddz/protocol";
 import { describeSelectedCards, toDomainCard, validateSelectedPlay } from "./playValidation";
+import { bgmKey, BGM_VOLUME, cardsSoundKey, SOUND_FILES, type SoundKey } from "./sounds";
 import {
   describeEventFeedback,
   describePhasePrompt,
@@ -26,6 +27,8 @@ export interface TableGameBridge {
   pass(): void;
   /** 提示：自动选中可压过上一手的牌 */
   tip(): void;
+  /** 回合超时提醒：本地玩家剩余时间不多时由 React 控制行触发，播放闹钟音 */
+  alertTimeout(): void;
 }
 
 interface TableSceneOptions {
@@ -35,15 +38,6 @@ interface TableSceneOptions {
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-type SoundKey =
-  | "sound-click"
-  | "sound-select"
-  | "sound-play"
-  | "sound-pass"
-  | "sound-deal"
-  | "sound-start"
-  | "sound-win"
-  | "sound-lose";
 type CardSuit = "♥" | "♦" | "♠" | "♣";
 
 interface RenderedHandCard {
@@ -91,6 +85,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private lastPlayLayer?: Phaser.GameObjects.Container;
   private seatsLayer?: Phaser.GameObjects.Container;
   private renderedHandCards: RenderedHandCard[] = [];
+  private bgm: Phaser.Sound.BaseSound | undefined;
+  private bgmStopped = false;
   private dragSelection:
     | {
         readonly pointerId: number;
@@ -122,14 +118,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.load.image("joker-small", faceAsset("joker_small.png"));
     this.load.image("ribbon-title", asset("ribbon_title.png"));
 
-    this.load.audio("sound-click", "/assets/audio/click.mp3");
-    this.load.audio("sound-select", "/assets/audio/select.mp3");
-    this.load.audio("sound-play", "/assets/audio/play.mp3");
-    this.load.audio("sound-pass", "/assets/audio/pass0.mp3");
-    this.load.audio("sound-deal", "/assets/audio/deal.mp3");
-    this.load.audio("sound-start", "/assets/audio/start.mp3");
-    this.load.audio("sound-win", "/assets/audio/end_win.mp3");
-    this.load.audio("sound-lose", "/assets/audio/end_lose.mp3");
+    for (const [key, file] of Object.entries(SOUND_FILES)) {
+      this.load.audio(key, `/assets/audio/${file}`);
+    }
   }
 
   create(): void {
@@ -137,7 +128,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
+      this.stopBgm();
     });
+    this.startBgm();
     this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
 
     this.feedbackText = this.add
@@ -239,12 +232,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.settlementLayer?.setVisible(false);
     }
 
-    if (event.type === "landlord_bid" || event.type === "landlord_robbed") {
-      this.playSound("sound-click");
+    if (event.type === "landlord_bid") {
+      this.playSound(event.called ? "sound-call" : "sound-nocall");
+    }
+
+    if (event.type === "landlord_robbed") {
+      this.playSound(event.robbed ? "sound-rob" : "sound-norob");
     }
 
     if (event.type === "cards_played") {
-      this.playSound("sound-play");
+      this.playSound(cardsSoundKey(event.play.combination.kind, event.play.cards[0]?.id));
       this.renderLastPlay(event.play.cards, event.play.playerId);
     }
 
@@ -333,7 +330,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.setFeedback(validation.reason);
       return;
     }
-    this.playSound("sound-play");
+    // 出牌音效改由权威 cards_played 事件按牌型播放（避免乐观音 + 事件回声重复）
     this.options.onPlay(validation.cardIds);
     this.selected.clear();
     this.renderHand();
@@ -344,7 +341,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     if (!this.ensureLocalTurn()) {
       return;
     }
-    this.playSound("sound-pass");
+    // 不出音效改由权威 player_passed 事件播放（避免乐观音 + 事件回声重复）
     this.options.onPass();
   }
 
@@ -931,6 +928,40 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       })
       .setOrigin(0.5);
     layer.add(countText);
+  }
+
+  /** 回合超时提醒（由 React 控制行在本地玩家剩余时间不多时触发） */
+  alertTimeout(): void {
+    this.playSound("sound-alarm");
+  }
+
+  /** 进入牌桌后按主题循环播放背景音乐；音频上下文若被浏览器锁定则等解锁后再起播 */
+  private startBgm(): void {
+    const key = bgmKey(this.options.theme);
+    const begin = (): void => {
+      if (this.bgm || this.bgmStopped) {
+        return;
+      }
+      // 背景音乐失败只记录日志，不打断游戏（与 playSound 一致）
+      try {
+        this.bgm = this.sound.add(key, { loop: true, volume: BGM_VOLUME });
+        this.bgm.play();
+      } catch (error) {
+        console.warn(`背景音乐播放失败: ${key}`, error);
+      }
+    };
+    if (this.sound.locked) {
+      this.sound.once(Phaser.Sound.Events.UNLOCKED, begin);
+    } else {
+      begin();
+    }
+  }
+
+  /** 离开牌桌时停止背景音乐（destroy 会同时停止播放并释放资源） */
+  private stopBgm(): void {
+    this.bgmStopped = true;
+    this.bgm?.destroy();
+    this.bgm = undefined;
   }
 
   private playSound(key: SoundKey): void {

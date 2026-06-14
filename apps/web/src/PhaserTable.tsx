@@ -10,6 +10,8 @@ export interface PhaserTableHandle {
   play(): void;
   pass(): void;
   tip(): void;
+  /** 回合超时提醒：播放闹钟音（由 React 控制行在本地玩家剩余时间不多时触发） */
+  alertTimeout(): void;
 }
 
 interface PhaserTableProps {
@@ -38,7 +40,8 @@ export const PhaserTable = forwardRef<PhaserTableHandle, PhaserTableProps>(funct
     () => ({
       play: () => bridgeRef.current?.play(),
       pass: () => bridgeRef.current?.pass(),
-      tip: () => bridgeRef.current?.tip()
+      tip: () => bridgeRef.current?.tip(),
+      alertTimeout: () => bridgeRef.current?.alertTimeout()
     }),
     []
   );

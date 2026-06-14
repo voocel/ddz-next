@@ -1,7 +1,8 @@
-import React, { Suspense, lazy, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { formatDateTime, formatDelta, formatRoundDelta } from "./app/formatters";
 import { useDdzApp } from "./app/useDdzApp";
+import { useTurnAlarm } from "./app/useTurnAlarm";
 import type { PhaserTableHandle } from "./PhaserTable";
 import { avatarAsset, nextTheme, themeAsset, themeLabel, type ThemeId } from "./theme";
 import "./styles.css";
@@ -100,6 +101,12 @@ function App() {
     turnTimer,
     username
   } = useDdzApp();
+
+  // 本地玩家回合快超时时播放闹钟音（音效在 Phaser 场景内，经命令式句柄触发）
+  const handleTurnAlarm = useCallback(() => {
+    tableRef.current?.alertTimeout();
+  }, []);
+  useTurnAlarm(turnTimer, session?.user.id ?? "", handleTurnAlarm);
 
   if (!session) {
     return (
