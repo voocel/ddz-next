@@ -1,26 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CardId } from "@ddz/domain";
-import type {
-  CoinLedgerItemDto,
-  GameEvent,
-  GameSnapshotDto,
-  LoginResponse,
-  RoomDto,
-  RoundHistoryItemDto,
-  RoundReplayDto
-} from "@ddz/protocol";
+import type { GameEvent, GameSnapshotDto, RoomDto } from "@ddz/protocol";
 import { getTableControlsState } from "../game/controlsState";
-import { createApiClient } from "../net/apiClient";
 import { createGameClient, isRecoverableDropCode } from "../net/gameClient";
 import { createMatchmakingClient } from "../net/matchmakingClient";
-import { clearStoredSession, readStoredSession, storeSession } from "./sessionStorage";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
-import type { AuthMode, TurnTimerState } from "./types";
-import { useReplayPlayback } from "./useReplayPlayback";
+import type { TurnTimerState } from "./types";
+import { useAuthSession } from "./useAuthSession";
+import { useHistoryReplay } from "./useHistoryReplay";
 import { useTurnTimerTicker } from "./useTurnTimerTicker";
-
-type AuthStatusTone = "idle" | "loading" | "success" | "error";
 
 const RECONNECT_RETRY_MS = 2_000;
 const RECONNECT_DEADLINE_MS = 15_000;
@@ -31,26 +20,18 @@ function delay(durationMs: number): Promise<void> {
   });
 }
 
+/**
+ * 应用根 hook：组合账号域（useAuthSession）、战绩回放域（useHistoryReplay）与房间/对局核心，
+ * 把少数跨域接线显式化——round_settled 后刷新战绩、进出房间时清回放——并对外暴露扁平状态包。
+ */
 export function useDdzApp() {
-  const [session, setSession] = useState<LoginResponse | null>(() => readStoredSession());
+  const { api, ...auth } = useAuthSession();
+  const history = useHistoryReplay(api, auth.session);
+
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [status, setStatus] = useState("等待登录");
-  const [authStatus, setAuthStatus] = useState(() => (session ? `已登录 ${session.user.nickname}` : "未登录"));
-  const [authStatusTone, setAuthStatusTone] = useState<AuthStatusTone>(() => (session ? "success" : "idle"));
-  const [authMode, setAuthMode] = useState<AuthMode>("login");
-  // 开发模式预填演示账号（与 API 的 DEMO_USER_ENABLED 演示用户对应），生产构建保持为空
-  const [username, setUsername] = useState(import.meta.env.DEV ? "alice" : "");
-  const [nickname, setNickname] = useState(import.meta.env.DEV ? "Alice" : "");
-  const [password, setPassword] = useState(import.meta.env.DEV ? "secret123" : "");
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [roomStatus, setRoomStatus] = useState("等待登录");
-  const [historyStatus, setHistoryStatus] = useState("等待登录");
-  const [replayStatus, setReplayStatus] = useState("未选择对局");
-  const [roundHistory, setRoundHistory] = useState<RoundHistoryItemDto[]>([]);
-  const [selectedReplay, setSelectedReplay] = useState<RoundReplayDto | null>(null);
-  const [replayStep, setReplayStep] = useState(0);
-  const [replayPlaying, setReplayPlaying] = useState(false);
-  const [coinLedgers, setCoinLedgers] = useState<CoinLedgerItemDto[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<RoomDto | null>(null);
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
@@ -78,73 +59,12 @@ export function useDdzApp() {
     saveAudioLevels(audioLevels);
   }, [audioLevels]);
 
-  const api = useMemo(
-    () =>
-      createApiClient({
-        endpoint: import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:3000",
-        onUnauthorized: () => {
-          // 令牌失效：清会话回登录屏
-          setSession(null);
-          clearStoredSession();
-          setAuthStatus("登录已过期，请重新登录");
-          setAuthStatusTone("error");
-        }
-      }),
-    []
-  );
-
-  const refreshHistory = useCallback(async (): Promise<void> => {
-    if (!session) {
-      return;
-    }
-
-    setHistoryStatus("加载战绩中");
-    try {
-      const [rounds, ledgers] = await Promise.all([
-        api.listRoundHistory(session.accessToken),
-        api.listCoinLedgers(session.accessToken)
-      ]);
-      setRoundHistory(rounds.rounds);
-      setCoinLedgers(ledgers.ledgers);
-      setSelectedReplay((current) => {
-        if (!current) {
-          return null;
-        }
-        return rounds.rounds.some((round) => round.id === current.id) ? current : null;
-      });
-      setHistoryStatus(rounds.rounds.length || ledgers.ledgers.length ? "已更新" : "暂无战绩");
-    } catch (error) {
-      setHistoryStatus(error instanceof Error ? error.message : "加载战绩失败");
-    }
-  }, [api, session]);
-
-  const loadReplay = useCallback(
-    async (roundId: string): Promise<void> => {
-      if (!session) {
-        return;
-      }
-
-      setReplayStatus("加载回放中");
-      try {
-        const response = await api.getRoundReplay(session.accessToken, roundId);
-        setSelectedReplay(response.round);
-        setReplayStep(0);
-        setReplayPlaying(false);
-        setReplayStatus(`${response.round.actions.length} 条事件`);
-      } catch (error) {
-        setSelectedReplay(null);
-        setReplayStatus(error instanceof Error ? error.message : "加载回放失败");
-      }
-    },
-    [api, session]
-  );
-
   const client = useMemo(
     () =>
       createGameClient({
         endpoint: import.meta.env.VITE_GAME_ENDPOINT ?? "http://localhost:2567",
-        playerId: session?.user.id ?? "",
-        accessToken: session?.accessToken ?? "",
+        playerId: auth.session?.user.id ?? "",
+        accessToken: auth.session?.accessToken ?? "",
         roomCode: selectedRoom?.code ?? "",
         quickStart: selectedRoomQuickStart,
         onStatus: setStatus,
@@ -174,25 +94,18 @@ export function useDdzApp() {
           }
           if (event.type === "round_settled") {
             setTurnTimer(null);
-            void refreshHistory();
+            void history.refreshHistory();
           }
           setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
-    [refreshHistory, selectedRoom?.code, selectedRoomQuickStart, session?.accessToken, session?.user.id]
+    [history.refreshHistory, selectedRoom?.code, selectedRoomQuickStart, auth.session?.accessToken, auth.session?.user.id]
   );
 
   const tableControls = useMemo(
-    () => getTableControlsState(snapshot, session?.user.id ?? "", Boolean(selectedRoom)),
-    [selectedRoom, session?.user.id, snapshot]
+    () => getTableControlsState(snapshot, auth.session?.user.id ?? "", Boolean(selectedRoom)),
+    [selectedRoom, auth.session?.user.id, snapshot]
   );
-
-  const clearReplay = useCallback((): void => {
-    setSelectedReplay(null);
-    setReplayStep(0);
-    setReplayPlaying(false);
-    setReplayStatus("未选择对局");
-  }, []);
 
   // 房间内游戏状态的统一清理
   const resetRoomState = useCallback((): void => {
@@ -208,28 +121,25 @@ export function useDdzApp() {
       setSelectedRoom(room);
       setSelectedRoomQuickStart(options.quickStart === true);
       resetRoomState();
-      clearReplay();
+      history.clearReplay();
       setStatus(`准备进入房间 ${room.code}`);
       setRooms((items) => [room, ...items.filter((item) => item.id !== room.id)]);
     },
-    [clearReplay, resetRoomState, stopMatching]
+    [history.clearReplay, resetRoomState, stopMatching]
   );
 
-  const resetAuthenticatedState = useCallback(
+  /** 登出/无会话时清空房间与大厅域状态（战绩回放域由其自身的 session 副作用清理） */
+  const resetRoomLobby = useCallback(
     (nextStatus: string): void => {
       stopMatching();
       setStatus(nextStatus);
       setRoomStatus(nextStatus);
-      setHistoryStatus(nextStatus);
       setRooms([]);
-      setRoundHistory([]);
-      setCoinLedgers([]);
       setSelectedRoom(null);
       setSelectedRoomQuickStart(false);
-      clearReplay();
       resetRoomState();
     },
-    [clearReplay, resetRoomState, stopMatching]
+    [resetRoomState, stopMatching]
   );
 
   const handlePass = useCallback((): void => {
@@ -244,7 +154,7 @@ export function useDdzApp() {
   );
 
   const refreshRooms = useCallback(async (): Promise<void> => {
-    if (!session) {
+    if (!auth.session) {
       return;
     }
 
@@ -256,48 +166,7 @@ export function useDdzApp() {
     } catch (error) {
       setRoomStatus(error instanceof Error ? error.message : "加载房间失败");
     }
-  }, [api, session]);
-
-  const submitAuth = useCallback(
-    async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-      event.preventDefault();
-      setAuthStatus(authMode === "login" ? "正在登录..." : "正在注册...");
-      setAuthStatusTone("loading");
-
-      try {
-        const response =
-          authMode === "login"
-            ? await api.login({
-                username,
-                password
-              })
-            : await api.register({
-                username,
-                nickname,
-                password
-              });
-        setSession(response);
-        storeSession(response);
-        setAuthStatus(`已登录 ${response.user.nickname}`);
-        setAuthStatusTone("success");
-        setRoomStatus("加载房间中");
-      } catch (error) {
-        setSession(null);
-        clearStoredSession();
-        setAuthStatus(error instanceof Error ? error.message : authMode === "login" ? "登录失败，请稍后重试。" : "注册失败，请稍后重试。");
-        setAuthStatusTone("error");
-      }
-    },
-    [api, authMode, nickname, password, username]
-  );
-
-  const logout = useCallback((): void => {
-    // 断线与状态清理由 session/selectedRoom 副作用统一处理
-    setSession(null);
-    clearStoredSession();
-    setAuthStatus("未登录");
-    setAuthStatusTone("idle");
-  }, []);
+  }, [api, auth.session]);
 
   const leaveRoom = useCallback((): void => {
     if (!selectedRoom) {
@@ -307,27 +176,27 @@ export function useDdzApp() {
     // 置空 selectedRoom 后，连接副作用会负责断开与游戏状态清理
     setSelectedRoom(null);
     setSelectedRoomQuickStart(false);
-    clearReplay();
+    history.clearReplay();
     void refreshRooms();
-  }, [clearReplay, refreshRooms, selectedRoom]);
+  }, [history.clearReplay, refreshRooms, selectedRoom]);
 
   const createRoom = useCallback(async (): Promise<void> => {
-    if (!session) {
+    if (!auth.session) {
       return;
     }
 
     setRoomStatus("创建房间中");
     try {
-      const response = await api.createRoom(session.accessToken);
+      const response = await api.createRoom(auth.session.accessToken);
       enterRoom(response.room);
       setRoomStatus(`已创建房间 ${response.room.code}`);
     } catch (error) {
       setRoomStatus(error instanceof Error ? error.message : "创建房间失败");
     }
-  }, [api, enterRoom, session]);
+  }, [api, enterRoom, auth.session]);
 
   const matchRoom = useCallback((): void => {
-    if (!session || matchClientRef.current) {
+    if (!auth.session || matchClientRef.current) {
       return;
     }
 
@@ -335,7 +204,7 @@ export function useDdzApp() {
     setMatchQueue({ waiting: 1, position: 1 });
     const matchClient = createMatchmakingClient({
       endpoint: import.meta.env.VITE_GAME_ENDPOINT ?? "http://localhost:2567",
-      accessToken: session.accessToken,
+      accessToken: auth.session.accessToken,
       onEvent: (event) => {
         if (event.type === "queue_status") {
           setMatchQueue({ waiting: event.waiting, position: event.position });
@@ -358,7 +227,7 @@ export function useDdzApp() {
     });
     matchClientRef.current = matchClient;
     void matchClient.start();
-  }, [enterRoom, session]);
+  }, [enterRoom, auth.session]);
 
   const cancelMatch = useCallback((): void => {
     stopMatching();
@@ -366,19 +235,18 @@ export function useDdzApp() {
   }, [stopMatching]);
 
   useEffect(() => {
-    if (!session) {
-      resetAuthenticatedState("等待登录");
+    if (!auth.session) {
+      resetRoomLobby("等待登录");
       return;
     }
 
     void refreshRooms();
-    void refreshHistory();
-  }, [refreshHistory, refreshRooms, resetAuthenticatedState, session]);
+  }, [auth.session, refreshRooms, resetRoomLobby]);
 
   useEffect(() => {
-    if (!session || !selectedRoom) {
+    if (!auth.session || !selectedRoom) {
       client.disconnect();
-      setStatus(session ? "请选择房间" : "等待登录");
+      setStatus(auth.session ? "请选择房间" : "等待登录");
       resetRoomState();
       return;
     }
@@ -387,11 +255,11 @@ export function useDdzApp() {
     return () => {
       client.disconnect();
     };
-  }, [client, resetRoomState, selectedRoom, session]);
+  }, [client, resetRoomState, selectedRoom, auth.session]);
 
   // 断线自动重连循环：2s 间隔重试至 15s，成功则服务端补发快照无缝恢复，超时回大厅
   useEffect(() => {
-    if (reconnectRequest === null || !session || !selectedRoom) {
+    if (reconnectRequest === null || !auth.session || !selectedRoom) {
       return;
     }
 
@@ -419,65 +287,38 @@ export function useDdzApp() {
     return () => {
       cancelled = true;
     };
-  }, [client, reconnectRequest, selectedRoom, session]);
+  }, [client, reconnectRequest, selectedRoom, auth.session]);
 
-  useReplayPlayback({
-    replayPlaying,
-    replayStep,
-    selectedReplay,
-    setReplayPlaying,
-    setReplayStep
-  });
   useTurnTimerTicker(turnTimer, setTurnTimer);
 
   return {
-    authMode,
-    authStatus,
-    authStatusTone,
+    ...auth,
+    ...history,
+    audioLevels,
+    setAudioLevels,
+    theme,
+    setTheme,
     cancelMatch,
-    clearReplay,
     client,
-    coinLedgers,
     createRoom,
     enterRoom,
     events,
     handlePass,
     handlePlay,
-    historyStatus,
     leaveRoom,
-    loadReplay,
-    logout,
     matchQueue,
     matchRoom,
-    nickname,
-    password,
     reconnecting: reconnectRequest !== null,
-    refreshHistory,
     refreshRooms,
-    replayPlaying,
-    replayStatus,
-    replayStep,
     roomStatus,
     rooms,
-    roundHistory,
-    selectedReplay,
     selectedRoom,
-    session,
-    audioLevels,
-    setAudioLevels,
-    setAuthMode,
-    setNickname,
-    setPassword,
-    setReplayPlaying,
-    setReplayStep,
-    setTheme,
-    setUsername,
     snapshot,
     status,
-    submitAuth,
     tableControls,
-    theme,
-    turnTimer,
-    username
+    turnTimer
   };
 }
+
+/** 应用根状态包：useDdzApp 的返回类型，供各屏/控制组件以单一道具接收 */
+export type DdzApp = ReturnType<typeof useDdzApp>;

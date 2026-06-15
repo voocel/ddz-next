@@ -3,6 +3,8 @@ import { identifyCombination, suggestPlay, type CardId } from "@ddz/domain";
 import { gameSnapshotSchema } from "@ddz/protocol";
 import type { CardDto, GameEvent, GameSnapshotDto, RoundReplayDto } from "@ddz/protocol";
 import { describeSelectedCards, toDomainCard, validateSelectedPlay } from "./playValidation";
+import { createCardFace, formatCard, isRed } from "./cardFace";
+import { HandSelection, type HandDragResult, type RenderedHandCard } from "./handSelection";
 import { cardsSoundKey, SOUND_FILES, type SoundKey } from "./sounds";
 import type { AudioLevels } from "../audio";
 import {
@@ -42,13 +44,6 @@ interface TableSceneOptions {
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-type CardSuit = "♥" | "♦" | "♠" | "♣";
-
-interface RenderedHandCard {
-  readonly id: CardId;
-  readonly bounds: Phaser.Geom.Rectangle;
-}
-
 const TEXT_STYLE = {
   fontFamily: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
   fontSize: "16px",
@@ -73,7 +68,7 @@ const HAND_RESTING_Y = 632;
 const HAND_SELECTED_Y = 612;
 
 export class TableScene extends Phaser.Scene implements TableGameBridge {
-  private readonly selected = new Set<CardId>();
+  private readonly selection = new HandSelection();
   private hand: CardDto[] = [];
   private snapshot: GameSnapshotDto | null = null;
   private replayMode = false;
@@ -88,16 +83,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private handLayer?: Phaser.GameObjects.Container;
   private lastPlayLayer?: Phaser.GameObjects.Container;
   private seatsLayer?: Phaser.GameObjects.Container;
-  private renderedHandCards: RenderedHandCard[] = [];
   private sfxLevel: number;
-  private dragSelection:
-    | {
-        readonly pointerId: number;
-        readonly mode: "add" | "remove";
-        readonly touched: Set<CardId>;
-        moved: boolean;
-      }
-    | null = null;
 
   constructor(private readonly options: TableSceneOptions) {
     super("TableScene");
@@ -177,13 +163,13 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.lastPlayLayer = this.add.container(0, 0);
     this.handLayer = this.add.container(0, 0);
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      this.beginHandDrag(pointer);
+      this.applyDragResult(this.selection.beginDrag(pointer, this.replayMode));
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      this.handleHandDragMove(pointer);
+      this.selection.moveDrag(pointer);
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      this.finishHandDrag(pointer);
+      this.applyDragResult(this.selection.finishDrag(pointer));
     });
 
     // 场景就绪前到达的 snapshot/hand/回放在此补渲染，避免白屏
@@ -270,7 +256,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
         this.snapshot = this.liveState?.snapshot ?? null;
         this.hand = this.liveState?.hand ?? [];
         this.liveState = null;
-        this.selected.clear();
+        this.selection.clear();
         this.renderLiveState();
       }
       this.setFeedback("");
@@ -283,7 +269,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
     this.replayState = { replay, step };
 
-    this.selected.clear();
+    this.selection.clear();
     this.hand = [];
     this.snapshot = null;
     this.renderHand();
@@ -327,14 +313,14 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   /** 出牌：校验当前选中的牌，非法则画布内反馈，合法则提交并清空选牌 */
   play(): void {
-    const validation = validateSelectedPlay(this.hand, this.selected, this.snapshot, this.options.localPlayerId);
+    const validation = validateSelectedPlay(this.hand, this.selection.ids(), this.snapshot, this.options.localPlayerId);
     if (!validation.ok) {
       this.setFeedback(validation.reason);
       return;
     }
     // 出牌音效改由权威 cards_played 事件按牌型播放（避免乐观音 + 事件回声重复）
     this.options.onPlay(validation.cardIds);
-    this.selected.clear();
+    this.selection.clear();
     this.renderHand();
   }
 
@@ -387,7 +373,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     this.handLayer.removeAll(true);
-    this.renderedHandCards = [];
+    const rendered: RenderedHandCard[] = [];
     const cardWidth = 74;
     const cardHeight = 106;
     const gap = 30;
@@ -396,51 +382,41 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     this.hand.forEach((card, index) => {
       const cardId = card.id as CardId;
-      const selected = this.selected.has(cardId);
+      const selected = this.selection.has(cardId);
       const x = startX + index * gap;
       const y = selected ? HAND_SELECTED_Y : HAND_RESTING_Y;
       // 手牌横向重叠，右侧牌盖在左侧牌上；除最后一张外只露出左侧 gap 宽的可见条。
-      // 命中区限制在可见条，且统一走场景级 pointerdown + findRenderedHandCard 做世界坐标命中，
+      // 命中区限制在可见条，命中判定见 HandSelection（世界坐标矩形），
       // 不用每张牌各自 setInteractive——大量重叠的 Container 命中区会被 Phaser 整体错位一张。
       const isLast = index === this.hand.length - 1;
       const hitWidth = isLast ? cardWidth : gap;
-      const cardFace = this.createCardFace(x, y, formatCard(card), isRed(card), {
+      const cardFace = createCardFace(this, x, y, formatCard(card), isRed(card), {
         selected,
         width: cardWidth,
         height: cardHeight
       });
-      this.renderedHandCards.push({
+      rendered.push({
         id: cardId,
         bounds: new Phaser.Geom.Rectangle(x - cardWidth / 2, y - cardHeight / 2, hitWidth, cardHeight)
       });
 
       this.handLayer?.add(cardFace);
     });
+
+    this.selection.setRendered(rendered);
   }
 
-  /** 场景级手牌命中：用 findRenderedHandCard 在世界坐标判定，避开 Phaser 重叠 Container 命中区错位 */
-  private beginHandDrag(pointer: Phaser.Input.Pointer): void {
-    if (this.replayMode) {
-      return;
+  /** 拖拽选牌的副作用（重绘/清反馈/选牌音）由 HandSelection 的结果驱动，机制本身见 handSelection.ts */
+  private applyDragResult(result: HandDragResult): void {
+    if (result.clearFeedback) {
+      this.setFeedback("");
     }
-    const cardId = this.findRenderedHandCard(pointer.worldX, pointer.worldY);
-    if (!cardId) {
-      // 点击手牌区域外：取消全部已选
-      if (this.selected.size > 0) {
-        this.selected.clear();
-        this.setFeedback("");
-        this.renderHand();
-      }
-      return;
+    if (result.playSelect) {
+      this.playSound("sound-select");
     }
-    const mode = this.selected.has(cardId) ? "remove" : "add";
-    this.dragSelection = {
-      pointerId: pointer.id,
-      mode,
-      touched: new Set<CardId>(),
-      moved: false
-    };
-    this.applyDragSelection(cardId);
+    if (result.render) {
+      this.renderHand();
+    }
   }
 
   private applySuggestion(): void {
@@ -460,19 +436,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
     const suggestion = suggestPlay(this.hand.map(toDomainCard), previous);
     if (!suggestion) {
-      this.selected.clear();
+      this.selection.clear();
       this.renderHand();
       this.setFeedback("没有可压过上一手的牌");
       return;
     }
 
-    this.selected.clear();
-    for (const card of suggestion) {
-      this.selected.add(card.id);
-    }
+    this.selection.select(suggestion.map((card) => card.id));
     this.playSound("sound-select");
     this.renderHand();
-    this.setFeedback(`提示: ${describeSelectedCards(this.hand, this.selected)}`);
+    this.setFeedback(`提示: ${describeSelectedCards(this.hand, this.selection.ids())}`);
   }
 
   private ensureLocalTurn(): boolean {
@@ -616,7 +589,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const card = cards[index];
       const x = startX + index * 58;
       if (card) {
-        const cardFace = this.createCardFace(x, 126, formatCard(card), isRed(card), {
+        const cardFace = createCardFace(this, x, 126, formatCard(card), isRed(card), {
           fontSize: "14px",
           width: 48,
           height: 68
@@ -692,7 +665,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     cards.forEach((card, index) => {
       const x = startX + index * 48;
       const y = LAST_PLAY_Y;
-      const cardFace = this.createCardFace(x, y, formatCard(card), isRed(card), {
+      const cardFace = createCardFace(this, x, y, formatCard(card), isRed(card), {
         width: 72,
         height: 100
       });
@@ -723,7 +696,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const startX = 640 - Math.max(0, cardIds.length - 1) * 24;
     cardIds.forEach((cardId, index) => {
       const x = startX + index * 48;
-      const cardFace = this.createCardFace(x, LAST_PLAY_Y, formatCardId(cardId), isRedCardId(cardId), {
+      const cardFace = createCardFace(this, x, LAST_PLAY_Y, formatCardId(cardId), isRedCardId(cardId), {
         fontSize: "17px",
         width: 72,
         height: 100
@@ -766,143 +739,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       // 回放数据不含逐步手牌数，不渲染牌背堆，避免显示假数量
       seatsLayer.add([plate, avatar, label, meta]);
     });
-  }
-
-  /**
-   * 牌面文字的纹理超采样倍率。相机为 fit 缩放（非整数倍），文字纹理须按当前
-   * 相机缩放倍率渲染才能 1:1 显示；只取 dpr 会在 zoom>dpr 时上采样发虚。
-   */
-  private cardTextResolution(): number {
-    return Math.max(getTableDevicePixelRatio(), Math.ceil(this.cameras.main.zoom));
-  }
-
-  private createCardFace(
-    x: number,
-    y: number,
-    label: string,
-    red: boolean,
-    options: {
-      readonly fontSize?: string;
-      readonly height: number;
-      readonly selected?: boolean;
-      readonly width: number;
-    }
-  ): Phaser.GameObjects.Container {
-    const width = options.width;
-    const height = options.height;
-    const color = red ? "#c41f1f" : "#171717";
-    const suit = readCardSuit(label);
-    const rank = suit ? label.slice(0, -1) : label;
-    // 牌面统一圆角奶油底板，不随主题变化（仅牌背受主题影响）
-    const radius = Math.max(5, Math.round(width * 0.08));
-    const innerRadius = Math.max(3, radius - 2);
-    const container = this.add.container(x, y);
-    const graphics = this.add.graphics();
-
-    graphics.fillStyle(0x000000, 0.26);
-    graphics.fillRoundedRect(-width / 2 + 3, -height / 2 + 4, width, height, radius);
-    // 暖象牙底色 + 轻微内panel，避免纯白卡面过亮
-    graphics.fillStyle(0xf6edd9, 1);
-    graphics.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
-    graphics.fillStyle(0xefe4cd, 1);
-    graphics.fillRoundedRect(-width / 2 + 4, -height / 2 + 4, width - 8, height - 8, innerRadius);
-    graphics.lineStyle(
-      options.selected ? 3 : 1,
-      options.selected ? 0xf4c542 : 0xb68f5a,
-      options.selected ? 1 : 0.72
-    );
-    graphics.strokeRoundedRect(-width / 2 + 1, -height / 2 + 1, width - 2, height - 2, radius);
-    // 内高光收弱，仅留一丝纸面光泽，不要发亮发糊
-    graphics.lineStyle(1, 0xffffff, 0.22);
-    graphics.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, innerRadius);
-
-    container.add(graphics);
-
-    if (suit) {
-      this.addStandardCardFace(container, rank, suit, color, width, height, options.fontSize);
-    } else {
-      this.addJokerCardFace(container, label, red, width, height, options.fontSize);
-    }
-
-    if (options.selected) {
-      const selectedMark = this.add
-        .text(0, -height / 2 - 10, "已选", {
-          fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: "11px",
-          fontStyle: "800",
-          color: "#1a1206",
-          backgroundColor: "#f4c542",
-          resolution: this.cardTextResolution(),
-          padding: {
-            x: 6,
-            y: 2
-          }
-        })
-        .setOrigin(0.5);
-      container.add(selectedMark);
-    }
-
-    container.setSize(width, height);
-    return container;
-  }
-
-  private addStandardCardFace(
-    container: Phaser.GameObjects.Container,
-    rank: string,
-    suit: CardSuit,
-    color: string,
-    width: number,
-    height: number,
-    fontSize?: string
-  ): void {
-    const rankSize = fontSize ?? `${Math.max(16, Math.round(width * 0.28))}px`;
-    const res = this.cardTextResolution();
-    const cornerX = -width / 2 + Math.max(6, width * 0.1);
-    const cornerY = -height / 2 + Math.max(5, height * 0.08);
-    const rightX = width / 2 - Math.max(6, width * 0.1);
-    const rightY = height / 2 - Math.max(5, height * 0.08);
-    const suitKey = suitImageKey(suit);
-    const centerSuit = this.add
-      .image(0, height * 0.08, suitKey)
-      .setDisplaySize(width * 0.46, width * 0.46)
-      .setAlpha(0.94);
-    const cornerSuitWidth = Math.max(11, width * 0.17);
-    const topRank = this.add.text(cornerX, cornerY, rank, cardTextStyle(rankSize, color, res)).setOrigin(0, 0);
-    const topSuit = this.add
-      .image(cornerX + width * 0.02, cornerY + height * 0.22, suitKey)
-      .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
-      .setOrigin(0, 0);
-    const bottomRank = this.add.text(rightX, rightY, rank, cardTextStyle(rankSize, color, res)).setOrigin(1, 1);
-    const bottomSuit = this.add
-      .image(rightX - width * 0.02, rightY - height * 0.22, suitKey)
-      .setDisplaySize(cornerSuitWidth, cornerSuitWidth)
-      .setOrigin(1, 1);
-
-    container.add([centerSuit, topRank, topSuit, bottomRank, bottomSuit]);
-  }
-
-  private addJokerCardFace(
-    container: Phaser.GameObjects.Container,
-    label: string,
-    red: boolean,
-    width: number,
-    height: number,
-    fontSize?: string
-  ): void {
-    const color = red ? "#c41f1f" : "#171717";
-    const cornerSize = fontSize ?? `${Math.max(13, Math.round(width * 0.2))}px`;
-    const res = this.cardTextResolution();
-    const cornerX = -width / 2 + Math.max(6, width * 0.1);
-    const cornerY = -height / 2 + Math.max(6, height * 0.08);
-    const rightX = width / 2 - Math.max(6, width * 0.1);
-    const rightY = height / 2 - Math.max(6, height * 0.08);
-    const jokerKey = red ? "joker-big" : "joker-small";
-    const portrait = this.add.image(0, height * 0.05, jokerKey);
-    portrait.setScale(Math.min((height * 0.62) / portrait.height, (width * 0.66) / portrait.width));
-    const topText = this.add.text(cornerX, cornerY, label, cardTextStyle(cornerSize, color, res)).setOrigin(0, 0);
-    const bottomText = this.add.text(rightX, rightY, label, cardTextStyle(cornerSize, color, res)).setOrigin(1, 1);
-
-    container.add([portrait, topText, bottomText]);
   }
 
   /** 对手手牌：一张牌一张背的紧凑横排，余牌数徽章叠在中央 */
@@ -977,12 +813,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   private pruneSelectedCards(): void {
-    const handIds = new Set(this.hand.map((card) => card.id));
-    for (const cardId of this.selected) {
-      if (!handIds.has(cardId)) {
-        this.selected.delete(cardId);
-      }
-    }
+    this.selection.prune(new Set(this.hand.map((card) => card.id)));
   }
 
   private findSeatPosition(playerId: string): { x: number; y: number } | null {
@@ -996,102 +827,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     return this.seatPositionFor(player.seat, localSeat);
   }
 
-  private handleHandDragMove(pointer: Phaser.Input.Pointer): void {
-    if (!this.dragSelection || this.dragSelection.pointerId !== pointer.id) {
-      return;
-    }
-
-    if (Math.abs(pointer.position.x - pointer.downX) > 6 || Math.abs(pointer.position.y - pointer.downY) > 6) {
-      this.dragSelection.moved = true;
-    }
-
-    const cardId = this.findRenderedHandCard(pointer.worldX, pointer.worldY);
-    if (cardId) {
-      this.applyDragSelection(cardId);
-    }
-  }
-
-  private finishHandDrag(pointer: Phaser.Input.Pointer): void {
-    if (!this.dragSelection || this.dragSelection.pointerId !== pointer.id) {
-      return;
-    }
-
-    const touched = this.dragSelection.touched.size;
-    this.dragSelection = null;
-    if (touched > 0) {
-      this.playSound("sound-select");
-      this.renderHand();
-    }
-  }
-
-  private applyDragSelection(cardId: CardId): void {
-    const drag = this.dragSelection;
-    if (!drag || drag.touched.has(cardId)) {
-      return;
-    }
-
-    if (drag.mode === "add") {
-      this.selected.add(cardId);
-    } else {
-      this.selected.delete(cardId);
-    }
-
-    drag.touched.add(cardId);
-  }
-
-  private findRenderedHandCard(x: number, y: number): CardId | null {
-    for (let index = this.renderedHandCards.length - 1; index >= 0; index -= 1) {
-      const card = this.renderedHandCards[index];
-      if (card && Phaser.Geom.Rectangle.Contains(card.bounds, x, y)) {
-        return card.id;
-      }
-    }
-
-    return null;
-  }
-}
-
-function formatCard(card: CardDto): string {
-  if (card.id === "SJ") {
-    return "小王";
-  }
-  if (card.id === "BJ") {
-    return "大王";
-  }
-  const suit = card.suit === "hearts" ? "♥" : card.suit === "diamonds" ? "♦" : card.suit === "spades" ? "♠" : "♣";
-  return `${card.rank}${suit}`;
-}
-
-function isRed(card: CardDto): boolean {
-  return card.suit === "hearts" || card.suit === "diamonds" || card.id === "BJ";
-}
-
-function readCardSuit(label: string): CardSuit | null {
-  const suit = label.at(-1);
-  return suit === "♥" || suit === "♦" || suit === "♠" || suit === "♣" ? suit : null;
-}
-
-function suitImageKey(suit: CardSuit): string {
-  switch (suit) {
-    case "♥":
-      return "suit-hearts";
-    case "♦":
-      return "suit-diamonds";
-    case "♠":
-      return "suit-spades";
-    case "♣":
-      return "suit-clubs";
-  }
-}
-
-function cardTextStyle(fontSize: string, color: string, resolution: number): Phaser.Types.GameObjects.Text.TextStyle {
-  return {
-    fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize,
-    fontStyle: "900",
-    color,
-    resolution
-  };
 }
 
 function parseReplaySnapshot(value: unknown): GameSnapshotDto | null {
