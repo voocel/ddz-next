@@ -1,4 +1,5 @@
 import type { RoomActionType, RoomLiveStateEnvelope, RoundActionType } from "@ddz/protocol";
+import { GameActionError } from "../src/actions/errors";
 import type { AuthUserRecord, CreateUserInput, UserRepository } from "../src/auth/service";
 import type {
   GameActionMutationRecord,
@@ -191,6 +192,11 @@ export class InMemoryGameActionRepository implements GameActionRepository {
       }
       actions.push(this.createAction(round.id, action));
       if (action.settlement) {
+        // 镜像 Prisma applySettlement 的 endedAt IS NULL 守卫：已结算的 round 不得二次结算（防金币重复入账）
+        const persisted = this.rounds.find((item) => item.id === round?.id);
+        if (persisted?.endedAt) {
+          throw new GameActionError("Round was already settled.", 409);
+        }
         this.settlements.push({
           roundId: round.id,
           landlordId: action.settlement.landlordId,

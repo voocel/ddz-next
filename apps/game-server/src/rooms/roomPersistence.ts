@@ -3,7 +3,7 @@ import type { GameActionType, RoomLiveStateEnvelope, RoomStatus } from "@ddz/pro
 import { randomUUID } from "node:crypto";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
-import { toSnapshotDto } from "../dto.js";
+import { readPlayerKind, toSnapshotDto } from "../dto.js";
 import { mapSnapshotToRoomStatus } from "./statusMapping.js";
 
 export interface PendingRoomAction {
@@ -122,12 +122,4 @@ export class RoomPersistenceError extends Error {
     });
     this.name = "RoomPersistenceError";
   }
-}
-
-function readPlayerKind(playerId: PlayerId, snapshot: GameSnapshot): "human" | "bot" {
-  const player = snapshot.players.find((item) => item.id === playerId);
-  if (!player) {
-    throw new Error(`Unknown player: ${playerId}`);
-  }
-  return player.kind;
 }

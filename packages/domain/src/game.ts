@@ -106,6 +106,8 @@ export interface GameTableState {
   readonly currentPlayerId: PlayerId | null;
   readonly landlordId: PlayerId | null;
   readonly bidCandidateId: PlayerId | null;
+  /** 首叫地主者；抢地主一圈后若有人抢过，由他获得唯一一次反抢机会。仅 robbing 相位非空。 */
+  readonly firstBidderId: PlayerId | null;
   readonly landlordCards: readonly CardId[];
   readonly bottomCards: readonly CardId[];
   readonly lastPlay: { readonly playerId: PlayerId; readonly cards: readonly CardId[] } | null;
@@ -125,6 +127,7 @@ export class GameTable {
   private currentPlayerId: PlayerId | null = null;
   private landlordId: PlayerId | null = null;
   private bidCandidateId: PlayerId | null = null;
+  private firstBidderId: PlayerId | null = null;
   private landlordCards: Card[] = [];
   private bottomCards: Card[] = [];
   private lastPlay: PublicPlay | null = null;
@@ -138,47 +141,21 @@ export class GameTable {
   private readonly playCounts = new Map<PlayerId, number>();
 
   addPlayer(playerId: PlayerId): SeatIndex {
-    if (this.players.has(playerId)) {
-      const seat = this.players.get(playerId)?.seat;
-      if (seat === undefined) {
-        throw new Error(`Player ${playerId} exists without a seat.`);
-      }
-      return seat;
-    }
-
-    if (this.players.size >= 3) {
-      throw new Error("The table is full.");
-    }
-
-    const seat = this.players.size as SeatIndex;
-    this.players.set(playerId, {
-      id: playerId,
-      kind: "human",
-      seat,
-      ready: false,
-      connected: true,
-      hand: [],
-      score: 0
-    });
-
-    if (this.players.size === 3) {
-      this.phase = "ready";
-    }
-
-    return seat;
+    return this.seatPlayer(playerId, "human");
   }
 
   addBot(playerId: PlayerId): SeatIndex {
     if (!playerId.startsWith("bot:")) {
       throw new Error("Bot player ids must use the bot: prefix.");
     }
+    return this.seatPlayer(playerId, "bot");
+  }
 
-    if (this.players.has(playerId)) {
-      const seat = this.players.get(playerId)?.seat;
-      if (seat === undefined) {
-        throw new Error(`Bot ${playerId} exists without a seat.`);
-      }
-      return seat;
+  /** 落座：人类与 bot 共用的座位分配、满座判断与满员转 ready，仅入座身份（kind）不同。 */
+  private seatPlayer(playerId: PlayerId, kind: PlayerKind): SeatIndex {
+    const existing = this.players.get(playerId);
+    if (existing) {
+      return existing.seat;
     }
 
     if (this.players.size >= 3) {
@@ -188,7 +165,7 @@ export class GameTable {
     const seat = this.players.size as SeatIndex;
     this.players.set(playerId, {
       id: playerId,
-      kind: "bot",
+      kind,
       seat,
       ready: false,
       connected: true,
@@ -264,6 +241,7 @@ export class GameTable {
 
     if (called) {
       this.bidCandidateId = playerId;
+      this.firstBidderId = playerId;
       this.robQueue = this.otherPlayersInTurnOrder(playerId);
       this.robIndex = 0;
       this.phase = "robbing";
@@ -319,6 +297,24 @@ export class GameTable {
     this.robIndex += 1;
 
     if (this.robIndex >= this.robQueue.length) {
+      // 其余两人抢完后，若期间有人抢走地主位，首叫者获得唯一一次反抢机会（标准规则）。
+      // bidCandidateId !== firstBidderId 即“有人抢过”；includes 守卫保证只追加一次、反抢后不再触发。
+      if (
+        this.firstBidderId !== null &&
+        this.bidCandidateId !== this.firstBidderId &&
+        !this.robQueue.includes(this.firstBidderId)
+      ) {
+        this.robQueue = [...this.robQueue, this.firstBidderId];
+        this.currentPlayerId = this.firstBidderId;
+        return {
+          playerId,
+          robbed,
+          decided: false,
+          landlordId: null,
+          snapshot: this.snapshot()
+        };
+      }
+
       const landlordId = this.bidCandidateId;
       this.finalizeLandlord(landlordId);
       return {
@@ -457,6 +453,7 @@ export class GameTable {
       currentPlayerId: this.currentPlayerId,
       landlordId: this.landlordId,
       bidCandidateId: this.bidCandidateId,
+      firstBidderId: this.firstBidderId,
       landlordCards: this.landlordCards.map((card) => card.id),
       bottomCards: this.bottomCards.map((card) => card.id),
       lastPlay: this.lastPlay
@@ -497,6 +494,7 @@ export class GameTable {
     this.currentPlayerId = state.currentPlayerId;
     this.landlordId = state.landlordId;
     this.bidCandidateId = state.bidCandidateId;
+    this.firstBidderId = state.firstBidderId;
     this.landlordCards = parseCardIds(state.landlordCards);
     this.bottomCards = parseCardIds(state.bottomCards);
     this.lastPlay = state.lastPlay ? rebuildPlay(state.lastPlay) : null;
@@ -533,6 +531,7 @@ export class GameTable {
     this.settlement = null;
     this.passCount = 0;
     this.bidAttempts = 0;
+    this.firstBidderId = null;
     this.robQueue = [];
     this.robIndex = 0;
     this.robCount = 0;
@@ -561,6 +560,7 @@ export class GameTable {
     this.settlement = null;
     this.passCount = 0;
     this.bidAttempts = 0;
+    this.firstBidderId = null;
     this.robQueue = [];
     this.robIndex = 0;
     this.robCount = 0;
@@ -575,6 +575,7 @@ export class GameTable {
     this.landlordCards = [...this.bottomCards];
     this.bottomCards = [];
     this.landlordId = landlordId;
+    this.firstBidderId = null;
     this.currentPlayerId = landlordId;
     this.lastPlay = null;
     this.settlement = null;
@@ -646,8 +647,8 @@ export class GameTable {
         .every((player) => (this.playCounts.get(player.id) ?? 0) === 0);
     }
 
-    // 反春：地主只出过首手就被农民打完。
-    return (this.playCounts.get(this.landlordId) ?? 0) <= 1;
+    // 反春：地主只出过首手就被农民打完。地主必为首家出牌，获胜局其出牌数恒 ≥ 1，故 === 1 即“只出首手”。
+    return (this.playCounts.get(this.landlordId) ?? 0) === 1;
   }
 
   private createSettlement(winnerId: PlayerId): Settlement {
@@ -739,6 +740,7 @@ function validateTableState(state: GameTableState): void {
   belongs(state.currentPlayerId, "currentPlayerId");
   belongs(state.landlordId, "landlordId");
   belongs(state.bidCandidateId, "bidCandidateId");
+  belongs(state.firstBidderId, "firstBidderId");
   belongs(state.lastPlay?.playerId ?? null, "lastPlay player");
   for (const playerId of state.robQueue) {
     belongs(playerId, "robQueue entry");
@@ -775,7 +777,13 @@ function validateTableState(state: GameTableState): void {
 
   switch (state.phase) {
     case "bidding":
-      if (state.landlordId !== null || state.bidCandidateId !== null || state.currentPlayerId === null || state.bottomCards.length !== 3) {
+      if (
+        state.landlordId !== null ||
+        state.bidCandidateId !== null ||
+        state.firstBidderId !== null ||
+        state.currentPlayerId === null ||
+        state.bottomCards.length !== 3
+      ) {
         fail("inconsistent bidding state");
       }
       if (state.landlordCards.length !== 0 || state.lastPlay !== null || state.settlement !== null) {
@@ -783,7 +791,12 @@ function validateTableState(state: GameTableState): void {
       }
       break;
     case "robbing":
-      if (state.landlordId !== null || state.bidCandidateId === null || state.currentPlayerId === null) {
+      if (
+        state.landlordId !== null ||
+        state.bidCandidateId === null ||
+        state.firstBidderId === null ||
+        state.currentPlayerId === null
+      ) {
         fail("inconsistent robbing state");
       }
       if (state.bottomCards.length !== 3 || state.robIndex >= state.robQueue.length) {
@@ -798,7 +811,13 @@ function validateTableState(state: GameTableState): void {
       }
       break;
     case "playing":
-      if (state.landlordId === null || state.currentPlayerId === null || state.bottomCards.length !== 0 || state.landlordCards.length !== 3) {
+      if (
+        state.landlordId === null ||
+        state.firstBidderId !== null ||
+        state.currentPlayerId === null ||
+        state.bottomCards.length !== 0 ||
+        state.landlordCards.length !== 3
+      ) {
         fail("inconsistent playing state");
       }
       // 手牌打空的瞬间即转 settled，playing 相位不存在空手牌或已有结算
@@ -807,7 +826,12 @@ function validateTableState(state: GameTableState): void {
       }
       break;
     case "settled":
-      if (state.landlordId === null || state.settlement === null || state.currentPlayerId !== null) {
+      if (
+        state.landlordId === null ||
+        state.settlement === null ||
+        state.firstBidderId !== null ||
+        state.currentPlayerId !== null
+      ) {
         fail("inconsistent settled state");
       }
       if (state.bottomCards.length !== 0 || state.landlordCards.length !== 3) {
@@ -821,6 +845,7 @@ function validateTableState(state: GameTableState): void {
       }
       if (
         state.bidCandidateId !== null ||
+        state.firstBidderId !== null ||
         state.lastPlay !== null ||
         state.settlement !== null ||
         state.bottomCards.length !== 0 ||

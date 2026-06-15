@@ -124,7 +124,7 @@ describe("GameTable bidding and robbing", () => {
     expect(result.snapshot.players.map((player) => player.handCount)).toEqual([17, 17, 17]);
   });
 
-  it("chooses the latest robber as landlord and grants bottom cards", () => {
+  it("offers the first bidder a final rob-back and finalizes the latest robber when declined", () => {
     const table = readyThreePlayers();
 
     const bid = table.bidLandlord("p0", true);
@@ -136,13 +136,35 @@ describe("GameTable bidding and robbing", () => {
     expect(firstRob.decided).toBe(false);
     expect(firstRob.snapshot.currentPlayerId).toBe("p2");
 
-    const finalRob = table.robLandlord("p2", true);
-    expect(finalRob.decided).toBe(true);
-    expect(finalRob.landlordId).toBe("p2");
-    expect(finalRob.snapshot.phase).toBe("playing");
-    expect(finalRob.snapshot.currentPlayerId).toBe("p2");
-    expect(finalRob.snapshot.landlordCards).toHaveLength(3);
-    expect(finalRob.snapshot.players.map((player) => player.handCount)).toEqual([17, 17, 20]);
+    // p2 抢走地主位 → 首叫者 p0 获得唯一一次反抢机会，尚未定地主
+    const afterP2 = table.robLandlord("p2", true);
+    expect(afterP2.decided).toBe(false);
+    expect(afterP2.snapshot.currentPlayerId).toBe("p0");
+
+    // p0 放弃反抢 → 最后的抢牌者 p2 成为地主
+    const robback = table.robLandlord("p0", false);
+    expect(robback.decided).toBe(true);
+    expect(robback.landlordId).toBe("p2");
+    expect(robback.snapshot.phase).toBe("playing");
+    expect(robback.snapshot.currentPlayerId).toBe("p2");
+    expect(robback.snapshot.landlordCards).toHaveLength(3);
+    expect(robback.snapshot.players.map((player) => player.handCount)).toEqual([17, 17, 20]);
+  });
+
+  it("lets the first bidder rob back to reclaim the landlord seat", () => {
+    const table = readyThreePlayers();
+
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", true);
+    // p2 抢后首叫者 p0 反抢轮出现
+    expect(table.robLandlord("p2", true).snapshot.currentPlayerId).toBe("p0");
+
+    const robback = table.robLandlord("p0", true);
+    expect(robback.decided).toBe(true);
+    expect(robback.landlordId).toBe("p0");
+    expect(robback.snapshot.phase).toBe("playing");
+    expect(robback.snapshot.currentPlayerId).toBe("p0");
+    expect(robback.snapshot.players.map((player) => player.handCount)).toEqual([20, 17, 17]);
   });
 
   it("rejects playing before landlord is decided", () => {
@@ -157,6 +179,7 @@ describe("GameTable bidding and robbing", () => {
     table.bidLandlord("p0", true);
     table.robLandlord("p1", false);
     table.robLandlord("p2", true);
+    table.robLandlord("p0", false); // 首叫者不反抢 → 地主 p2
 
     for (const playerId of ["p2", "p0", "p1"] as const) {
       const hand = [...table.getHand(playerId)];
@@ -207,6 +230,7 @@ describe("GameTable multipliers and multi-round", () => {
     table.bidLandlord("p0", true);
     table.robLandlord("p1", false);
     table.robLandlord("p2", true);
+    table.robLandlord("p0", false); // 首叫者不反抢 → 地主 p2，robCount=1
 
     settleWithLandlordSweep(table, "p2");
 
@@ -218,6 +242,22 @@ describe("GameTable multipliers and multi-round", () => {
     expect(settlement.players.filter((player) => player.role === "farmer").map((player) => player.scoreDelta)).toEqual([
       -4, -4
     ]);
+  });
+
+  it("reaches the 8x rob ceiling when both opponents rob and the first bidder robs back", () => {
+    const table = readyThreePlayers();
+    table.bidLandlord("p0", true);
+    table.robLandlord("p1", true);
+    table.robLandlord("p2", true);
+    table.robLandlord("p0", true); // 首叫反抢夺回 → robCount=3
+
+    settleWithLandlordSweep(table, "p0");
+
+    const settlement = table.snapshot().settlement!;
+    // 三次抢（p1/p2/首叫反抢）→ 2^3 = 8 倍封顶；农民整局未出牌再 ×2 春天 = 16
+    expect(settlement.spring).toBe(true);
+    expect(settlement.multiplier).toBe(16);
+    expect(settlement.players.find((player) => player.role === "landlord")?.scoreDelta).toBe(32);
   });
 
   it("uses base multiplier when nobody robs", () => {
@@ -307,8 +347,12 @@ describe("GameTable dump/restore", () => {
     table.robLandlord("p1", true);
 
     const restored = restoreCopy(table);
-    const result = restored.robLandlord("p2", false);
+    // p1 已抢，p2 不抢后首叫者 p0 获得反抢机会（firstBidderId 经 dump/restore 保留）
+    const afterP2 = restored.robLandlord("p2", false);
+    expect(afterP2.decided).toBe(false);
+    expect(afterP2.snapshot.currentPlayerId).toBe("p0");
 
+    const result = restored.robLandlord("p0", false);
     expect(result.decided).toBe(true);
     expect(result.landlordId).toBe("p1");
     const snapshot = restored.snapshot();
@@ -323,6 +367,7 @@ describe("GameTable dump/restore", () => {
     table.bidLandlord("p0", true);
     table.robLandlord("p1", false);
     table.robLandlord("p2", true);
+    table.robLandlord("p0", false); // 首叫者不反抢 → 地主 p2，进入 playing
     // 打两手后中断
     table.playCards("p2", [table.getHand("p2")[0]!.id]);
     table.pass("p0");

@@ -34,6 +34,7 @@ describe("demo user seeding", () => {
     });
 
     expect(result.status).toBe("created");
+    expect(result.usingDefaultPassword).toBe(true);
     expect(prisma.created).toBe(true);
   });
 
@@ -48,6 +49,7 @@ describe("demo user seeding", () => {
     });
 
     expect(result.status).toBe("ready");
+    expect(result.usingDefaultPassword).toBe(false);
     expect(prisma.created).toBe(false);
   });
 });

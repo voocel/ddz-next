@@ -7,7 +7,7 @@ import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@d
 import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
-import { toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
+import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
 import { decideBotAction } from "./botAction.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
 import { SerialTaskQueue } from "./serialTaskQueue.js";
@@ -132,7 +132,13 @@ export class DdzRoom extends Room {
       botMoveDelayMs: this.botMoveDelayMs,
       clock: this.clock,
       enqueue: (task) => {
-        void this.tasks.enqueue(task);
+        // 已失败的房间不再执行迟到的调度任务（bot/超时），与 token 失效形成双保险，收口于入队层
+        void this.tasks.enqueue(async () => {
+          if (this.failed) {
+            return;
+          }
+          await task();
+        });
       },
       onBotTurn: (playerId) => this.handleBotTurn(playerId),
       onFailure: (error, reason) => this.failRoom(error, reason),
@@ -965,12 +971,4 @@ function parseRoomCode(value: unknown): string {
   }
 
   return value;
-}
-
-function readPlayerKind(playerId: PlayerId, snapshot: GameSnapshot): "human" | "bot" {
-  const player = snapshot.players.find((item) => item.id === playerId);
-  if (!player) {
-    throw new Error(`Unknown player: ${playerId}`);
-  }
-  return player.kind;
 }

@@ -1,4 +1,4 @@
-import type { Card, Combination, GameSnapshot, PublicPlay, Settlement } from "@ddz/domain";
+import type { Card, Combination, GameSnapshot, PlayerId, PublicPlay, Settlement } from "@ddz/domain";
 import type { CardDto, GameSnapshotDto, SettlementDto } from "@ddz/protocol";
 
 export function toCardDto(card: Card): CardDto {
@@ -65,4 +65,13 @@ export function toSettlementDto(settlement: Settlement): SettlementDto {
     spring: settlement.spring,
     players: settlement.players.map((player) => ({ ...player }))
   };
+}
+
+/** 从快照定位玩家身份（human/bot）；落库与恢复时统一用此判断，玩家缺失即数据异常。 */
+export function readPlayerKind(playerId: PlayerId, snapshot: GameSnapshot): "human" | "bot" {
+  const player = snapshot.players.find((item) => item.id === playerId);
+  if (!player) {
+    throw new Error(`Unknown player: ${playerId}`);
+  }
+  return player.kind;
 }

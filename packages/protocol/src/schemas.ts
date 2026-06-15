@@ -330,6 +330,7 @@ export const gameTableStateSchema = z.object({
   currentPlayerId: z.string().min(1).nullable(),
   landlordId: z.string().min(1).nullable(),
   bidCandidateId: z.string().min(1).nullable(),
+  firstBidderId: z.string().min(1).nullable(),
   landlordCards: z.array(cardIdSchema).max(3),
   bottomCards: z.array(cardIdSchema).max(3),
   lastPlay: z
@@ -341,7 +342,8 @@ export const gameTableStateSchema = z.object({
   settlement: settlementSchema.nullable(),
   passCount: z.number().int().min(0).max(2),
   bidAttempts: z.number().int().min(0),
-  robQueue: z.array(z.string().min(1)).max(2),
+  // 反抢会把首叫者追加进队列（其余两人 + 首叫者），故上限为 3
+  robQueue: z.array(z.string().min(1)).max(3),
   robIndex: z.number().int().min(0),
   robCount: z.number().int().min(0),
   bombCount: z.number().int().min(0),

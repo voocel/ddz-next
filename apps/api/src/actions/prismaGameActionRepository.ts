@@ -302,29 +302,41 @@ async function applySettlement(tx: PrismaTransaction, roundId: string, settlemen
     });
 
     if (player.playerKind === "human") {
-      const user = await tx.user.update({
+      // 脏/已删除的 userId 不应让整批结算事务回滚：跳过其入账，RoundPlayer 已保留、其余玩家照常结算
+      const exists = await tx.user.findUnique({
         where: {
           id: player.playerId
         },
-        data: {
-          coin: {
-            increment: player.scoreDelta
-          }
-        },
         select: {
-          coin: true
+          id: true
         }
       });
 
-      await tx.coinLedger.create({
-        data: {
-          userId: player.playerId,
-          roundId,
-          delta: player.scoreDelta,
-          balance: user.coin,
-          reason: "round_settled"
-        }
-      });
+      if (exists) {
+        const user = await tx.user.update({
+          where: {
+            id: player.playerId
+          },
+          data: {
+            coin: {
+              increment: player.scoreDelta
+            }
+          },
+          select: {
+            coin: true
+          }
+        });
+
+        await tx.coinLedger.create({
+          data: {
+            userId: player.playerId,
+            roundId,
+            delta: player.scoreDelta,
+            balance: user.coin,
+            reason: "round_settled"
+          }
+        });
+      }
     }
   }
 }

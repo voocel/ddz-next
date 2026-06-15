@@ -24,6 +24,15 @@ if (demoUser.enabled) {
     },
     "Demo user is available."
   );
+
+  if (demoUser.usingDefaultPassword) {
+    server.log.warn(
+      {
+        username: demoUser.username
+      },
+      "Demo user is enabled with the built-in default password. Set DEMO_USER_PASSWORD to a strong secret before exposing this server."
+    );
+  }
 }
 
 // 房间清扫：从未使用的 open 房 15 分钟收尾；崩溃后无人回来恢复的 playing 孤儿房 30 分钟收尾

@@ -237,6 +237,47 @@ describe("GameActionService", () => {
     expect(repository.coinLedgerPlayerIds).toEqual(["p1"]);
   });
 
+  it("rejects a duplicate settlement carried by a different mutation id", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.rooms.set("ROOM08", "room-8");
+    await repository.seedRound("room-8");
+    const service = new GameActionService(repository);
+
+    await service.record({
+      roomCode: "ROOM08",
+      mutationId: mutationId(10),
+      actions: [
+        {
+          playerId: "p0",
+          playerKind: "human",
+          type: "round_settled",
+          payload: createSettlementPayload("p0")
+        }
+      ]
+    });
+
+    // 不同 mutationId 二次结算同一局：该局已结束、不存在 open round → 拒绝，金币不重复入账
+    await expect(
+      service.record({
+        roomCode: "ROOM08",
+        mutationId: mutationId(11),
+        actions: [
+          {
+            playerId: "p0",
+            playerKind: "human",
+            type: "round_settled",
+            payload: createSettlementPayload("p0")
+          }
+        ]
+      })
+    ).rejects.toMatchObject({
+      statusCode: 409
+    });
+
+    expect(repository.settlements).toHaveLength(1);
+    expect(repository.coinLedgerPlayerIds).toEqual(["p0", "p1", "p2"]);
+  });
+
   it("rejects round actions without an open round", async () => {
     const repository = new InMemoryGameActionRepository();
     repository.rooms.set("ROOM03", "room-3");
@@ -314,6 +355,7 @@ function liveStateEnvelope() {
       currentPlayerId: null,
       landlordId: null,
       bidCandidateId: null,
+      firstBidderId: null,
       landlordCards: [],
       bottomCards: [],
       lastPlay: null,

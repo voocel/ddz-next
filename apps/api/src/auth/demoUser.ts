@@ -13,6 +13,8 @@ export interface DemoUserSeedResult {
   readonly nickname: string;
   readonly status: "created" | "disabled" | "ready";
   readonly username: string;
+  /** 演示账号仍沿用内置默认密码——生产暴露前应换强口令，启动时据此告警（不带出密码本身） */
+  readonly usingDefaultPassword: boolean;
 }
 
 const DEFAULT_DEMO_USERNAME = "alice";
@@ -30,12 +32,15 @@ export function readDemoUserConfig(env: NodeJS.ProcessEnv = process.env): DemoUs
 }
 
 export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfig): Promise<DemoUserSeedResult> {
+  const usingDefaultPassword = config.password === DEFAULT_DEMO_PASSWORD;
+
   if (!config.enabled) {
     return {
       enabled: false,
       username: config.username,
       nickname: config.nickname,
-      status: "disabled"
+      status: "disabled",
+      usingDefaultPassword
     };
   }
 
@@ -54,7 +59,8 @@ export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfi
       enabled: true,
       username: config.username,
       nickname: config.nickname,
-      status: "ready"
+      status: "ready",
+      usingDefaultPassword
     };
   }
 
@@ -70,7 +76,8 @@ export async function ensureDemoUser(prisma: PrismaClient, config: DemoUserConfi
     enabled: true,
     username: config.username,
     nickname: config.nickname,
-    status: "created"
+    status: "created",
+    usingDefaultPassword
   };
 }
 
