@@ -713,7 +713,7 @@ export class DdzRoom extends Room {
     }
 
     try {
-      const action = decideBotAction(snapshot, playerId, this.table.getHand(playerId));
+      const action = decideBotAction(snapshot, playerId, this.table.getHand(playerId), this.table.playedCards());
       switch (action.type) {
         case "bid_landlord":
           await this.afterBid(this.table.bidLandlord(playerId, action.called));

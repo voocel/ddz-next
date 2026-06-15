@@ -118,7 +118,7 @@ function createSnapshot(phase: GameSnapshot["phase"], previousCardIds: readonly 
       { id: "bot:test:2", kind: "bot", seat: 2, ready: false, handCount: 0, connected: true, score: 0 }
     ],
     currentPlayerId: phase === "ready" || phase === "settled" || phase === "waiting" ? null : "bot:test:1",
-    landlordId: null,
+    landlordId: phase === "playing" ? "p0" : null,
     bidCandidateId: null,
     landlordCards: [],
     lastPlay:

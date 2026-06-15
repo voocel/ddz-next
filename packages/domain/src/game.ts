@@ -139,6 +139,9 @@ export class GameTable {
   private robCount = 0;
   private bombCount = 0;
   private readonly playCounts = new Map<PlayerId, number>();
+  // 本局已出的所有牌,供机器人记牌使用。仅作机器人决策的辅助输入,
+  // 故不进入 dump/restore;崩溃恢复后记忆清空,机器人仍能合法出牌(略保守)。
+  private readonly playedThisRound: Card[] = [];
 
   addPlayer(playerId: PlayerId): SeatIndex {
     return this.seatPlayer(playerId, "human");
@@ -368,6 +371,7 @@ export class GameTable {
       this.bombCount += 1;
     }
     this.playCounts.set(playerId, (this.playCounts.get(playerId) ?? 0) + 1);
+    this.playedThisRound.push(...selected);
     this.lastPlay = play;
     this.passCount = 0;
 
@@ -408,6 +412,11 @@ export class GameTable {
 
   getHand(playerId: PlayerId): readonly Card[] {
     return this.getPlayer(playerId).hand;
+  }
+
+  /** 本局至今已打出的所有牌(供机器人记牌)。返回拷贝,避免外部持有活引用。 */
+  playedCards(): readonly Card[] {
+    return [...this.playedThisRound];
   }
 
   snapshot(): GameSnapshot {
@@ -537,6 +546,7 @@ export class GameTable {
     this.robCount = 0;
     this.bombCount = 0;
     this.playCounts.clear();
+    this.playedThisRound.length = 0;
     this.phase = this.players.size === 3 ? "ready" : "waiting";
     return this.snapshot();
   }
@@ -566,6 +576,7 @@ export class GameTable {
     this.robCount = 0;
     this.bombCount = 0;
     this.playCounts.clear();
+    this.playedThisRound.length = 0;
     this.phase = "bidding";
   }
 

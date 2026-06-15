@@ -1,3 +1,4 @@
+export * from "./botStrategy.js";
 export * from "./cards.js";
 export * from "./combinations.js";
 export * from "./game.js";

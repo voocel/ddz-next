@@ -1,5 +1,5 @@
-import { getRankValue, suggestPlay } from "@ddz/domain";
-import type { Card, CardId, GameSnapshot, PlayerId, Rank } from "@ddz/domain";
+import { decideBotPlay, getRankValue } from "@ddz/domain";
+import type { BotPlayView, Card, CardId, GameSnapshot, PlayerId, Rank } from "@ddz/domain";
 
 export type BotAction =
   | {
@@ -18,7 +18,12 @@ export type BotAction =
       readonly cards: readonly CardId[];
     };
 
-export function decideBotAction(snapshot: GameSnapshot, playerId: PlayerId, hand: readonly Card[]): BotAction {
+export function decideBotAction(
+  snapshot: GameSnapshot,
+  playerId: PlayerId,
+  hand: readonly Card[],
+  playedCards: readonly Card[] = []
+): BotAction {
   const player = snapshot.players.find((item) => item.id === playerId);
   if (!player || player.kind !== "bot") {
     throw new Error(`Player ${playerId} is not a bot.`);
@@ -39,7 +44,22 @@ export function decideBotAction(snapshot: GameSnapshot, playerId: PlayerId, hand
         robbed: shouldRobLandlord(hand)
       };
     case "playing": {
-      const suggestion = suggestPlay(hand, snapshot.lastPlay?.combination ?? null);
+      const landlordId = snapshot.landlordId;
+      if (!landlordId) {
+        throw new Error(`Cannot decide bot play before landlord is set for ${playerId}.`);
+      }
+
+      const view: BotPlayView = {
+        hand,
+        previous: snapshot.lastPlay?.combination ?? null,
+        previousBy: snapshot.lastPlay?.playerId ?? null,
+        selfId: playerId,
+        landlordId,
+        players: snapshot.players.map((player) => ({ id: player.id, handCount: player.handCount })),
+        playedCards
+      };
+
+      const suggestion = decideBotPlay(view);
       if (!suggestion) {
         if (!snapshot.lastPlay) {
           throw new Error(`Bot ${playerId} has no legal lead play.`);
