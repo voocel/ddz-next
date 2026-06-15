@@ -123,7 +123,7 @@ describe("RoomTurnScheduler", () => {
 function createScheduler(fixture: Fixture, botIds: readonly PlayerId[]): RoomTurnScheduler {
   return new RoomTurnScheduler({
     botIds,
-    botMoveDelayMs: 50,
+    nextBotDelayMs: () => 50,
     clock: fixture.clock,
     enqueue: (task) => {
       fixture.enqueuedTasks.push(task);

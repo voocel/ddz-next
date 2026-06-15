@@ -17,7 +17,8 @@ interface TurnTimerEvent {
 
 interface RoomTurnSchedulerOptions {
   readonly botIds: readonly PlayerId[];
-  readonly botMoveDelayMs: number;
+  /** 按当前快照算出本回合机器人的“思考”延迟(ms);随情境变化,故每次调度时计算 */
+  readonly nextBotDelayMs: (snapshot: GameSnapshot) => number;
   readonly clock: RoomClock;
   readonly enqueue: (task: () => Promise<void>) => void;
   readonly onBotTurn: (playerId: PlayerId) => Promise<void>;
@@ -63,7 +64,7 @@ export class RoomTurnScheduler {
 
       this.botTimer = null;
       this.enqueueScheduledTask(() => this.options.onBotTurn(playerId), "Bot action failed.", () => this.botTimerToken === token);
-    }, this.options.botMoveDelayMs);
+    }, this.options.nextBotDelayMs(snapshot));
   }
 
   scheduleTurnTimer(snapshot: GameSnapshot): void {

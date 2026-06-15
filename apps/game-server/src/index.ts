@@ -17,9 +17,8 @@ const botCount = readIntegerEnv("BOT_COUNT", 0, {
   min: 0,
   max: 2
 });
-const botMoveDelayMs = readIntegerEnv("BOT_MOVE_DELAY_MS", 500, {
-  min: 0
-});
+// 不设置时走 botTiming 的拟真区间(默认);设置则固定该延迟,供测试/CI 压成极小值
+const botMoveDelayMs = readOptionalIntegerEnv("BOT_MOVE_DELAY_MS", { min: 0 });
 const turnTimeoutMs = readIntegerEnv("TURN_TIMEOUT_MS", 20_000, {
   min: 1
 });
@@ -72,4 +71,12 @@ function readIntegerEnv(
   }
 
   return value;
+}
+
+/** 与 readIntegerEnv 同校验,但未设置时返回 undefined(交由下游决定默认行为) */
+function readOptionalIntegerEnv(name: string, limits: { readonly max?: number; readonly min: number }): number | undefined {
+  if (process.env[name] === undefined || process.env[name]?.trim() === "") {
+    return undefined;
+  }
+  return readIntegerEnv(name, 0, limits);
 }

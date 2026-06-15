@@ -90,7 +90,7 @@ pnpm smoke:full-stack
 - `API_SYNC_TIMEOUT_MS`：Game Server 调用 API 内部接口的 HTTP 超时时间，默认 `5000`。
 - `API_SYNC_RETRY_ATTEMPTS` / `API_SYNC_RETRY_DELAY_MS`：Game Server 对内部接口的有限重试配置，默认 `3` / `150`；对局动作写入通过 `mutationId` 做幂等保护后再重试。
 - `BOT_COUNT`：每个牌桌预置机器人数量，默认 `0`；单人调试可设为 `2`。
-- `BOT_MOVE_DELAY_MS`：机器人行动延迟，默认 `500`。
+- `BOT_MOVE_DELAY_MS`：机器人出牌延迟。默认不设置，按相位模拟真人思考节奏（自由领出想得久、跟牌/过牌更快、叫抢一个短停顿，均带随机抖动）。设置后变为固定延迟并关闭拟真，供冒烟测试等压成极小值。
 - `TURN_TIMEOUT_MS`：服务端权威回合超时时间，默认 `20000`。
 - `VITE_API_ENDPOINT` / `VITE_GAME_ENDPOINT`：Web 访问 API 和实时服务的地址。
 

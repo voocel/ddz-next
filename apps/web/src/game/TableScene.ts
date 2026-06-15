@@ -78,6 +78,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
+  private thinkingText?: Phaser.GameObjects.Text;
   private landlordCardsLayer?: Phaser.GameObjects.Container;
   private settlementLayer?: Phaser.GameObjects.Container;
   private handLayer?: Phaser.GameObjects.Container;
@@ -156,6 +157,26 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .setPadding(18, 8, 18, 8)
       .setDepth(16)
       .setAlpha(0);
+
+    // 机器人回合的“思考中”指示:挂在活动 bot 座位上方,持续脉冲;按快照显隐与定位
+    this.thinkingText = this.add
+      .text(0, 0, "思考中…", {
+        ...TEXT_STYLE,
+        fontSize: "13px",
+        backgroundColor: "rgba(74, 42, 16, 0.85)"
+      })
+      .setOrigin(0.5)
+      .setPadding(10, 4, 10, 4)
+      .setDepth(17)
+      .setVisible(false);
+    this.tweens.add({
+      targets: this.thinkingText,
+      alpha: { from: 0.45, to: 1 },
+      duration: 480,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1
+    });
 
     this.seatsLayer = this.add.container(0, 0);
     this.landlordCardsLayer = this.add.container(0, 0);
@@ -272,6 +293,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.selection.clear();
     this.hand = [];
     this.snapshot = null;
+    this.thinkingText?.setVisible(false);
     this.renderHand();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
     const action = replay.actions[currentStep];
@@ -467,12 +489,33 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     return true;
   }
 
-  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行） */
+  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行/机器人思考指示） */
   private renderSnapshotViews(snapshot: GameSnapshotDto): void {
     this.renderStatus(snapshot);
     this.renderSeats(snapshot);
     this.renderLandlordCards(snapshot);
     this.renderSettlementOverlay(snapshot);
+    this.updateThinkingIndicator(snapshot);
+  }
+
+  /** 轮到机器人时,在其座位上方显示脉冲的“思考中”;非机器人回合或回放态则隐藏 */
+  private updateThinkingIndicator(snapshot: GameSnapshotDto): void {
+    const text = this.thinkingText;
+    if (!text) {
+      return;
+    }
+
+    const thinkingPhase =
+      snapshot.phase === "bidding" || snapshot.phase === "robbing" || snapshot.phase === "playing";
+    const active = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
+    if (this.replayMode || !thinkingPhase || !active || active.kind !== "bot") {
+      text.setVisible(false);
+      return;
+    }
+
+    const localSeat = snapshot.players.find((player) => player.id === this.options.localPlayerId)?.seat ?? null;
+    const position = this.seatPositionFor(active.seat, localSeat);
+    text.setPosition(position.x, position.y - 56).setVisible(true);
   }
 
   /** 按快照同步上一手牌区（无动画） */

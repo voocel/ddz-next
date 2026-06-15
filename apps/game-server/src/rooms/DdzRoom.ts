@@ -9,6 +9,7 @@ import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
 import { decideBotAction } from "./botAction.js";
+import { botTurnDelayMs } from "./botTiming.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
 import { SerialTaskQueue } from "./serialTaskQueue.js";
 import { RoomTurnScheduler } from "./roomTurnScheduler.js";
@@ -25,11 +26,11 @@ interface RoomCreateOptions extends JoinOptions {
   gameActionClient: GameActionClient;
   botCount?: number;
   matchBotCount?: number;
-  botMoveDelayMs?: number;
+  /** 固定机器人延迟(ms)的测试/CI 逃生阀:设置则用此定值,不设置(undefined)则走 botTiming 的拟真区间 */
+  botMoveDelayMs?: number | undefined;
   turnTimeoutMs?: number;
 }
 
-const DEFAULT_BOT_MOVE_DELAY_MS = 500;
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
 const QUICK_START_BOT_COUNT = 2;
 // 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
@@ -57,7 +58,8 @@ export class DdzRoom extends Room {
   private persistence!: RoomPersistence;
   private turnScheduler!: RoomTurnScheduler;
   private roomCode!: string;
-  private botMoveDelayMs = DEFAULT_BOT_MOVE_DELAY_MS;
+  // null = 走 botTiming 的拟真区间;非空 = 固定延迟(测试/CI 逃生阀)
+  private fixedBotDelayMs: number | null = null;
   private botIds: PlayerId[] = [];
   /** 展示用昵称表（来自 JWT claims），快照下发时注入 */
   private readonly nicknames = new Map<PlayerId, string>();
@@ -81,7 +83,7 @@ export class DdzRoom extends Room {
   }
 
   async onCreate(options: RoomCreateOptions): Promise<void> {
-    this.botMoveDelayMs = readBotMoveDelayMs(options.botMoveDelayMs);
+    this.fixedBotDelayMs = readFixedBotDelayMs(options.botMoveDelayMs);
     this.turnTimeoutMs = readTurnTimeoutMs(options.turnTimeoutMs);
     this.roomCode = readRoomCode(options);
 
@@ -129,7 +131,8 @@ export class DdzRoom extends Room {
 
     this.turnScheduler = new RoomTurnScheduler({
       botIds: this.botIds,
-      botMoveDelayMs: this.botMoveDelayMs,
+      // 固定逃生阀优先;否则按快照走拟真区间
+      nextBotDelayMs: (snapshot) => this.fixedBotDelayMs ?? botTurnDelayMs(snapshot),
       clock: this.clock,
       enqueue: (task) => {
         // 已失败的房间不再执行迟到的调度任务（bot/超时），与 token 失效形成双保险，收口于入队层
@@ -950,9 +953,9 @@ function readQuickStart(value: unknown): boolean {
   return value;
 }
 
-function readBotMoveDelayMs(value: unknown): number {
+function readFixedBotDelayMs(value: unknown): number | null {
   if (value === undefined) {
-    return DEFAULT_BOT_MOVE_DELAY_MS;
+    return null;
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new Error("Bot move delay must be a non-negative integer in milliseconds.");
