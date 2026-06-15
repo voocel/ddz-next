@@ -300,7 +300,7 @@ input {
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 100vh;
   min-height: 100svh;
   padding: 14px clamp(12px, 2vw, 26px) 18px;
@@ -504,28 +504,12 @@ input {
   object-fit: contain;
 }
 
-/* 牌桌列表 */
-
-.room-dock {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: start;
-  gap: 12px;
-  min-height: 0;
-  padding: 16px;
-  background: linear-gradient(180deg, var(--cream), var(--cream-2));
-  border: 4px solid var(--wood-2);
-  border-radius: var(--r-l);
-  box-shadow:
-    0 6px 0 var(--wood-3),
-    0 18px 36px rgba(50, 28, 4, 0.3),
-    inset 0 2px 0 rgba(255, 255, 255, 0.8);
+/* emoji 占位（牌桌🀄/设置⚙️）放大到接近 PNG 图标的视觉体量，待统一图标后可移除 */
+.feature-icon-emoji {
+  font-size: 34px;
 }
 
-.lobby-screen .section-heading h2 {
-  color: var(--ink);
-  font-size: 19px;
-}
+/* 牌桌列表（收进「牌桌」弹窗，房卡/号牌样式在弹窗内复用） */
 
 .lobby-screen .room-list {
   align-content: start;
@@ -534,13 +518,16 @@ input {
 }
 
 .lobby-screen .room-row {
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  min-height: 64px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  min-height: 62px;
   padding: 9px 12px;
-  background: #fff;
+  /* 暖木牌：与半透明木窗同色系、有内高光，替代纯白扁平卡片 */
+  background: linear-gradient(180deg, #fffdf6, var(--cream-2));
   border: 2px solid var(--wood-1);
   border-radius: var(--r-m);
-  box-shadow: 0 3px 0 rgba(185, 119, 47, 0.45);
+  box-shadow:
+    0 3px 0 rgba(140, 83, 24, 0.42),
+    inset 0 2px 0 rgba(255, 255, 255, 0.75);
   transition: transform 110ms var(--pop), box-shadow 110ms ease;
 }
 
@@ -569,15 +556,20 @@ input {
 
 .room-medal {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   place-items: center;
-  color: #8a4b0d;
-  background: linear-gradient(180deg, #fff4b1, #ffd968);
-  border: 2px solid var(--sun-2);
+  color: #fff;
+  /* 红金号牌：国风灯笼/印章感，替代金色圆徽 */
+  background: radial-gradient(circle at 50% 32%, #ff8566, var(--red) 72%);
+  border: 2px solid var(--sun-1);
   border-radius: 50%;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 900;
+  text-shadow: 0 1px 1px rgba(120, 20, 10, 0.55);
+  box-shadow:
+    0 2px 0 rgba(150, 35, 18, 0.55),
+    inset 0 2px 3px rgba(255, 255, 255, 0.45);
 }
 
 .room-enter {
@@ -591,13 +583,25 @@ input {
   box-shadow: 0 3px 0 var(--grass-edge);
 }
 
-.lobby-screen .empty-state {
-  padding: 14px;
+.room-list .empty-state {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  padding: 30px 16px;
   color: var(--ink-soft);
-  font-weight: 700;
-  background: rgba(185, 119, 47, 0.08);
-  border: 2px dashed var(--wood-1);
+  font-weight: 800;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.12);
+  border: 2px dashed rgba(140, 83, 24, 0.32);
   border-radius: var(--r-m);
+}
+
+.room-list .empty-state::before {
+  content: "🀄";
+  font-size: 44px;
+  line-height: 1;
+  opacity: 0.55;
+  filter: drop-shadow(0 3px 4px rgba(50, 28, 4, 0.25));
 }
 
 /* ===== 卡通弹窗 ===== */
@@ -788,34 +792,107 @@ input {
   display: none;
 }
 
-/* 牌桌音量控制：音乐/音效两条滑块，chip 风格容器，pointer-events 单独开启 */
-.audio-controls {
-  display: inline-flex;
+/* 设置弹窗内的音量面板：音乐/音效各一行，纵向排列 */
+.audio-settings {
+  display: grid;
+  gap: 12px;
+}
+
+/* 一行音量：图标 | 名称 | 滑块（占满剩余） | 百分比 */
+.volume-row {
+  display: grid;
+  grid-template-columns: 24px auto minmax(0, 1fr) 40px;
   align-items: center;
   gap: 12px;
-  min-height: 36px;
-  padding: 4px 14px;
-  pointer-events: auto;
-  background: linear-gradient(180deg, var(--cream), var(--cream-2));
-  border: 2px solid var(--wood-2);
-  border-radius: 999px;
-  box-shadow: 0 3px 0 var(--wood-3);
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #fffdf6, var(--cream-2));
+  border: 2px solid var(--wood-1);
+  border-radius: var(--r-m);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.7);
+  cursor: pointer;
 }
 
-.audio-slider {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.volume-icon {
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+}
+
+.volume-name {
   color: var(--ink);
-  font-size: 14px;
-  cursor: pointer;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
-.audio-slider input[type="range"] {
-  width: 72px;
-  height: 16px;
+/* 自绘轨道：input 高度给到圆钮、轨道交给 runnable-track，圆钮才能相对轨道垂直居中 */
+.volume-row input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
   cursor: pointer;
-  accent-color: var(--wood-3);
+  background: transparent;
+}
+
+/* 填充宽度跟随 --fill，0% 时左侧为干净空轨（不再有原生强调色那一小段） */
+.volume-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--wood-3) 0 var(--fill, 0%),
+    rgba(140, 83, 24, 0.18) var(--fill, 0%) 100%
+  );
+}
+
+.volume-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -4px; /* (轨道 10 - 圆钮 18) / 2，使圆钮中心对齐轨道中心 */
+  border-radius: 50%;
+  background: var(--cream);
+  border: 2px solid var(--wood-3);
+  box-shadow: 0 1px 2px rgba(50, 28, 4, 0.35);
+}
+
+.volume-row input[type="range"]::-moz-range-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(140, 83, 24, 0.18);
+}
+
+.volume-row input[type="range"]::-moz-range-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--wood-3);
+}
+
+.volume-row input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--cream);
+  border: 2px solid var(--wood-3);
+  box-shadow: 0 1px 2px rgba(50, 28, 4, 0.35);
+}
+
+/* 键盘聚焦用主题暖色描边，替代浏览器默认蓝框 */
+.volume-row input[type="range"]:focus-visible {
+  outline: 2px solid var(--sun-2);
+  outline-offset: 3px;
+}
+
+.volume-value {
+  color: var(--ink);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.volume-value.is-muted {
+  color: var(--ink-soft);
 }
 
 /* 统一控制行：所有阶段（准备/叫抢/出牌）的操作按钮 + 闹钟共用同一行，居中排在手牌正上方 */
@@ -1090,8 +1167,7 @@ h2 {
 
 @media (max-width: 1080px) {
   .lobby-screen {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(420px, 1fr) auto;
+    grid-template-rows: auto minmax(420px, 1fr);
     overflow: auto;
   }
 
@@ -1101,10 +1177,6 @@ h2 {
 
   .stage-mascot {
     width: min(30vw, 200px);
-  }
-
-  .room-dock {
-    max-height: 420px;
   }
 }
 

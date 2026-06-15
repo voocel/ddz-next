@@ -5,10 +5,11 @@ export interface AudioLevels {
 }
 
 const STORAGE_KEY = "ddz-audio";
-export const DEFAULT_AUDIO_LEVELS: AudioLevels = { music: 1, sfx: 1 };
+// 默认静音：音乐/音效初始都为 0，玩家需在「设置」里自行打开
+export const DEFAULT_AUDIO_LEVELS: AudioLevels = { music: 0, sfx: 0 };
 
 function clamp01(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }
 
 /** 把存储的原始字符串解析成夹到 0..1 的音量；空/损坏/越界都安全回退（纯函数，便于单测）。 */

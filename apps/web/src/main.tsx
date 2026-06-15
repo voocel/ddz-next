@@ -16,7 +16,7 @@ const PhaserTable = lazy(async () => {
   };
 });
 
-type LobbyModalKind = "history" | "ledger" | "replay";
+type LobbyModalKind = "history" | "ledger" | "replay" | "rooms";
 
 /** 牌桌闹钟：嵌在控制行中间，秒数叠在主题闹钟素材上；≤5 秒变红，本地玩家回合时摇铃 */
 function TurnClock({ theme, remainingMs, local }: { theme: ThemeId; remainingMs: number; local: boolean }) {
@@ -30,39 +30,64 @@ function TurnClock({ theme, remainingMs, local }: { theme: ThemeId; remainingMs:
   );
 }
 
-/** 牌桌音量控制：音乐/音效各一条滑块（0~100%，0 即静音），偏好持久化到 localStorage */
-function AudioControls({ levels, onChange }: { levels: AudioLevels; onChange: (next: AudioLevels) => void }) {
+/** 设置弹窗内的一条音量滑块：图标 + 名称 + 0~100% 滑块 + 百分比（0 显示「关」，消除拖到底的歧义） */
+function VolumeRow({
+  icon,
+  mutedIcon = "🔇",
+  label,
+  value,
+  onChange
+}: {
+  icon: string;
+  mutedIcon?: string;
+  label: string;
+  value: number;
+  onChange: (next: number) => void;
+}) {
+  const percent = Math.round(value * 100);
+  const muted = percent <= 0;
   return (
-    <div className="audio-controls">
-      <label className="audio-slider" title="音乐音量">
-        <span aria-hidden>{levels.music > 0 ? "♪" : "♪̸"}</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(levels.music * 100)}
-          onChange={(event) => onChange({ ...levels, music: Number(event.target.value) / 100 })}
-          aria-label="音乐音量"
-        />
-      </label>
-      <label className="audio-slider" title="音效音量">
-        <span aria-hidden>{levels.sfx > 0 ? "🔊" : "🔇"}</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(levels.sfx * 100)}
-          onChange={(event) => onChange({ ...levels, sfx: Number(event.target.value) / 100 })}
-          aria-label="音效音量"
-        />
-      </label>
+    <label className="volume-row">
+      <span className="volume-icon" aria-hidden>
+        {muted ? mutedIcon : icon}
+      </span>
+      <span className="volume-name">{label}</span>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={percent}
+        onChange={(event) => onChange(Number(event.target.value) / 100)}
+        aria-label={label}
+        style={{ "--fill": `${percent}%` } as React.CSSProperties}
+      />
+      <span className={`volume-value${muted ? " is-muted" : ""}`}>{muted ? "关" : `${percent}%`}</span>
+    </label>
+  );
+}
+
+/** 音量设置面板：音乐/音效各一条滑块（0~100%，0 即静音），偏好持久化到 localStorage */
+function AudioSettings({ levels, onChange }: { levels: AudioLevels; onChange: (next: AudioLevels) => void }) {
+  return (
+    <div className="audio-settings">
+      <VolumeRow
+        icon="🎵"
+        label="背景音乐"
+        value={levels.music}
+        onChange={(music) => onChange({ ...levels, music })}
+      />
+      <VolumeRow
+        icon="🔊"
+        label="游戏音效"
+        value={levels.sfx}
+        onChange={(sfx) => onChange({ ...levels, sfx })}
+      />
     </div>
   );
 }
 
-function LobbyModal({
+function Modal({
   title,
   onClose,
   children
@@ -86,6 +111,8 @@ function LobbyModal({
 
 function App() {
   const [lobbyModal, setLobbyModal] = useState<LobbyModalKind | null>(null);
+  // 设置弹窗（音量）跨大厅/牌桌共用一个开关，弹窗外壳复用 Modal
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const tableRef = useRef<PhaserTableHandle | null>(null);
   const {
     audioLevels,
@@ -145,6 +172,13 @@ function App() {
   useTurnAlarm(turnTimer, session?.user.id ?? "", handleTurnAlarm);
   // 全局背景音乐：登录后跨大厅/牌桌持续，不随场景启停（音量由音乐滑块控制）
   useBackgroundMusic(theme, audioLevels.music, Boolean(session));
+
+  // 设置弹窗大厅/牌桌共用同一份，避免两处重复
+  const settingsModal = settingsOpen ? (
+    <Modal title="设置" onClose={() => setSettingsOpen(false)}>
+      <AudioSettings levels={audioLevels} onChange={setAudioLevels} />
+    </Modal>
+  ) : null;
 
   if (!session) {
     return (
@@ -269,7 +303,6 @@ function App() {
             </div>
           ) : null}
           <span className="hud-spacer" />
-          <AudioControls levels={audioLevels} onChange={setAudioLevels} />
           <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={logout}>
             退出
           </button>
@@ -289,6 +322,10 @@ function App() {
             <p className="stage-status">{roomStatus}</p>
           </div>
           <nav className="feature-bar">
+            <button type="button" onClick={() => setLobbyModal("rooms")}>
+              <span className="feature-icon feature-icon-emoji">🀄</span>
+              <span>牌桌</span>
+            </button>
             <button type="button" onClick={() => setLobbyModal("history")}>
               <span className="feature-icon">
                 <img src={themeAsset(theme, "icon_history.png")} alt="" />
@@ -313,36 +350,50 @@ function App() {
               </span>
               <span>{themeLabel(theme)}</span>
             </button>
+            <button type="button" onClick={() => setSettingsOpen(true)}>
+              <span className="feature-icon feature-icon-emoji">⚙️</span>
+              <span>设置</span>
+            </button>
           </nav>
         </section>
 
-        <aside className="room-dock">
-          <div className="section-heading">
-            <h2>牌桌选择</h2>
-            <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshRooms}>
-              刷新
-            </button>
-          </div>
-          <div className="room-list">
-            {rooms.length ? (
-              rooms.slice(0, 7).map((room, index) => (
-                <button type="button" key={room.id} className="room-row" onClick={() => enterRoom(room)}>
-                  <span className="room-medal">{index + 1}</span>
-                  <span className="room-copy">
-                    <strong>{room.code}</strong>
-                    <span>{room.status === "open" ? "等待入座" : room.status}</span>
-                  </span>
-                  <span className="room-enter">进入</span>
-                </button>
-              ))
-            ) : (
-              <p className="empty-state">{roomStatus}</p>
-            )}
-          </div>
-        </aside>
+        {lobbyModal === "rooms" ? (
+          <Modal title="牌桌选择" onClose={() => setLobbyModal(null)}>
+            <div className="section-heading">
+              <span className="modal-hint">点击一桌入座</span>
+              <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshRooms}>
+                刷新
+              </button>
+            </div>
+            <div className="room-list">
+              {rooms.length ? (
+                rooms.slice(0, 7).map((room, index) => (
+                  <button
+                    type="button"
+                    key={room.id}
+                    className="room-row"
+                    onClick={() => {
+                      enterRoom(room);
+                      setLobbyModal(null);
+                    }}
+                  >
+                    <span className="room-medal">{index + 1}</span>
+                    <span className="room-copy">
+                      <strong>{room.code}</strong>
+                      <span>{room.status === "open" ? "等待入座" : room.status}</span>
+                    </span>
+                    <span className="room-enter">进入</span>
+                  </button>
+                ))
+              ) : (
+                <p className="empty-state">{roomStatus}</p>
+              )}
+            </div>
+          </Modal>
+        ) : null}
 
         {lobbyModal === "history" ? (
-          <LobbyModal title="最近战绩" onClose={() => setLobbyModal(null)}>
+          <Modal title="最近战绩" onClose={() => setLobbyModal(null)}>
             <div className="section-heading">
               <span className="modal-hint">点击一局进入回放</span>
               <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshHistory}>
@@ -350,11 +401,11 @@ function App() {
               </button>
             </div>
             {historyRows}
-          </LobbyModal>
+          </Modal>
         ) : null}
 
         {lobbyModal === "ledger" ? (
-          <LobbyModal title="金币流水" onClose={() => setLobbyModal(null)}>
+          <Modal title="金币流水" onClose={() => setLobbyModal(null)}>
             <div className="ledger-list">
               {coinLedgers.length ? (
                 coinLedgers.map((ledger) => (
@@ -370,11 +421,11 @@ function App() {
                 <p className="empty-state">{historyStatus}</p>
               )}
             </div>
-          </LobbyModal>
+          </Modal>
         ) : null}
 
         {lobbyModal === "replay" ? (
-          <LobbyModal title="对局回放" onClose={() => setLobbyModal(null)}>
+          <Modal title="对局回放" onClose={() => setLobbyModal(null)}>
             <div className="section-heading">
               <span className="modal-hint">{replayStatus}</span>
               <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={refreshHistory}>
@@ -382,8 +433,10 @@ function App() {
               </button>
             </div>
             {historyRows}
-          </LobbyModal>
+          </Modal>
         ) : null}
+
+        {settingsModal}
       </main>
     );
   }
@@ -416,7 +469,14 @@ function App() {
         <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
         {reconnecting ? <span className="table-chip">重连中…</span> : null}
         <span className="hud-spacer" />
-        <AudioControls levels={audioLevels} onChange={setAudioLevels} />
+        <button
+          type="button"
+          className="btn-img btn-img-wood btn-img-sm"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="设置"
+        >
+          ⚙️ 设置
+        </button>
       </header>
 
       {!selectedReplay
@@ -533,6 +593,12 @@ function App() {
             {selectedRoom ? "返回牌桌" : "返回大厅"}
           </button>
         </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <Modal title="设置" onClose={() => setSettingsOpen(false)}>
+          <AudioSettings levels={audioLevels} onChange={setAudioLevels} />
+        </Modal>
       ) : null}
     </main>
   );
