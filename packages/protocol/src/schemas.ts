@@ -2,6 +2,7 @@ import { COMBINATION_KINDS, GAME_PHASES, RANKS, SUITS } from "@ddz/domain";
 import type {
   Card,
   Combination,
+  CombinationKind,
   GamePhase,
   GameSnapshot,
   GameTablePlayerState,
@@ -61,7 +62,7 @@ export const playerSnapshotSchema = z.object({
 
 export const gamePhaseSchema = z.enum(GAME_PHASES) satisfies z.ZodType<GamePhase>;
 
-export const combinationKindSchema = z.enum(COMBINATION_KINDS);
+export const combinationKindSchema = z.enum(COMBINATION_KINDS) satisfies z.ZodType<CombinationKind>;
 
 export const combinationSchema = z
   .object({

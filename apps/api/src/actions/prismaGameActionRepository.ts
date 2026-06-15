@@ -138,7 +138,7 @@ export class PrismaGameActionRepository implements GameActionRepository {
         }
 
         if (!round) {
-          throw new Error(`Cannot record ${action.type} without an open round.`);
+          throw new GameActionError(`Cannot record ${action.type} without an open round.`, 409);
         }
 
         const created = await tx.gameAction.create({

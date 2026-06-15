@@ -1,10 +1,10 @@
 import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
+import { readTokenConfig } from "@ddz/auth";
+import { loadRootEnv } from "@ddz/env";
 import { readApiSyncConfig } from "./api/config.js";
 import { HttpGameActionClient } from "./api/gameActionClient.js";
 import { HttpRoomStatusClient } from "./api/roomStatusClient.js";
-import { readTokenConfig } from "./auth/config.js";
-import { loadRootEnv } from "@ddz/env";
 import { DdzRoom } from "./rooms/DdzRoom.js";
 import { MatchmakingRoom } from "./rooms/MatchmakingRoom.js";
 

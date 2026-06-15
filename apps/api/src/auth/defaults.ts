@@ -1,5 +1,5 @@
+import { readTokenConfig } from "@ddz/auth";
 import { AuthService } from "./service.js";
-import { readTokenConfig } from "./config.js";
 import { createPrismaClient, PrismaUserRepository } from "./prismaUserRepository.js";
 import { ensureDemoUser, readDemoUserConfig, type DemoUserSeedResult } from "./demoUser.js";
 import { PrismaRoomRepository } from "../rooms/prismaRoomRepository.js";
