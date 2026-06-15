@@ -280,8 +280,12 @@ export const roomSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+/** 房间号统一格式：6 位数字（便于输入/口述）。这是 api 生成校验、game-server 入房校验、web 输入的唯一格式来源，禁止各处再写正则。 */
+export const ROOM_CODE_REGEX = /^\d{6}$/;
+export const roomCodeSchema = z.string().regex(ROOM_CODE_REGEX, "房间号必须是 6 位数字");
+
 export const createRoomRequestSchema = z.object({
-  code: z.string().min(4).max(12).regex(/^[A-Z0-9]+$/).optional()
+  code: roomCodeSchema.optional()
 });
 
 export const updateRoomStatusRequestSchema = z.object({
@@ -364,7 +368,7 @@ export const roomLiveStateEnvelopeSchema = z.object({
 }) satisfies z.ZodType<RoomLiveStateEnvelope>;
 
 export const recordGameActionRequestSchema = z.object({
-  roomCode: z.string().min(4).max(12).regex(/^[A-Z0-9]+$/),
+  roomCode: roomCodeSchema,
   mutationId: z.string().uuid(),
   actions: z.array(recordGameActionSchema).min(1),
   // 同事务 upsert 到 RoomLiveState，供崩溃恢复

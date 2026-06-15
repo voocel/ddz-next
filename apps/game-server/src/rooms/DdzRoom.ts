@@ -2,7 +2,7 @@ import type { Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
 import { GameTable } from "@ddz/domain";
-import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE } from "@ddz/protocol";
+import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE, ROOM_CODE_REGEX } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
 import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
@@ -965,9 +965,9 @@ function parseRoomCode(value: unknown): string {
     throw new Error("Room code is required to join the game room.");
   }
 
-  // 严格校验：只接受规范格式，不做 trim/toUpperCase 之类的静默修正
-  if (!/^[A-Z0-9]{4,12}$/.test(value)) {
-    throw new Error("Room code must be 4-12 uppercase letters or digits.");
+  // 严格校验：只接受规范格式（6 位数字），不做 trim 之类的静默修正
+  if (!ROOM_CODE_REGEX.test(value)) {
+    throw new Error("Room code must be 6 digits.");
   }
 
   return value;

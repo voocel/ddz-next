@@ -19,7 +19,7 @@ describe("HttpGameActionClient", () => {
 
     await expect(
       new HttpGameActionClient(config).recordGameActions({
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: "00000000-0000-4000-8000-000000000001",
         actions: [
           {
@@ -39,7 +39,7 @@ describe("HttpGameActionClient", () => {
         "x-ddz-internal-token": "internal-test-token"
       },
       body: JSON.stringify({
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: "00000000-0000-4000-8000-000000000001",
         actions: [
           {
@@ -63,11 +63,11 @@ describe("HttpGameActionClient", () => {
 
     await expect(
       new HttpGameActionClient(config).recordGameActions({
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: "00000000-0000-4000-8000-000000000002",
         actions: []
       })
-    ).rejects.toThrow("Failed to record 0 actions for room ROOM01: 500 nope");
+    ).rejects.toThrow("Failed to record 0 actions for room 100001: 500 nope");
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
@@ -79,7 +79,7 @@ describe("HttpGameActionClient", () => {
 
     await expect(
       new HttpGameActionClient(config).recordGameActions({
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: "00000000-0000-4000-8000-000000000003",
         actions: [
           {

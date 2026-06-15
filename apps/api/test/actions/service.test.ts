@@ -5,11 +5,11 @@ import { InMemoryGameActionRepository } from "../helpers";
 describe("GameActionService", () => {
   it("records room events without creating a round", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM01", "room-1");
+    repository.rooms.set("100001", "room-1");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
-      roomCode: "ROOM01",
+      roomCode: "100001",
       mutationId: mutationId(1),
       actions: [
         {
@@ -38,11 +38,11 @@ describe("GameActionService", () => {
 
   it("creates a round only when round_started is recorded", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM05", "room-5");
+    repository.rooms.set("100005", "room-5");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
-      roomCode: "ROOM05",
+      roomCode: "100005",
       mutationId: mutationId(2),
       actions: [
         {
@@ -66,7 +66,7 @@ describe("GameActionService", () => {
 
     await expect(
       service.record({
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: mutationId(3),
         actions: [
           {
@@ -84,12 +84,12 @@ describe("GameActionService", () => {
 
   it("applies coin settlement from round_settled actions", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM02", "room-2");
+    repository.rooms.set("100002", "room-2");
     await repository.seedRound("room-2");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
-      roomCode: "ROOM02",
+      roomCode: "100002",
       mutationId: mutationId(4),
       actions: [
         {
@@ -131,11 +131,11 @@ describe("GameActionService", () => {
 
   it("returns recorded mutation results without replaying settlement side effects", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM06", "room-6");
+    repository.rooms.set("100006", "room-6");
     await repository.seedRound("room-6");
     const service = new GameActionService(repository);
     const input = {
-      roomCode: "ROOM06",
+      roomCode: "100006",
       mutationId: mutationId(5),
       actions: [
         {
@@ -158,12 +158,12 @@ describe("GameActionService", () => {
 
   it("rejects reused mutation ids with different actions", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM07", "room-7");
+    repository.rooms.set("100007", "room-7");
     const service = new GameActionService(repository);
     const reusedMutationId = mutationId(6);
 
     await service.record({
-      roomCode: "ROOM07",
+      roomCode: "100007",
       mutationId: reusedMutationId,
       actions: [
         {
@@ -179,7 +179,7 @@ describe("GameActionService", () => {
 
     await expect(
       service.record({
-        roomCode: "ROOM07",
+        roomCode: "100007",
         mutationId: reusedMutationId,
         actions: [
           {
@@ -200,28 +200,28 @@ describe("GameActionService", () => {
 
   it("keeps bot settlement players out of human coin ledgers", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM04", "room-4");
+    repository.rooms.set("100004", "room-4");
     await repository.seedRound("room-4");
     const service = new GameActionService(repository);
 
     await service.record({
-      roomCode: "ROOM04",
+      roomCode: "100004",
       mutationId: mutationId(7),
       actions: [
         {
-          playerId: "bot:ROOM04:1",
+          playerId: "bot:100004:1",
           playerKind: "bot",
           type: "round_settled",
           payload: {
             settlement: {
-              winnerId: "bot:ROOM04:1",
-              landlordId: "bot:ROOM04:1",
+              winnerId: "bot:100004:1",
+              landlordId: "bot:100004:1",
               landlordWon: true,
               baseScore: 1,
               players: [
-                { playerId: "bot:ROOM04:1", seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },
+                { playerId: "bot:100004:1", seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },
                 { playerId: "p1", seat: 1, role: "farmer", handCount: 3, scoreDelta: -1, totalScore: -1 },
-                { playerId: "bot:ROOM04:2", seat: 2, role: "farmer", handCount: 4, scoreDelta: -1, totalScore: -1 }
+                { playerId: "bot:100004:2", seat: 2, role: "farmer", handCount: 4, scoreDelta: -1, totalScore: -1 }
               ]
             }
           }
@@ -230,21 +230,21 @@ describe("GameActionService", () => {
     });
 
     expect(repository.settlements[0]?.players).toEqual([
-      { playerId: "bot:ROOM04:1", playerKind: "bot", seat: 0, scoreDelta: 2 },
+      { playerId: "bot:100004:1", playerKind: "bot", seat: 0, scoreDelta: 2 },
       { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1 },
-      { playerId: "bot:ROOM04:2", playerKind: "bot", seat: 2, scoreDelta: -1 }
+      { playerId: "bot:100004:2", playerKind: "bot", seat: 2, scoreDelta: -1 }
     ]);
     expect(repository.coinLedgerPlayerIds).toEqual(["p1"]);
   });
 
   it("rejects a duplicate settlement carried by a different mutation id", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM08", "room-8");
+    repository.rooms.set("100008", "room-8");
     await repository.seedRound("room-8");
     const service = new GameActionService(repository);
 
     await service.record({
-      roomCode: "ROOM08",
+      roomCode: "100008",
       mutationId: mutationId(10),
       actions: [
         {
@@ -259,7 +259,7 @@ describe("GameActionService", () => {
     // 不同 mutationId 二次结算同一局：该局已结束、不存在 open round → 拒绝，金币不重复入账
     await expect(
       service.record({
-        roomCode: "ROOM08",
+        roomCode: "100008",
         mutationId: mutationId(11),
         actions: [
           {
@@ -280,12 +280,12 @@ describe("GameActionService", () => {
 
   it("rejects round actions without an open round", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM03", "room-3");
+    repository.rooms.set("100003", "room-3");
     const service = new GameActionService(repository);
 
     await expect(
       service.record({
-        roomCode: "ROOM03",
+        roomCode: "100003",
         mutationId: mutationId(8),
         actions: [
           {
@@ -318,11 +318,11 @@ describe("GameActionService", () => {
 
   it("stores the live state envelope alongside actions and stays idempotent on retry", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("ROOM09", "room-9");
+    repository.rooms.set("100009", "room-9");
     const service = new GameActionService(repository);
 
     const request = {
-      roomCode: "ROOM09",
+      roomCode: "100009",
       mutationId: mutationId(9),
       actions: [
         {

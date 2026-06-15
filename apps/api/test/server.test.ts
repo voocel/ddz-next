@@ -118,7 +118,7 @@ describe("API auth routes", () => {
       method: "POST",
       url: "/rooms",
       payload: {
-        code: "ROOM00"
+        code: "100000"
       }
     });
     expect(anonymousCreate.statusCode).toBe(401);
@@ -130,11 +130,11 @@ describe("API auth routes", () => {
         authorization: `Bearer ${accessToken}`
       },
       payload: {
-        code: "ROOM01"
+        code: "100001"
       }
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json().room.code).toBe("ROOM01");
+    expect(created.json().room.code).toBe("100001");
 
     const list = await app.inject({
       method: "GET",
@@ -191,13 +191,13 @@ describe("API auth routes", () => {
         authorization: `Bearer ${register.json().accessToken as string}`
       },
       payload: {
-        code: "ROOM02"
+        code: "100002"
       }
     });
 
     const rejected = await app.inject({
       method: "PATCH",
-      url: "/internal/rooms/ROOM02/status",
+      url: "/internal/rooms/100002/status",
       payload: {
         status: "playing"
       }
@@ -206,7 +206,7 @@ describe("API auth routes", () => {
 
     const updated = await app.inject({
       method: "PATCH",
-      url: "/internal/rooms/ROOM02/status",
+      url: "/internal/rooms/100002/status",
       headers: {
         "x-ddz-internal-token": "internal-test-token"
       },
@@ -220,19 +220,19 @@ describe("API auth routes", () => {
     // 崩溃恢复查询：无 token 拒绝；有 token 返回房间与状态（无状态行时为 null）
     const anonymousState = await app.inject({
       method: "GET",
-      url: "/internal/rooms/ROOM02/state"
+      url: "/internal/rooms/100002/state"
     });
     expect(anonymousState.statusCode).toBe(401);
 
     const state = await app.inject({
       method: "GET",
-      url: "/internal/rooms/ROOM02/state",
+      url: "/internal/rooms/100002/state",
       headers: {
         "x-ddz-internal-token": "internal-test-token"
       }
     });
     expect(state.statusCode).toBe(200);
-    expect(state.json().room.code).toBe("ROOM02");
+    expect(state.json().room.code).toBe("100002");
     expect(state.json().state).toBeNull();
 
     await app.close();
@@ -240,7 +240,7 @@ describe("API auth routes", () => {
 
   it("protects internal game action writes", async () => {
     const actionRepository = new InMemoryGameActionRepository();
-    actionRepository.rooms.set("ROOM03", "room-3");
+    actionRepository.rooms.set("100003", "room-3");
     const app = buildServer({
       authService: new AuthService(new InMemoryUserRepository(), tokenConfig),
       roomService: new RoomService(new InMemoryRoomRepository()),
@@ -256,7 +256,7 @@ describe("API auth routes", () => {
       method: "POST",
       url: "/internal/game-actions",
       payload: {
-        roomCode: "ROOM03",
+        roomCode: "100003",
         mutationId: "00000000-0000-4000-8000-000000000101",
         actions: [
           {
@@ -277,7 +277,7 @@ describe("API auth routes", () => {
         "x-ddz-internal-token": "internal-test-token"
       },
       payload: {
-        roomCode: "ROOM03",
+        roomCode: "100003",
         mutationId: "00000000-0000-4000-8000-000000000102",
         actions: [
           {
@@ -331,7 +331,7 @@ describe("API auth routes", () => {
       {
         id: "round-1",
         room: {
-          code: "ROOM99"
+          code: "100099"
         },
         landlordId: userId,
         startedAt: new Date(Date.UTC(2026, 0, 1, 10)),
@@ -339,14 +339,14 @@ describe("API auth routes", () => {
         players: [
           { playerId: userId, playerKind: "human", seat: 0, score: 2, coinDelta: 2 },
           { playerId: "other-1", playerKind: "human", seat: 1, score: -1, coinDelta: -1 },
-          { playerId: "bot:ROOM99:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
+          { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
         ]
       }
     ]);
     history.replays.set(`${userId}:round-1`, {
       id: "round-1",
       room: {
-        code: "ROOM99"
+        code: "100099"
       },
       landlordId: userId,
       startedAt: new Date(Date.UTC(2026, 0, 1, 10)),
@@ -354,7 +354,7 @@ describe("API auth routes", () => {
       players: [
         { playerId: userId, playerKind: "human", seat: 0, score: 2, coinDelta: 2 },
         { playerId: "other-1", playerKind: "human", seat: 1, score: -1, coinDelta: -1 },
-        { playerId: "bot:ROOM99:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
+        { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
       ],
       actions: [
         {
@@ -369,7 +369,7 @@ describe("API auth routes", () => {
               players: [
                 { id: userId, kind: "human", seat: 0, ready: false, handCount: 0, connected: true, score: 2 },
                 { id: "other-1", kind: "human", seat: 1, ready: false, handCount: 3, connected: true, score: -1 },
-                { id: "bot:ROOM99:1", kind: "bot", seat: 2, ready: false, handCount: 4, connected: true, score: -1 }
+                { id: "bot:100099:1", kind: "bot", seat: 2, ready: false, handCount: 4, connected: true, score: -1 }
               ],
               currentPlayerId: null,
               landlordId: userId,
@@ -385,7 +385,7 @@ describe("API auth routes", () => {
                 players: [
                   { playerId: userId, seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },
                   { playerId: "other-1", seat: 1, role: "farmer", handCount: 3, scoreDelta: -1, totalScore: -1 },
-                  { playerId: "bot:ROOM99:1", seat: 2, role: "farmer", handCount: 4, scoreDelta: -1, totalScore: -1 }
+                  { playerId: "bot:100099:1", seat: 2, role: "farmer", handCount: 4, scoreDelta: -1, totalScore: -1 }
                 ]
               }
             }
@@ -398,7 +398,7 @@ describe("API auth routes", () => {
       {
         id: "ledger-1",
         roundId: "round-1",
-        roomCode: "ROOM99",
+        roomCode: "100099",
         delta: 2,
         balance: 1002,
         reason: "round_settled",
@@ -422,7 +422,7 @@ describe("API auth routes", () => {
     expect(rounds.statusCode).toBe(200);
     expect(rounds.json().rounds[0]).toMatchObject({
       id: "round-1",
-      roomCode: "ROOM99",
+      roomCode: "100099",
       landlordId: userId
     });
 
@@ -445,7 +445,7 @@ describe("API auth routes", () => {
             phase: "settled",
             players: expect.arrayContaining([
               expect.objectContaining({
-                id: "bot:ROOM99:1",
+                id: "bot:100099:1",
                 kind: "bot"
               })
             ]),

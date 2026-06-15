@@ -8,25 +8,25 @@ describe("RoomService", () => {
     const service = new RoomService(new InMemoryRoomRepository());
 
     const created = await service.createRoom({
-      code: "ABCD12"
+      code: "100012"
     });
     const list = await service.listOpenRooms();
 
-    expect(created.room.code).toBe("ABCD12");
+    expect(created.room.code).toBe("100012");
     expect(created.room.status).toBe("open");
-    expect(list.rooms.map((room) => room.code)).toEqual(["ABCD12"]);
+    expect(list.rooms.map((room) => room.code)).toEqual(["100012"]);
   });
 
   it("rejects duplicate open room codes", async () => {
     const service = new RoomService(new InMemoryRoomRepository());
 
     await service.createRoom({
-      code: "ABCD12"
+      code: "100012"
     });
 
     await expect(
       service.createRoom({
-        code: "ABCD12"
+        code: "100012"
       })
     ).rejects.toMatchObject({
       statusCode: 409
@@ -38,13 +38,13 @@ describe("RoomService", () => {
     const service = new RoomService(rooms);
 
     await service.createRoom({
-      code: "STALE1"
+      code: "100001"
     });
     await service.createRoom({
-      code: "FRESH1"
+      code: "100002"
     });
     // 第二个房间刚刚活跃过
-    await rooms.updateRoomStatusByCode("FRESH1", "open");
+    await rooms.updateRoomStatusByCode("100002", "open");
     rooms.records[1] = {
       ...rooms.records[1]!,
       updatedAt: new Date()
@@ -52,26 +52,26 @@ describe("RoomService", () => {
 
     // 被使用过的房（有事件/对局）即使闲置也不清
     await service.createRoom({
-      code: "USED01"
+      code: "100003"
     });
-    rooms.usedCodes.add("USED01");
+    rooms.usedCodes.add("100003");
 
     const closed = await service.closeStaleRooms(60_000);
     expect(closed).toBe(1);
-    expect(rooms.records.find((room) => room.code === "STALE1")?.status).toBe("closed");
-    expect(rooms.records.find((room) => room.code === "FRESH1")?.status).toBe("open");
-    expect(rooms.records.find((room) => room.code === "USED01")?.status).toBe("open");
+    expect(rooms.records.find((room) => room.code === "100001")?.status).toBe("closed");
+    expect(rooms.records.find((room) => room.code === "100002")?.status).toBe("open");
+    expect(rooms.records.find((room) => room.code === "100003")?.status).toBe("open");
   });
 
   it("updates room status by code", async () => {
     const service = new RoomService(new InMemoryRoomRepository());
     await service.createRoom({
-      code: "OPEN02"
+      code: "100020"
     });
 
-    const updated = await service.updateRoomStatus("open02", "playing");
+    const updated = await service.updateRoomStatus("100020", "playing");
 
-    expect(updated.room.code).toBe("OPEN02");
+    expect(updated.room.code).toBe("100020");
     expect(updated.room.status).toBe("playing");
   });
 
@@ -79,11 +79,11 @@ describe("RoomService", () => {
     const rooms = new InMemoryRoomRepository();
     const service = new RoomService(rooms);
     await service.createRoom({
-      code: "OPEN04"
+      code: "100040"
     });
     const before = rooms.records[0]!.updatedAt.getTime();
 
-    const updated = await service.updateRoomStatus("OPEN04", "open");
+    const updated = await service.updateRoomStatus("100040", "open");
 
     expect(updated.room.status).toBe("open");
     expect(rooms.records[0]!.updatedAt.getTime()).toBeGreaterThan(before);
@@ -92,12 +92,12 @@ describe("RoomService", () => {
   it("rejects status transitions out of the closed terminal state", async () => {
     const service = new RoomService(new InMemoryRoomRepository());
     await service.createRoom({
-      code: "OPEN05"
+      code: "100050"
     });
-    await service.updateRoomStatus("OPEN05", "closed");
+    await service.updateRoomStatus("100050", "closed");
 
     for (const status of ["open", "playing"] as const) {
-      await expect(service.updateRoomStatus("OPEN05", status)).rejects.toMatchObject({
+      await expect(service.updateRoomStatus("100050", status)).rejects.toMatchObject({
         statusCode: 409
       } satisfies Partial<RoomError>);
     }
@@ -108,13 +108,13 @@ describe("RoomService", () => {
     const service = new RoomService(rooms);
 
     await service.createRoom({
-      code: "ABCD12"
+      code: "100012"
     });
-    await service.updateRoomStatus("ABCD12", "closed");
+    await service.updateRoomStatus("100012", "closed");
 
     await expect(
       service.createRoom({
-        code: "ABCD12"
+        code: "100012"
       })
     ).rejects.toMatchObject({
       statusCode: 409
@@ -125,21 +125,21 @@ describe("RoomService", () => {
     const service = new RoomService(rooms);
 
     await service.createRoom({
-      code: "LIVE01"
+      code: "100101"
     });
-    rooms.liveStates.set("LIVE01", { state: { version: 1 }, updatedAt: new Date() });
+    rooms.liveStates.set("100101", { state: { version: 1 }, updatedAt: new Date() });
 
-    const withState = await service.getRoomState("live01");
-    expect(withState.room.code).toBe("LIVE01");
+    const withState = await service.getRoomState("100101");
+    expect(withState.room.code).toBe("100101");
     expect(withState.state).toEqual({ version: 1 });
 
     // 关房删行：closed 后状态不再可恢复
-    await service.updateRoomStatus("LIVE01", "closed");
-    const afterClose = await service.getRoomState("LIVE01");
+    await service.updateRoomStatus("100101", "closed");
+    const afterClose = await service.getRoomState("100101");
     expect(afterClose.room.status).toBe("closed");
     expect(afterClose.state).toBeNull();
 
-    await expect(service.getRoomState("MISSIN")).rejects.toMatchObject({
+    await expect(service.getRoomState("999999")).rejects.toMatchObject({
       statusCode: 404
     } satisfies Partial<RoomError>);
   });
@@ -148,22 +148,22 @@ describe("RoomService", () => {
     const rooms = new InMemoryRoomRepository();
     const service = new RoomService(rooms);
 
-    await service.createRoom({ code: "ORPHA1" });
-    await service.updateRoomStatus("ORPHA1", "playing");
+    await service.createRoom({ code: "100201" });
+    await service.updateRoomStatus("100201", "playing");
     rooms.records[0] = { ...rooms.records[0]!, updatedAt: new Date(Date.now() - 60 * 60_000) };
-    rooms.liveStates.set("ORPHA1", { state: { version: 1 }, updatedAt: new Date(Date.now() - 60 * 60_000) });
+    rooms.liveStates.set("100201", { state: { version: 1 }, updatedAt: new Date(Date.now() - 60 * 60_000) });
 
     // 活跃房：状态行刚刷新过
-    await service.createRoom({ code: "ALIVE1" });
-    await service.updateRoomStatus("ALIVE1", "playing");
+    await service.createRoom({ code: "100202" });
+    await service.updateRoomStatus("100202", "playing");
     rooms.records[1] = { ...rooms.records[1]!, updatedAt: new Date(Date.now() - 60 * 60_000) };
-    rooms.liveStates.set("ALIVE1", { state: { version: 1 }, updatedAt: new Date() });
+    rooms.liveStates.set("100202", { state: { version: 1 }, updatedAt: new Date() });
 
     const closed = await service.closeOrphanPlayingRooms(30 * 60_000);
 
     expect(closed).toBe(1);
-    expect(rooms.records.find((room) => room.code === "ORPHA1")?.status).toBe("closed");
-    expect(rooms.liveStates.has("ORPHA1")).toBe(false);
-    expect(rooms.records.find((room) => room.code === "ALIVE1")?.status).toBe("playing");
+    expect(rooms.records.find((room) => room.code === "100201")?.status).toBe("closed");
+    expect(rooms.liveStates.has("100201")).toBe(false);
+    expect(rooms.records.find((room) => room.code === "100202")?.status).toBe("playing");
   });
 });

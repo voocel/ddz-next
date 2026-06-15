@@ -9,6 +9,7 @@ import type {
 import { roundSettledPayloadSchema } from "@ddz/protocol";
 import { createActionFingerprint } from "./actionFingerprint.js";
 import { GameActionError } from "./errors.js";
+import { normalizeRoomCode } from "../rooms/roomCode.js";
 
 export interface RoundRecord {
   readonly id: string;
@@ -77,6 +78,9 @@ export class GameActionService {
 
   async record(input: RecordGameActionRequest): Promise<RecordGameActionResult> {
     const roomCode = normalizeRoomCode(input.roomCode);
+    if (!roomCode) {
+      throw new GameActionError("Invalid room code.", 400);
+    }
     const roomId = await this.actions.findRoomIdByCode(roomCode);
     if (!roomId) {
       throw new GameActionError("Room not found.", 404);
@@ -181,14 +185,6 @@ function toRecordGameActionResult(mutation: GameActionMutationRecord): RecordGam
 
 function isRoomActionType(type: GameActionType): type is RoomActionType {
   return type === "player_joined" || type === "player_left" || type === "player_ready" || type === "room_failed";
-}
-
-function normalizeRoomCode(code: string): string {
-  const normalized = code.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4,12}$/.test(normalized)) {
-    throw new GameActionError("Invalid room code.", 400);
-  }
-  return normalized;
 }
 
 function parseSettlementPayload(payload: Record<string, unknown>): RoundSettlementInput {

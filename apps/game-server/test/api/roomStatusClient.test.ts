@@ -19,7 +19,7 @@ describe("HttpRoomStatusClient", () => {
       jsonResponse(200, {
         room: {
           id: "room-1",
-          code: "ROOM01",
+          code: "100001",
           status: "open",
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z"
@@ -28,10 +28,10 @@ describe("HttpRoomStatusClient", () => {
       })
     );
 
-    const result = await new HttpRoomStatusClient(config).getRoomState("ROOM01");
+    const result = await new HttpRoomStatusClient(config).getRoomState("100001");
     expect(result.room.status).toBe("open");
     expect(result.state).toBeNull();
-    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/ROOM01/state", config.endpoint), {
+    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/100001/state", config.endpoint), {
       method: "GET",
       headers: {
         "x-ddz-internal-token": "internal-test-token"
@@ -43,8 +43,8 @@ describe("HttpRoomStatusClient", () => {
   it("syncs room status with a timeout signal", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await expect(new HttpRoomStatusClient(config).updateRoomStatus("ROOM01", "playing")).resolves.toBeUndefined();
-    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/ROOM01/status", config.endpoint), {
+    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "playing")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/100001/status", config.endpoint), {
       method: "PATCH",
       headers: {
         "content-type": "application/json",
@@ -60,8 +60,8 @@ describe("HttpRoomStatusClient", () => {
   it("surfaces API errors when reading room state", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(404, { message: "Room not found." }));
 
-    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).rejects.toThrow(
-      "Failed to read state for room ROOM01: 404 Room not found."
+    await expect(new HttpRoomStatusClient(config).getRoomState("100001")).rejects.toThrow(
+      "Failed to read state for room 100001: 404 Room not found."
     );
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -74,7 +74,7 @@ describe("HttpRoomStatusClient", () => {
         jsonResponse(200, {
           room: {
             id: "room-1",
-            code: "ROOM01",
+            code: "100001",
             status: "open",
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z"
@@ -83,7 +83,7 @@ describe("HttpRoomStatusClient", () => {
         })
       );
 
-    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).resolves.toMatchObject({ state: null });
+    await expect(new HttpRoomStatusClient(config).getRoomState("100001")).resolves.toMatchObject({ state: null });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -93,7 +93,7 @@ describe("HttpRoomStatusClient", () => {
       .mockRejectedValueOnce(new Error("socket reset"))
       .mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await expect(new HttpRoomStatusClient(config).updateRoomStatus("ROOM01", "closed")).resolves.toBeUndefined();
+    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "closed")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -102,7 +102,7 @@ describe("HttpRoomStatusClient", () => {
       jsonResponse(200, {
         room: {
           id: "room-1",
-          code: "ROOM01",
+          code: "100001",
           status: "playing",
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z"
@@ -110,8 +110,8 @@ describe("HttpRoomStatusClient", () => {
       })
     );
 
-    await expect(new HttpRoomStatusClient(config).getRoomState("ROOM01")).rejects.toThrow(
-      "Invalid room state response for ROOM01"
+    await expect(new HttpRoomStatusClient(config).getRoomState("100001")).rejects.toThrow(
+      "Invalid room state response for 100001"
     );
   });
 });

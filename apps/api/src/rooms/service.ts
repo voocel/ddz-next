@@ -1,6 +1,6 @@
 import type { CreateRoomRequest, RoomDto, RoomListResponse, RoomResponse, RoomStatus } from "@ddz/protocol";
-import { randomInt } from "node:crypto";
 import { RoomError } from "./errors.js";
+import { createRoomCode, normalizeRoomCode } from "./roomCode.js";
 
 // 房间状态合法转移表：closed 为终态
 const ROOM_STATUS_TRANSITIONS: Record<RoomStatus, readonly RoomStatus[]> = {
@@ -46,7 +46,7 @@ export class RoomService {
   }
 
   async createRoom(input: CreateRoomRequest = {}): Promise<RoomResponse> {
-    const code = input.code ? normalizeRoomCode(input.code) : await this.generateUniqueCode();
+    const code = input.code ? requireRoomCode(input.code) : await this.generateUniqueCode();
     const existing = await this.rooms.findRoomByCode(code);
     if (existing) {
       throw new RoomError("Room code already exists.", 409);
@@ -74,7 +74,7 @@ export class RoomService {
 
   /** 崩溃恢复查询：房间 + 完整牌局状态（手牌敏感，仅 internal 通道使用） */
   async getRoomState(code: string): Promise<{ room: RoomDto; state: unknown | null }> {
-    const room = await this.rooms.findRoomByCode(normalizeRoomCode(code));
+    const room = await this.rooms.findRoomByCode(requireRoomCode(code));
     if (!room) {
       throw new RoomError("Room not found.", 404);
     }
@@ -87,7 +87,7 @@ export class RoomService {
   }
 
   async updateRoomStatus(code: string, status: RoomStatus): Promise<RoomResponse> {
-    const normalized = normalizeRoomCode(code);
+    const normalized = requireRoomCode(code);
     const current = await this.rooms.findRoomByCode(normalized);
     if (!current) {
       throw new RoomError("Room not found.", 404);
@@ -131,16 +131,10 @@ export function toRoomDto(room: RoomRecord): RoomDto {
   };
 }
 
-function createRoomCode(): string {
-  // 使用加密安全随机数，避免房间码可预测
-  const value = randomInt(0, 36 ** 6);
-  return value.toString(36).toUpperCase().padStart(6, "0");
-}
-
-function normalizeRoomCode(code: string): string {
-  const normalized = code.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4,12}$/.test(normalized)) {
+function requireRoomCode(raw: string): string {
+  const code = normalizeRoomCode(raw);
+  if (!code) {
     throw new RoomError("Invalid room code.", 400);
   }
-  return normalized;
+  return code;
 }

@@ -8,7 +8,7 @@ const SETTLEMENT_DISPLAY_MS = 5000;
 
 describe("DdzRoom crash recovery", () => {
   it("restores a playing room and resumes scheduling", async () => {
-    const code = "RESTO1";
+    const code = "100011";
     const table = playingTable(code);
     const fixture = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
 
@@ -32,7 +32,7 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("restores a settled room and schedules the next round", async () => {
-    const code = "RESTO2";
+    const code = "100012";
     const table = playingTable(code);
     sweepToSettlement(table);
     const fixture = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
@@ -47,7 +47,7 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("restores an inter-round room, releases offline human seats and re-readies bots", async () => {
-    const code = "RESTO3";
+    const code = "100013";
     const table = playingTable(code);
     sweepToSettlement(table);
     table.resetForNextRound();
@@ -70,15 +70,15 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("rejects closed rooms and rooms stuck in playing without recoverable state", async () => {
-    const closed = createRoomFixture("RESTO4", stateResponse("RESTO4", "closed", null));
+    const closed = createRoomFixture("100014", stateResponse("100014", "closed", null));
     await expect(closed.room.onCreate(closed.options)).rejects.toThrow("closed");
 
-    const orphan = createRoomFixture("RESTO5", stateResponse("RESTO5", "playing", null));
+    const orphan = createRoomFixture("100015", stateResponse("100015", "playing", null));
     await expect(orphan.room.onCreate(orphan.options)).rejects.toThrow("no recoverable state");
   });
 
   it("rejects concurrent creation for the same room code until the live room disposes", async () => {
-    const code = "RESTO6";
+    const code = "100016";
     const first = createRoomFixture(code, stateResponse(code, "open", null));
     await first.room.onCreate(first.options);
 
@@ -94,7 +94,7 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("releases the registration when onCreate fails", async () => {
-    const code = "RESTO7";
+    const code = "100017";
     const failed = createRoomFixture(code, stateResponse(code, "closed", null));
     await expect(failed.room.onCreate(failed.options)).rejects.toThrow("closed");
 
@@ -105,7 +105,7 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("never touches the DB when a failed-create zombie gets auto-disposed", async () => {
-    const code = "RESTO8";
+    const code = "100018";
     const zombie = createRoomFixture(code, stateResponse(code, "playing", null));
     await expect(zombie.room.onCreate(zombie.options)).rejects.toThrow("no recoverable state");
 
@@ -116,7 +116,7 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("keeps the registration until closeRoom completes on dispose", async () => {
-    const code = "RESTO9";
+    const code = "100019";
     const table = playingTable(code);
     const first = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
     await first.room.onCreate(first.options);

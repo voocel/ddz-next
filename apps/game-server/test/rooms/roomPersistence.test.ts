@@ -9,7 +9,7 @@ describe("RoomPersistence", () => {
   it("records actions with snapshots and syncs changed room status once", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+    const persistence = new RoomPersistence("100001", roomStatusClient, gameActionClient, liveStateEnvelope);
     const playingSnapshot = createSnapshot("playing");
 
     await persistence.recordMutation({
@@ -55,13 +55,13 @@ describe("RoomPersistence", () => {
     });
     // 每个 mutation 都随动作携带崩溃恢复信封
     expect(gameActionClient.records.every((record) => record.state?.version === 1)).toBe(true);
-    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "ROOM01", status: "playing" }]);
+    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "100001", status: "playing" }]);
   });
 
   it("uses explicit player kind overrides for players already removed from snapshots", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+    const persistence = new RoomPersistence("100001", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await persistence.recordMutation({
       actions: [
@@ -83,20 +83,20 @@ describe("RoomPersistence", () => {
       playerKind: "human",
       type: "player_left"
     });
-    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "ROOM01", status: "open" }]);
+    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "100001", status: "open" }]);
   });
 
   it("closes and records failed rooms", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+    const persistence = new RoomPersistence("100001", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await persistence.closeFailedRoom("persist failed", createSnapshot("playing"));
 
-    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "ROOM01", status: "closed" }]);
+    expect(roomStatusClient.statusUpdates).toEqual([{ roomCode: "100001", status: "closed" }]);
     expect(gameActionClient.records).toEqual([
       {
-        roomCode: "ROOM01",
+        roomCode: "100001",
         mutationId: expect.any(String),
         actions: [
           expect.objectContaining({
@@ -118,7 +118,7 @@ describe("RoomPersistence", () => {
   it("re-asserts the synced status on heartbeat and skips before first sync or after close", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+    const persistence = new RoomPersistence("100001", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     // 尚未同步过任何状态：心跳无事可做
     await persistence.heartbeat();
@@ -131,21 +131,21 @@ describe("RoomPersistence", () => {
     await persistence.heartbeat();
     // 同状态重申一次，刷新 DB updatedAt
     expect(roomStatusClient.statusUpdates).toEqual([
-      { roomCode: "ROOM01", status: "playing" },
-      { roomCode: "ROOM01", status: "playing" }
+      { roomCode: "100001", status: "playing" },
+      { roomCode: "100001", status: "playing" }
     ]);
 
     await persistence.closeRoom();
     await persistence.heartbeat();
     expect(roomStatusClient.statusUpdates).toHaveLength(3);
-    expect(roomStatusClient.statusUpdates[2]).toEqual({ roomCode: "ROOM01", status: "closed" });
+    expect(roomStatusClient.statusUpdates[2]).toEqual({ roomCode: "100001", status: "closed" });
   });
 
   it("wraps persistence failures with an explicit room persistence error", async () => {
     const roomStatusClient = new FakeRoomStatusClient();
     const gameActionClient = new FakeGameActionClient();
     gameActionClient.failRecords = true;
-    const persistence = new RoomPersistence("ROOM01", roomStatusClient, gameActionClient, liveStateEnvelope);
+    const persistence = new RoomPersistence("100001", roomStatusClient, gameActionClient, liveStateEnvelope);
 
     await expect(
       persistence.recordMutation({
