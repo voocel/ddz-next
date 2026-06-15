@@ -78,7 +78,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
-  private thinkingText?: Phaser.GameObjects.Text;
   private landlordCardsLayer?: Phaser.GameObjects.Container;
   private settlementLayer?: Phaser.GameObjects.Container;
   private handLayer?: Phaser.GameObjects.Container;
@@ -158,26 +157,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .setDepth(16)
       .setAlpha(0);
 
-    // 机器人回合的“思考中”指示:挂在活动 bot 座位上方,持续脉冲;按快照显隐与定位
-    this.thinkingText = this.add
-      .text(0, 0, "思考中…", {
-        ...TEXT_STYLE,
-        fontSize: "13px",
-        backgroundColor: "rgba(74, 42, 16, 0.85)"
-      })
-      .setOrigin(0.5)
-      .setPadding(10, 4, 10, 4)
-      .setDepth(17)
-      .setVisible(false);
-    this.tweens.add({
-      targets: this.thinkingText,
-      alpha: { from: 0.45, to: 1 },
-      duration: 480,
-      ease: "Sine.easeInOut",
-      yoyo: true,
-      repeat: -1
-    });
-
     this.seatsLayer = this.add.container(0, 0);
     this.landlordCardsLayer = this.add.container(0, 0);
     this.settlementLayer = this.add.container(0, 0).setDepth(22).setVisible(false);
@@ -187,7 +166,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       this.applyDragResult(this.selection.beginDrag(pointer, this.replayMode));
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      this.selection.moveDrag(pointer);
+      this.applyDragResult(this.selection.moveDrag(pointer));
     });
     this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
       this.applyDragResult(this.selection.finishDrag(pointer));
@@ -293,7 +272,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.selection.clear();
     this.hand = [];
     this.snapshot = null;
-    this.thinkingText?.setVisible(false);
     this.renderHand();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
     const action = replay.actions[currentStep];
@@ -386,7 +364,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   /** 座位头像：按玩家 id 确定性取一张主题头像，居中在座位牌左侧 */
   private createSeatAvatar(x: number, y: number, index: number): Phaser.GameObjects.Image {
-    return this.add.image(x - 80, y, `avatar-${index}`).setDisplaySize(52, 52);
+    return this.add.image(x - 70, y, `avatar-${index}`).setDisplaySize(52, 52);
   }
 
   private renderHand(): void {
@@ -489,33 +467,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     return true;
   }
 
-  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行/机器人思考指示） */
+  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行） */
   private renderSnapshotViews(snapshot: GameSnapshotDto): void {
     this.renderStatus(snapshot);
     this.renderSeats(snapshot);
     this.renderLandlordCards(snapshot);
     this.renderSettlementOverlay(snapshot);
-    this.updateThinkingIndicator(snapshot);
-  }
-
-  /** 轮到机器人时,在其座位上方显示脉冲的“思考中”;非机器人回合或回放态则隐藏 */
-  private updateThinkingIndicator(snapshot: GameSnapshotDto): void {
-    const text = this.thinkingText;
-    if (!text) {
-      return;
-    }
-
-    const thinkingPhase =
-      snapshot.phase === "bidding" || snapshot.phase === "robbing" || snapshot.phase === "playing";
-    const active = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
-    if (this.replayMode || !thinkingPhase || !active || active.kind !== "bot") {
-      text.setVisible(false);
-      return;
-    }
-
-    const localSeat = snapshot.players.find((player) => player.id === this.options.localPlayerId)?.seat ?? null;
-    const position = this.seatPositionFor(active.seat, localSeat);
-    text.setPosition(position.x, position.y - 56).setVisible(true);
   }
 
   /** 按快照同步上一手牌区（无动画） */
@@ -572,7 +529,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
       const landlord = snapshot.landlordId === player.id ? " 👑地主" : "";
       const label = this.add.text(
-        position.x - 54,
+        position.x - 42,
         position.y - 28,
         `${formatActor(player.id, this.options.localPlayerId, player.nickname)}${landlord}`,
         {
@@ -586,7 +543,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       // 对手的余牌数由牌背堆徽章展示，文字行不再重复
       const handInfo = isLocal ? `手牌 ${player.handCount}  ` : "";
       const meta = this.add.text(
-        position.x - 54,
+        position.x - 42,
         position.y - 4,
         `${showReady ? (player.ready ? "已准备  " : "未准备  ") : ""}${handInfo}分 ${player.score}${offline}`,
         {
@@ -763,7 +720,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       const plate = this.createSeatPlate(position.x, position.y, false);
       const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
       const label = this.add.text(
-        position.x - 54,
+        position.x - 42,
         position.y - 28,
         formatActor(player.playerId, this.options.localPlayerId, player.nickname),
         {
@@ -773,7 +730,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
           color: INK
         }
       );
-      const meta = this.add.text(position.x - 54, position.y - 4, `分 ${player.score}  流水 ${formatScore(player.coinDelta)}`, {
+      const meta = this.add.text(position.x - 42, position.y - 4, `分 ${player.score}  流水 ${formatScore(player.coinDelta)}`, {
         ...TEXT_STYLE,
         fontSize: "12px",
         color: INK_SOFT

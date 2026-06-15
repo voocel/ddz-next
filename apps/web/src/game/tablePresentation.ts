@@ -1,5 +1,4 @@
 import type { GameEvent, GameSnapshotDto, RoundHistoryActionDto } from "@ddz/protocol";
-import { combinationKindLabel } from "./playValidation";
 
 const PHASE_LABELS: Record<GameSnapshotDto["phase"], string> = {
   waiting: "等待入座",
@@ -74,7 +73,7 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
     case "landlord_robbed":
       return `${actor(event.playerId, event.snapshot)} ${event.robbed ? "抢地主" : "不抢"}`;
     case "cards_played":
-      return `${actor(event.play.playerId, event.snapshot)} 出牌 ${combinationKindLabel(event.play.combination.kind)}`;
+      return null;
     case "player_passed":
       return `${actor(event.playerId, event.snapshot)} 过牌`;
     case "round_settled":

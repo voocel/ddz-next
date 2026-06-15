@@ -926,10 +926,16 @@ input {
   position: absolute;
   top: 54%;
   left: 50%;
+  min-width: 30px;
+  padding: 1px 6px 2px;
   transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(255, 246, 224, 0.82);
   color: var(--ink);
-  font-size: 24px;
+  font-size: 21px;
   font-weight: 900;
+  line-height: 1;
+  text-align: center;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 

@@ -69,7 +69,7 @@ export class HandSelection {
     this.rendered = cards;
   }
 
-  /** pointerdown：命中牌则起一段增删拖拽（首张即时计入，渲染留待 finish）；点空白处取消全部已选 */
+  /** pointerdown：命中牌则起一段增删拖拽（首张即时计入并渲染）；点空白处取消全部已选 */
   beginDrag(pointer: Phaser.Input.Pointer, replayMode: boolean): HandDragResult {
     if (replayMode) {
       return NO_EFFECT;
@@ -91,23 +91,23 @@ export class HandSelection {
       mode,
       touched: new Set<CardId>()
     };
-    this.applyDrag(cardId);
-    return NO_EFFECT;
+    return this.applyDrag(cardId) ? { render: true, clearFeedback: true, playSelect: true } : NO_EFFECT;
   }
 
-  /** pointermove：沿途按起始模式增删划过的牌（过程中不渲染，渲染在 finish） */
-  moveDrag(pointer: Phaser.Input.Pointer): void {
+  /** pointermove：沿途按起始模式增删划过的牌，命中新增牌时立即渲染，让手牌边拖边上抬。 */
+  moveDrag(pointer: Phaser.Input.Pointer): HandDragResult {
     if (!this.drag || this.drag.pointerId !== pointer.id) {
-      return;
+      return NO_EFFECT;
     }
 
     const cardId = this.findRendered(pointer.worldX, pointer.worldY);
-    if (cardId) {
-      this.applyDrag(cardId);
+    if (cardId && this.applyDrag(cardId)) {
+      return { render: true, clearFeedback: false, playSelect: true };
     }
+    return NO_EFFECT;
   }
 
-  /** pointerup：结束拖拽，若期间确有改动则提示场景重绘并播放选牌音 */
+  /** pointerup：结束拖拽。选牌反馈已在 down/move 即时发生，这里只收尾不补播。 */
   finishDrag(pointer: Phaser.Input.Pointer): HandDragResult {
     if (!this.drag || this.drag.pointerId !== pointer.id) {
       return NO_EFFECT;
@@ -115,16 +115,13 @@ export class HandSelection {
 
     const touched = this.drag.touched.size;
     this.drag = null;
-    if (touched > 0) {
-      return { render: true, clearFeedback: false, playSelect: true };
-    }
-    return NO_EFFECT;
+    return touched > 0 ? { render: false, clearFeedback: false, playSelect: false } : NO_EFFECT;
   }
 
-  private applyDrag(cardId: CardId): void {
+  private applyDrag(cardId: CardId): boolean {
     const drag = this.drag;
     if (!drag || drag.touched.has(cardId)) {
-      return;
+      return false;
     }
 
     if (drag.mode === "add") {
@@ -134,6 +131,7 @@ export class HandSelection {
     }
 
     drag.touched.add(cardId);
+    return true;
   }
 
   private findRendered(x: number, y: number): CardId | null {

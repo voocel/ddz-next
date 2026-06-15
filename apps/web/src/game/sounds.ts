@@ -39,8 +39,8 @@ export const SOUND_FILES = {
 
 export type SoundKey = keyof typeof SOUND_FILES;
 
-/** 背景音乐音量（远低于音效，仅作氛围铺底） */
-export const BGM_VOLUME = 0.18;
+/** 背景音乐音量基准；仍低于音效，但在 Windows/Chrome 上不至于明显偏小。 */
+export const BGM_VOLUME = 0.42;
 
 /** 按主题选背景音乐：欢乐卡通与田园像素各用一首，强化主题氛围。 */
 export function bgmKey(theme: ThemeId): SoundKey {

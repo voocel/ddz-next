@@ -16,7 +16,7 @@ describe("table presentation", () => {
   });
 
   it("describes game events for action feedback", () => {
-    expect(describeEventFeedback(cardPlayedEvent(), "p0")).toBe("你 出牌 单牌");
+    expect(describeEventFeedback(cardPlayedEvent(), "p0")).toBeNull();
     expect(describeEventFeedback({ type: "player_passed", playerId: "bot:room:2", snapshot: snapshot("playing", "p0") }, "p0")).toBe(
       "机器人2 过牌"
     );
