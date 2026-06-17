@@ -66,6 +66,20 @@ describe("decideBotPlay - 领出", () => {
     expect(play).not.toBeNull();
     expect(play?.[0]?.rank).toBe("5");
   });
+
+  it("领出三条时配上最低的单牌一起甩,一手走完而非先单出一张", () => {
+    const play = decideBotPlay(view({ hand: hand(["7-clubs", "7-hearts", "7-spades", "3-clubs"]) }));
+    expect(play).toHaveLength(4);
+    expect(new Set(play?.map((card) => card.rank))).toEqual(new Set(["7", "3"]));
+  });
+
+  it("领出三条时配上最低的对子(三带二),减少剩余手数", () => {
+    const play = decideBotPlay(
+      view({ hand: hand(["7-clubs", "7-hearts", "7-spades", "3-clubs", "3-hearts"]) })
+    );
+    expect(play).toHaveLength(5);
+    expect(new Set(play?.map((card) => card.rank))).toEqual(new Set(["7", "3"]));
+  });
 });
 
 describe("decideBotPlay - 跟牌", () => {
@@ -138,6 +152,120 @@ describe("decideBotPlay - 跟牌", () => {
       })
     );
     expect(play).toHaveLength(4);
+  });
+});
+
+describe("decideBotPlay - 结构感知跟牌", () => {
+  const players = [
+    { id: "landlord", handCount: 10 },
+    { id: "me", handCount: 6 },
+    { id: "mate", handCount: 9 }
+  ];
+
+  it("跟单牌时用零散牌,不拆掉顺子", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["5-clubs", "6-clubs", "7-clubs", "8-clubs", "9-clubs", "K-clubs"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players
+      })
+    );
+    // 用散牌 K 跟,保留 5-9 顺子,而不是拆顺子甩单 5
+    expect(play).toEqual(hand(["K-clubs"]));
+  });
+
+  it("跟单牌时不拆对子", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["8-clubs", "8-hearts", "9-spades"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players
+      })
+    );
+    // 用散牌 9 跟,保留 88 对子,而不是拆对子甩单 8
+    expect(play).toEqual(hand(["9-spades"]));
+  });
+});
+
+describe("decideBotPlay - 过牌保结构", () => {
+  it("只能靠拆顺子来跟时,过牌保住顺子", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["5-clubs", "6-clubs", "7-clubs", "8-clubs", "9-clubs"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players: [
+          { id: "landlord", handCount: 10 },
+          { id: "me", handCount: 5 },
+          { id: "mate", handCount: 9 }
+        ]
+      })
+    );
+    expect(play).toBeNull();
+  });
+
+  it("只能靠拆对子来跟单牌时,过牌保住对子", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["8-clubs", "8-hearts"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players: [
+          { id: "landlord", handCount: 10 },
+          { id: "me", handCount: 2 },
+          { id: "mate", handCount: 9 }
+        ]
+      })
+    );
+    expect(play).toBeNull();
+  });
+
+  it("用零散牌就能跟(净减手数)时,照常跟而不过牌", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["5-clubs", "6-clubs", "7-clubs", "8-clubs", "9-clubs", "K-clubs"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players: [
+          { id: "landlord", handCount: 10 },
+          { id: "me", handCount: 6 },
+          { id: "mate", handCount: 9 }
+        ]
+      })
+    );
+    // 散牌 K 可跟、顺子保留,不触发过牌保结构
+    expect(play).toEqual(hand(["K-clubs"]));
+  });
+
+  it("对手即将走完时,仍拆结构拦截而不是过牌", () => {
+    const play = decideBotPlay(
+      view({
+        hand: hand(["5-clubs", "6-clubs", "7-clubs", "8-clubs", "9-clubs"]),
+        previous: combo(["4-hearts"]),
+        previousBy: "landlord",
+        selfId: "me",
+        landlordId: "landlord",
+        players: [
+          { id: "landlord", handCount: 1 },
+          { id: "me", handCount: 5 },
+          { id: "mate", handCount: 9 }
+        ]
+      })
+    );
+    // 地主只剩 1 张,必须拦截:拆顺子甩最低单张
+    expect(play).toEqual(hand(["5-clubs"]));
   });
 });
 
