@@ -27,6 +27,8 @@ interface RoomTurnSchedulerOptions {
   readonly onTurnTimeout: (playerId: PlayerId) => Promise<void>;
   readonly onTurnTimer: (event: TurnTimerEvent) => void;
   readonly turnTimeoutMs: number;
+  /** bot 回合的展示倒计时(ms):仅视觉,与真人一致;到点不安排兜底动作,bot 由自身决策驱动/超时收口。 */
+  readonly botTurnTimerMs: number;
 }
 
 interface ActiveTurnTimer {
@@ -76,28 +78,33 @@ export class RoomTurnScheduler {
       return;
     }
 
-    // 回合超时只面向真人(挂机自动出牌走规则)。bot 由自身决策超时(BOT_DECISION_TIMEOUT_MS)单独管:
-    // 到点 abort 抛错暴露,绝不让规则型超时动作替 bot 出牌——否则慢速 LLM 会被规则静默顶替,污染纯 LLM 实验。
-    if (this.options.botIds.includes(snapshot.currentPlayerId)) {
-      return;
-    }
-
     const playerId = snapshot.currentPlayerId;
+    const isBot = this.options.botIds.includes(playerId);
+    // bot 回合也广播倒计时,让牌桌表现与真人完全一致(同一个闹钟在转)。
+    // 展示时长:bot 用 botTurnTimerMs(大模型更长),真人用 turnTimeoutMs。
+    const durationMs = isBot ? this.options.botTurnTimerMs : this.options.turnTimeoutMs;
     const token = this.turnTimerToken + 1;
     this.turnTimerToken = token;
-    const deadlineAt = new Date(Date.now() + this.options.turnTimeoutMs).toISOString();
+    const deadlineAt = new Date(Date.now() + durationMs).toISOString();
     this.activeTurnTimer = {
       playerId,
       deadlineAt,
-      durationMs: this.options.turnTimeoutMs
+      durationMs
     };
 
     this.options.onTurnTimer({
       playerId,
       deadlineAt,
-      durationMs: this.options.turnTimeoutMs,
+      durationMs,
       snapshot
     });
+
+    // bot 的倒计时纯视觉:绝不安排规则型超时兜底——动作由 scheduleBotTurn 驱动,
+    // 大模型慢则倒计时停在 0 继续等,其真超时由自身 BOT_DECISION_TIMEOUT_MS 收口,
+    // 不让规则动作替 bot 出牌(否则慢速 LLM 被静默顶替,污染纯 LLM 实验)。
+    if (isBot) {
+      return;
+    }
 
     this.turnTimer = this.options.clock.setTimeout(() => {
       if (this.turnTimerToken !== token) {
@@ -106,7 +113,7 @@ export class RoomTurnScheduler {
 
       this.turnTimer = null;
       this.enqueueScheduledTask(() => this.options.onTurnTimeout(playerId), "Turn timeout failed.", () => this.turnTimerToken === token);
-    }, this.options.turnTimeoutMs);
+    }, durationMs);
   }
 
   cancelAll(): void {

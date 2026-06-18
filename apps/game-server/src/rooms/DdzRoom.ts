@@ -18,10 +18,12 @@ import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
-import { RuleBotBrain, type BotAction, type BotBrain } from "./botAction.js";
+import type { BotAction, BotBrain } from "./botBrain.js";
+import { RuleBotBrain } from "./ruleBotBrain.js";
 import { botTurnDelayMs } from "./botTiming.js";
+import { pickBotNicknames } from "./botNames.js";
 import { resolveBotBrain } from "./botDecision.js";
-import type { LlmDecisionTrace } from "./llmBotBrain.js";
+import { LlmBotBrain, type LlmDecisionTrace } from "./llmBotBrain.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
@@ -43,6 +45,8 @@ interface RoomCreateOptions extends JoinOptions {
   /** 固定机器人延迟(ms)的测试/CI 逃生阀:设置则用此定值,不设置(undefined)则走 botTiming 的拟真区间 */
   botMoveDelayMs?: number | undefined;
   turnTimeoutMs?: number;
+  /** 大模型机器人回合的展示倒计时(ms):仅视觉,到点不触发兜底,LLM 决策真超时由 BOT_DECISION_TIMEOUT_MS 收口。 */
+  llmBotTurnTimerMs?: number;
   /** 客户端建房时选的机器人决策来源(rule|llm)与模型(provider+model);不可信,resolveBotBrain 校验后才生效。 */
   botDecisionMode?: string;
   botProvider?: string;
@@ -52,6 +56,8 @@ interface RoomCreateOptions extends JoinOptions {
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
+// 大模型机器人展示倒计时默认值:比真人(20s)长,留出推理时间;到点不兜底,可停在 0 继续等模型。
+const DEFAULT_LLM_BOT_TURN_TIMER_MS = 30_000;
 const QUICK_START_BOT_COUNT = 2;
 // 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
 const SETTLEMENT_DISPLAY_MS = 5000;
@@ -93,6 +99,7 @@ export class DdzRoom extends Room {
   /** 展示用昵称表（来自 JWT claims），快照下发时注入 */
   private readonly nicknames = new Map<PlayerId, string>();
   private turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS;
+  private llmBotTurnTimerMs = DEFAULT_LLM_BOT_TURN_TIMER_MS;
   private failed = false;
   /** onCreate 是否完整成功：失败实例随后仍会被 autoDispose 收割，onDispose 据此跳过 DB 收尾 */
   private created = false;
@@ -114,6 +121,7 @@ export class DdzRoom extends Room {
   async onCreate(options: RoomCreateOptions): Promise<void> {
     this.fixedBotDelayMs = readFixedBotDelayMs(options.botMoveDelayMs);
     this.turnTimeoutMs = readTurnTimeoutMs(options.turnTimeoutMs);
+    this.llmBotTurnTimerMs = readLlmBotTurnTimerMs(options.llmBotTurnTimerMs);
     this.roomCode = readRoomCode(options);
 
     // 同步注册必须在首个 await 之前，并发建房才能被立即拒绝
@@ -197,7 +205,10 @@ export class DdzRoom extends Room {
           snapshot: this.snapshotDto(event.snapshot)
         } satisfies GameEvent);
       },
-      turnTimeoutMs: this.turnTimeoutMs
+      turnTimeoutMs: this.turnTimeoutMs,
+      // bot 回合也显示倒计时(与真人一致):大模型用更长的展示时长,规则 bot 与真人同档。
+      // 仅视觉,scheduleTurnTimer 不为 bot 安排兜底动作。
+      botTurnTimerMs: this.botBrain instanceof LlmBotBrain ? this.llmBotTurnTimerMs : this.turnTimeoutMs
     });
     this.setMetadata({
       roomCode: this.roomCode
@@ -739,9 +750,12 @@ export class DdzRoom extends Room {
   }
 
   private addBots(botCount: number): void {
+    // 生成可辨认的机器人昵称（与房内已有昵称去重）；存入 nicknames 后随快照下发并参与崩溃恢复
+    const names = pickBotNicknames(botCount, this.nicknames.values());
     for (let index = 0; index < botCount; index += 1) {
       const botId = `bot:${this.roomCode}:${index + 1}`;
       this.table.addBot(botId);
+      this.nicknames.set(botId, names[index]!);
       const result = this.table.setReady(botId);
       if (result.roundStarted) {
         throw new Error("Bots cannot start a round before a human player joins.");
@@ -823,11 +837,17 @@ export class DdzRoom extends Room {
         .map((player) => player.handCount)
     };
 
+    const nickname = this.nicknames.get(playerId);
     void this.commentator
       .comment(context)
       .then((text) => {
         if (text && !this.failed) {
-          this.broadcast("event", { type: "bot_chat", playerId, text } satisfies GameEvent);
+          this.broadcast("event", {
+            type: "bot_chat",
+            playerId,
+            text,
+            ...(nickname === undefined ? {} : { nickname })
+          } satisfies GameEvent);
         }
       })
       .catch(() => undefined);
@@ -1015,6 +1035,16 @@ function readTurnTimeoutMs(value: unknown): number {
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new Error("Turn timeout must be a positive integer in milliseconds.");
+  }
+  return value;
+}
+
+function readLlmBotTurnTimerMs(value: unknown): number {
+  if (value === undefined) {
+    return DEFAULT_LLM_BOT_TURN_TIMER_MS;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("LLM bot turn timer must be a positive integer in milliseconds.");
   }
   return value;
 }

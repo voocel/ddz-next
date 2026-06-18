@@ -83,8 +83,8 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
     case "room_failed":
       return `房间故障: ${event.reason}`;
     case "bot_chat":
-      // 机器人台词:暂以反馈行展示;后续可在牌桌上做气泡
-      return `${formatActor(event.playerId, localPlayerId)}: ${event.text}`;
+      // 机器人台词:暂以反馈行展示;后续可在牌桌上做气泡。nickname 随事件下发,展示名与座位一致。
+      return `${formatActor(event.playerId, localPlayerId, event.nickname)}: ${event.text}`;
   }
 }
 
@@ -114,12 +114,18 @@ export function formatActor(playerId: string, localPlayerId: string, nickname?: 
     return "你";
   }
 
+  // 昵称优先:机器人现在也带服务端生成的展示名(一眼可辨认是机器人),与真人同样走 nickname。
+  if (nickname) {
+    return nickname;
+  }
+
+  // 兜底:缺昵称的旧数据/异常路径,bot 仍给可读的"机器人N"而非截断 id。
   if (playerId.startsWith("bot:")) {
     const index = playerId.split(":").at(-1);
     return `机器人${index ?? ""}`;
   }
 
-  return nickname ?? shortId(playerId);
+  return shortId(playerId);
 }
 
 /** 从快照玩家列表里查展示昵称；旧快照无该字段时返回 undefined，由 formatActor 兜底 */

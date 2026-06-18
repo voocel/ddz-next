@@ -1,5 +1,5 @@
 import type { Card, Rank } from "./cards.js";
-import { getRankValue, RANKS, sortCards } from "./cards.js";
+import { CHAIN_RANKS, getRankValue, sortCards } from "./cards.js";
 import type { Combination, CombinationKind } from "./combinations.js";
 import { canBeat, COMBINATION_KINDS, identifyCombination } from "./combinations.js";
 
@@ -14,8 +14,6 @@ export interface LegalMove {
   readonly combination: Combination;
 }
 
-// 顺子/连对/飞机只在 3..A 之间;2 和大小王不参与连牌。
-const CHAIN_RANKS = RANKS.filter((rank) => getRankValue(rank) <= getRankValue("A"));
 const KIND_ORDER = new Map<CombinationKind, number>(COMBINATION_KINDS.map((kind, index) => [kind, index]));
 
 interface RankGroup {

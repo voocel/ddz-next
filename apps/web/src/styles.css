@@ -28,6 +28,7 @@
   --asset-btn-green: url("/assets/images/themes/cartoon/btn_pill_green.png");
   --asset-btn-blue: url("/assets/images/themes/cartoon/btn_pill_blue.png");
   --asset-btn-wood: url("/assets/images/themes/cartoon/btn_pill_wood.png");
+  --asset-btn-ai: url("/assets/images/themes/cartoon/btn_pill_ai.png");
 
   color: #f5f1e6;
   background: #101915;
@@ -67,6 +68,7 @@
   --asset-btn-green: url("/assets/images/themes/pixel/btn_pill_green.png");
   --asset-btn-blue: url("/assets/images/themes/pixel/btn_pill_blue.png");
   --asset-btn-wood: url("/assets/images/themes/pixel/btn_pill_wood.png");
+  --asset-btn-ai: url("/assets/images/themes/pixel/btn_pill_ai.png");
 }
 
 :root[data-theme="pixel"] img {
@@ -130,7 +132,7 @@ input {
     filter 110ms ease;
 }
 
-/* 尺寸分级：sm=角落工具按钮（返回/退出/刷新/回放控制），lg=次级动作，xl=大厅主行动 */
+/* 尺寸分级：sm=角落工具按钮（返回/退出/刷新/回放控制），lg=大厅主行动与次级动作（统一一档） */
 .btn-img-sm {
   min-width: 76px;
   height: 42px;
@@ -146,14 +148,6 @@ input {
   padding: 0 36px 6px;
   font-size: 24px;
   letter-spacing: 4px;
-}
-
-.btn-img-xl {
-  min-width: 300px;
-  height: 96px;
-  padding: 0 60px 8px;
-  font-size: clamp(26px, 3vw, 34px);
-  letter-spacing: 6px;
 }
 
 .btn-img:hover {
@@ -182,18 +176,46 @@ input {
   --btn-face: var(--asset-btn-wood);
 }
 
-/* 「AI 对战」主推入口:蓝按钮基础上加柔和脉冲发光,在大厅里突出 AI 玩法 */
+.btn-img-ai {
+  --btn-face: var(--asset-btn-ai);
+}
+
+/* 「大模型对战」主推入口:与其余大厅按钮同尺寸同形(btn-img-ai 专属靛紫→青霓虹药丸面),
+   再叠一层青→靛→品红流动的霓虹光晕营造 AI 科技感。
+   只用 box-shadow 做双层流光(软光晕不受 PNG 药丸形状影响,也不碰 filter/transform,
+   不会盖掉 .btn-img 的 hover/active 反馈,也避开负 z-index 在 hover 起新层级盖住按钮面的坑)。 */
 .btn-ai {
-  animation: ai-glow 2.2s ease-in-out infinite;
+  /* 圆角按药丸 PNG 实测几何(横≈20%/纵≈36% 的椭圆角)给百分比值,随尺寸等比缩放,
+     使 box-shadow 光晕贴着椭圆药丸轮廓而非套出一圈矩形(背景 PNG 角本就透明,不会被裁)。 */
+  border-radius: 20% / 36%;
+  animation: ai-glow 3.2s linear infinite;
 }
 
 @keyframes ai-glow {
   0%,
   100% {
-    box-shadow: 0 0 14px 1px rgba(64, 156, 255, 0.45);
+    box-shadow:
+      0 0 16px 1px rgba(56, 189, 248, 0.6),
+      0 0 32px 7px rgba(56, 189, 248, 0.3);
   }
-  50% {
-    box-shadow: 0 0 26px 5px rgba(96, 184, 255, 0.72);
+  33% {
+    box-shadow:
+      0 0 18px 2px rgba(129, 140, 248, 0.62),
+      0 0 36px 9px rgba(129, 140, 248, 0.34);
+  }
+  66% {
+    box-shadow:
+      0 0 18px 2px rgba(217, 110, 249, 0.58),
+      0 0 36px 9px rgba(217, 110, 249, 0.32);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-ai {
+    animation: none;
+    box-shadow:
+      0 0 16px 1px rgba(129, 140, 248, 0.55),
+      0 0 30px 7px rgba(129, 140, 248, 0.3);
   }
 }
 
@@ -1269,11 +1291,6 @@ h2 {
 
   .stage-logo {
     width: min(300px, 72vw);
-  }
-
-  .btn-img-xl {
-    min-width: 240px;
-    padding: 0 40px 6px;
   }
 
   .player-plate strong {

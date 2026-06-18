@@ -30,10 +30,13 @@ describe("table presentation", () => {
     expect(formatActor("long-human-player", "p0")).toBe("long-hum...");
   });
 
-  it("prefers nickname over truncated id for other humans", () => {
+  it("prefers nickname over truncated id and bot fallback", () => {
     expect(formatActor("cuid-of-bob-very-long", "p0", "Bob")).toBe("Bob");
     expect(formatActor("p0", "p0", "Alice")).toBe("你");
-    expect(formatActor("bot:room:1", "p0", "ignored")).toBe("机器人1");
+    // 机器人现在也带服务端生成的展示名,昵称优先于"机器人N"兜底
+    expect(formatActor("bot:room:1", "p0", "AI小七")).toBe("AI小七");
+    // 缺昵称时仍兜底为可读的"机器人N"
+    expect(formatActor("bot:room:1", "p0")).toBe("机器人1");
   });
 
   it("uses snapshot nickname in prompts and feedback", () => {

@@ -38,6 +38,10 @@ export function getRankValue(rank: Rank): number {
   return value;
 }
 
+// 可参与连牌(顺子/连对/飞机)的点:3..A;2 与大小王不连,天然成为控制牌。
+// 牌型识别、合法走法枚举、提示、机器人策略与叫牌评分共用这一份,避免各处重复定义而漂移。
+export const CHAIN_RANKS: readonly Rank[] = RANKS.filter((rank) => getRankValue(rank) <= getRankValue("A"));
+
 export function compareRank(a: Rank, b: Rank): number {
   return getRankValue(a) - getRankValue(b);
 }

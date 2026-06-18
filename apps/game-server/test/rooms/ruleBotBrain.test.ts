@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { identifyCombination, parseCardIds, type CardId, type GameSnapshot } from "@ddz/domain";
-import { decideBotAction } from "../../src/rooms/botAction";
+import { decideBotAction } from "../../src/rooms/ruleBotBrain";
 
 describe("decideBotAction", () => {
   it("rejects non-bot and inactive players", () => {

@@ -1,5 +1,5 @@
 import type { Card, CardId, Rank } from "./cards.js";
-import { createDeck, getRankValue, RANKS, sortCards } from "./cards.js";
+import { CHAIN_RANKS, createDeck, getRankValue, RANKS, sortCards } from "./cards.js";
 import type { Combination } from "./combinations.js";
 import { identifyCombination } from "./combinations.js";
 import type { PlayerId } from "./game.js";
@@ -22,8 +22,7 @@ export interface BotPlayView {
   readonly playedCards: readonly Card[];
 }
 
-// 顺子/连对/飞机只在 3..A 之间;2 和大小王不参与连牌,天然成为控制牌。
-const CHAIN_RANKS = RANKS.filter((rank) => getRankValue(rank) <= getRankValue("A"));
+// 2 和大小王不参与连牌(见 cards.ts 的 CHAIN_RANKS),天然成为控制牌。
 const CONTROL_RANKS: ReadonlySet<Rank> = new Set<Rank>(["2", "SJ", "BJ"]);
 // 对手手数 <= 此值视为即将走完,值得动用炸弹/火箭拦截。
 const ABOUT_TO_WIN = 2;

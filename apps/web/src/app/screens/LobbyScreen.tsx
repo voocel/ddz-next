@@ -100,12 +100,12 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
           <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
           <button
             type="button"
-            className="btn-img btn-img-blue btn-img-xl btn-ai"
+            className="btn-img btn-img-ai btn-img-lg btn-ai"
             onClick={() => {
               void aiBattle();
             }}
           >
-            🤖 AI 对战
+            大模型对战
           </button>
           <button type="button" className="btn-img btn-img-orange btn-img-lg" onClick={matchRoom}>
             快速开始

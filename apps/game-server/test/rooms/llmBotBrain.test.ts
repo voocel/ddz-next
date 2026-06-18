@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Card, CardId, Combination, GamePhase, GameSnapshot, PlayerId } from "@ddz/domain";
 import { identifyCombination, parseCardIds } from "@ddz/domain";
 import type { ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext } from "@ddz/bot-ai";
-import type { BotAction, BotBrain } from "../../src/rooms/botAction";
+import type { BotAction, BotBrain } from "../../src/rooms/botBrain";
 import {
   LlmBotBrain,
   LlmDecisionError,

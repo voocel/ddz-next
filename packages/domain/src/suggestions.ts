@@ -1,5 +1,5 @@
 import type { Card, Rank } from "./cards.js";
-import { getRankValue, RANKS, sortCards } from "./cards.js";
+import { CHAIN_RANKS, getRankValue, sortCards } from "./cards.js";
 import type { Combination } from "./combinations.js";
 import { canBeat, identifyCombination } from "./combinations.js";
 
@@ -9,9 +9,6 @@ interface RankCards {
   readonly rank: Rank;
   readonly value: number;
 }
-
-const MAX_CHAIN_RANK_VALUE = getRankValue("A");
-const CHAIN_RANKS = RANKS.filter((rank) => getRankValue(rank) <= MAX_CHAIN_RANK_VALUE);
 
 export function suggestPlay(hand: readonly Card[], previous: Combination | null): readonly Card[] | null {
   if (hand.length === 0) {

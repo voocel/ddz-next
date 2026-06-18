@@ -1,7 +1,8 @@
 import { compareRank, enumerateLegalMoves } from "@ddz/domain";
 import type { Card, Combination, GameSnapshot, LegalMove, PlayerId, Rank } from "@ddz/domain";
 import type { ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext, TokenUsage } from "@ddz/bot-ai";
-import { RuleBotBrain, type BotAction, type BotBrain } from "./botAction.js";
+import type { BotAction, BotBrain } from "./botBrain.js";
+import { RuleBotBrain } from "./ruleBotBrain.js";
 import { describeCombination, rankLabel } from "./combinationLabels.js";
 
 /** 一次成功 LLM 出牌决策的可观测指标(失败不再回退,而是抛错,故无 fallback 记录)。 */

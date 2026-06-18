@@ -7,7 +7,8 @@ import {
   type DecisionConfig,
   type ModelRef
 } from "@ddz/bot-ai";
-import { RuleBotBrain, type BotBrain } from "./botAction.js";
+import type { BotBrain } from "./botBrain.js";
+import { RuleBotBrain } from "./ruleBotBrain.js";
 import { LlmBotBrain, type LlmDecisionMetric, type LlmDecisionTrace } from "./llmBotBrain.js";
 
 /** 客户端建房时所选的机器人决策(不可信,resolveDecisionConfig 校验后才生效)。 */

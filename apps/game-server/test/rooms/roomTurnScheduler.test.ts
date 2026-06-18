@@ -49,15 +49,19 @@ describe("RoomTurnScheduler", () => {
     expect(fixture.timeoutTurns).toEqual(["p0"]);
   });
 
-  it("does not schedule the rule-based turn timer for bot turns (bots are governed by their own decision timeout)", () => {
+  it("broadcasts a cosmetic turn timer for bot turns without scheduling a rule timeout", () => {
     const fixture = createFixture();
     const scheduler = createScheduler(fixture, ["bot:room:1"]);
 
     scheduler.scheduleTurnTimer(createSnapshot("playing", "bot:room:1"));
 
-    expect(fixture.turnTimers).toEqual([]);
+    // bot 回合也广播倒计时(视觉与真人一致),时长用 botTurnTimerMs
+    expect(fixture.turnTimers).toHaveLength(1);
+    expect(fixture.turnTimers[0]).toMatchObject({ playerId: "bot:room:1", durationMs: 2000 });
+    expect(scheduler.getActiveTurnTimer()).toMatchObject({ playerId: "bot:room:1", durationMs: 2000 });
+    // 但绝不为 bot 安排规则型超时兜底:无定时器、无入队任务(动作由 scheduleBotTurn 驱动,LLM 超时自管)
     expect(fixture.clock.handles).toEqual([]);
-    expect(scheduler.getActiveTurnTimer()).toBeNull();
+    expect(fixture.enqueuedTasks).toHaveLength(0);
   });
 
   it("does not schedule turn timers for phases without active turns", () => {
@@ -159,7 +163,8 @@ function createScheduler(fixture: Fixture, botIds: readonly PlayerId[]): RoomTur
     onTurnTimer: (event) => {
       fixture.turnTimers.push(event);
     },
-    turnTimeoutMs: 1000
+    turnTimeoutMs: 1000,
+    botTurnTimerMs: 2000
   });
 }
 

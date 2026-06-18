@@ -6,7 +6,8 @@ import type { BotProviderRegistry, ModelRef } from "./registry.js";
 /**
  * 把 {provider, model} 解析成 AI SDK 语言模型。
  * provider/model 不在注册表、缺密钥(anthropic 可回退环境变量 ANTHROPIC_API_KEY)、
- * 或 openai-compatible 缺 baseURL 时返回 null,由调用方静默降级(回退规则 bot)。
+ * 或 openai-compatible 缺 baseURL 时返回 null。如何处理由调用方决定:
+ * 决策路径(createBotBrain)缺配置直接抛错暴露、绝不回退规则 bot;解说路径(LlmCommentator)静默关闭。
  */
 export function resolveModel(ref: ModelRef, registry: BotProviderRegistry): LanguageModel | null {
   const provider = registry.providers[ref.provider];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseBotProviderRegistry, type BotProviderRegistry, type DecisionConfig } from "@ddz/bot-ai";
-import { RuleBotBrain } from "../../src/rooms/botAction";
+import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 import { LlmBotBrain } from "../../src/rooms/llmBotBrain";
 import { resolveBotBrain, resolveDecisionConfig } from "../../src/rooms/botDecision";
 

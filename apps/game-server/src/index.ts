@@ -30,6 +30,10 @@ const botMoveDelayMs = readOptionalIntegerEnv("BOT_MOVE_DELAY_MS", { min: 0 });
 const turnTimeoutMs = readIntegerEnv("TURN_TIMEOUT_MS", 20_000, {
   min: 1
 });
+// 大模型机器人回合的展示倒计时:比真人长,留推理时间;到点不兜底,可停 0 继续等模型。
+const llmBotTurnTimerMs = readIntegerEnv("BOT_LLM_TURN_TIMER_MS", 30_000, {
+  min: 1
+});
 // 机器人供应商注册表(含密钥,仅服务端):BOT_PROVIDERS 内联 JSON 优先,否则读 bot-providers.json,
 // 都没有则按 ANTHROPIC_API_KEY 合成默认 anthropic。配置写错会在启动时显式抛错。
 const botRegistry = loadBotProviderRegistry();
@@ -57,6 +61,7 @@ gameServer.define("ddz", DdzRoom, {
   botCount,
   botMoveDelayMs,
   turnTimeoutMs,
+  llmBotTurnTimerMs,
   botRegistry
 }).filterBy(["roomCode"]);
 

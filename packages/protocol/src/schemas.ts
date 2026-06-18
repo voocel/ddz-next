@@ -249,6 +249,7 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("bot_chat"),
     playerId: z.string().min(1),
+    nickname: z.string().min(1).optional(),
     text: z.string().min(1).max(120)
   })
 ]);

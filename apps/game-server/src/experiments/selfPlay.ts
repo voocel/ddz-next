@@ -14,7 +14,8 @@ import { GameTable } from "@ddz/domain";
 import type { PlayerId, Settlement } from "@ddz/domain";
 import { LlmMoveChooser, parseBotProviderRegistry, resolveModel, type ModelRef } from "@ddz/bot-ai";
 import { readBotProvidersRaw } from "../botProviders.js";
-import { RuleBotBrain, type BotAction, type BotBrain } from "../rooms/botAction.js";
+import type { BotAction, BotBrain } from "../rooms/botBrain.js";
+import { RuleBotBrain } from "../rooms/ruleBotBrain.js";
 import { LlmBotBrain, LlmDecisionError, type LlmDecisionMetric } from "../rooms/llmBotBrain.js";
 import { createLlmTraceSink } from "../rooms/llmTraceSink.js";
 
