@@ -1,6 +1,16 @@
 import type { Client } from "@colyseus/core";
 import { Room } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
+import {
+  commentaryConfigFromEnv,
+  LlmCommentator,
+  NullCommentator,
+  parseBotProviderRegistry,
+  resolveModel,
+  type BotProviderRegistry,
+  type Commentator,
+  type CommentaryContext
+} from "@ddz/bot-ai";
 import { GameTable } from "@ddz/domain";
 import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE, ROOM_CODE_REGEX } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
@@ -8,8 +18,12 @@ import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
-import { decideBotAction } from "./botAction.js";
+import { RuleBotBrain, type BotAction, type BotBrain } from "./botAction.js";
 import { botTurnDelayMs } from "./botTiming.js";
+import { resolveBotBrain } from "./botDecision.js";
+import type { LlmDecisionTrace } from "./llmBotBrain.js";
+import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
+import { combinationLabel } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
 import { SerialTaskQueue } from "./serialTaskQueue.js";
 import { RoomTurnScheduler } from "./roomTurnScheduler.js";
@@ -29,6 +43,12 @@ interface RoomCreateOptions extends JoinOptions {
   /** 固定机器人延迟(ms)的测试/CI 逃生阀:设置则用此定值,不设置(undefined)则走 botTiming 的拟真区间 */
   botMoveDelayMs?: number | undefined;
   turnTimeoutMs?: number;
+  /** 客户端建房时选的机器人决策来源(rule|llm)与模型(provider+model);不可信,resolveBotBrain 校验后才生效。 */
+  botDecisionMode?: string;
+  botProvider?: string;
+  botModel?: string;
+  /** 进程启动时注入的供应商注册表(含密钥,仅服务端);未注入时按 env 合成默认 anthropic。 */
+  botRegistry?: BotProviderRegistry;
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
@@ -53,10 +73,19 @@ export class DdzRoom extends Room {
   maxClients = 3;
   private readonly table = new GameTable();
   private readonly tasks = new SerialTaskQueue();
+  // 机器人大脑:onCreate 时按「建房 options + BOT_DECISION env 默认」解析(见 resolveBotBrain),默认规则 bot。
+  // 决策一律在串行锁外执行(见 BotBrain 契约);叫/抢地主走固定规则隔离实验变量;选 LLM 但缺 key 时建房直接报错(不回退)。
+  private botBrain: BotBrain = new RuleBotBrain();
+  // 机器人人格解说:默认关闭(BOT_CHAT_ENABLED=true 才启用);纯装饰,不参与决策、不持有串行锁。
+  // 解说用注册表默认模型,需在 setupRoom 拿到注册表后重建;此处先给空解说兜底。
+  private readonly commentary = commentaryConfigFromEnv();
+  private commentator: Commentator = new NullCommentator();
   private readonly clientPlayers = new Map<string, PlayerId>();
   private readonly playerSessions = new Map<PlayerId, Set<string>>();
   private persistence!: RoomPersistence;
   private turnScheduler!: RoomTurnScheduler;
+  // LLM 出牌决策的逐手留证(JSONL);仅 BOT_DECISION_TRACE=true 时非空,供实验排错/优化。
+  private traceSink: LlmTraceSink | null = null;
   private roomCode!: string;
   // null = 走 botTiming 的拟真区间;非空 = 固定延迟(测试/CI 逃生阀)
   private fixedBotDelayMs: number | null = null;
@@ -106,6 +135,19 @@ export class DdzRoom extends Room {
   }
 
   private async setupRoom(options: RoomCreateOptions): Promise<void> {
+    // 注册表持有各 provider 的密钥(仅服务端);未注入时按 env 合成默认 anthropic 注册表。
+    const registry = options.botRegistry ?? parseBotProviderRegistry(null);
+    // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
+    this.traceSink = createLlmTraceSink(process.env, this.roomCode);
+    const hooks = this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : undefined;
+    this.botBrain = resolveBotBrain(options, registry, hooks);
+    if (this.commentary.enabled) {
+      this.commentator = new LlmCommentator({
+        model: resolveModel(registry.default, registry),
+        timeoutMs: this.commentary.timeoutMs,
+        maxChars: this.commentary.maxChars
+      });
+    }
     this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient, () =>
       this.dumpLiveState()
     );
@@ -143,7 +185,7 @@ export class DdzRoom extends Room {
           await task();
         });
       },
-      onBotTurn: (playerId) => this.handleBotTurn(playerId),
+      onBotTurn: (playerId, isValid) => this.handleBotTurn(playerId, isValid),
       onFailure: (error, reason) => this.failRoom(error, reason),
       onTurnTimeout: (playerId) => this.handleTurnTimeout(playerId),
       onTurnTimer: (event) => {
@@ -186,6 +228,8 @@ export class DdzRoom extends Room {
 
   async onDispose(): Promise<void> {
     this.turnScheduler?.cancelAll();
+    // 等挂起的决策 trace 写完落盘(不阻断后续 DB 收尾;失败 sink 内部已自行告警)。
+    await this.traceSink?.close().catch(() => undefined);
     try {
       // onCreate 失败的僵尸实例不拥有该房间码，绝不能动 DB（否则会把
       // 别的实例或可恢复牌局标记 closed 并删掉状态行）；failRoom 已自行上报 closed
@@ -706,14 +750,31 @@ export class DdzRoom extends Room {
     }
   }
 
-  private async handleBotTurn(playerId: PlayerId): Promise<void> {
+  private async handleBotTurn(playerId: PlayerId, isValid: () => boolean): Promise<void> {
+    // 锁外:只读快照决策(LLM 等慢速实现不持有串行锁,避免卡住整个房间)。
     const snapshot = this.table.snapshot();
-    if (snapshot.currentPlayerId !== playerId) {
+    if (!isValid() || snapshot.currentPlayerId !== playerId) {
       return;
     }
 
+    const action = await this.botBrain.decide(
+      snapshot,
+      playerId,
+      this.table.getHand(playerId),
+      this.table.playedCards()
+    );
+
+    // 锁内:应用权威动作 + 落库 + 广播。await 期间局面可能已推进,入队后再校验一次。
+    await this.tasks.enqueue(async () => {
+      if (this.failed || !isValid() || this.table.snapshot().currentPlayerId !== playerId) {
+        return;
+      }
+      await this.applyBotAction(playerId, action);
+    });
+  }
+
+  private async applyBotAction(playerId: PlayerId, action: BotAction): Promise<void> {
     try {
-      const action = decideBotAction(snapshot, playerId, this.table.getHand(playerId), this.table.playedCards());
       switch (action.type) {
         case "bid_landlord":
           await this.afterBid(this.table.bidLandlord(playerId, action.called));
@@ -725,15 +786,51 @@ export class DdzRoom extends Room {
           this.table.pass(playerId);
           await this.afterPass(playerId);
           break;
-        case "play_cards":
-          await this.afterPlay(this.table.playCards(playerId, action.cards));
+        case "play_cards": {
+          const play = this.table.playCards(playerId, action.cards);
+          await this.afterPlay(play);
+          this.fireBotChat(playerId, play);
           break;
+        }
       }
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : "Bot action failed.", {
         cause: error
       });
     }
+  }
+
+  /** 机器人出牌后异步生成一句解说并广播;纯装饰:未启用/失败静默,fire-and-forget 不持有串行锁。 */
+  private fireBotChat(playerId: PlayerId, play: PublicPlay): void {
+    if (!this.commentary.enabled) {
+      return;
+    }
+
+    const snapshot = this.table.snapshot();
+    const self = snapshot.players.find((player) => player.id === playerId);
+    if (!self) {
+      return;
+    }
+
+    const context: CommentaryContext = {
+      persona: this.commentary.persona,
+      selfNickname: this.nicknames.get(playerId) ?? "机器人",
+      role: snapshot.landlordId === playerId ? "landlord" : "farmer",
+      event: `打出了${combinationLabel(play.combination.kind)}(${play.cards.length}张)`,
+      selfHandCount: self.handCount,
+      opponentHandCounts: snapshot.players
+        .filter((player) => player.id !== playerId)
+        .map((player) => player.handCount)
+    };
+
+    void this.commentator
+      .comment(context)
+      .then((text) => {
+        if (text && !this.failed) {
+          this.broadcast("event", { type: "bot_chat", playerId, text } satisfies GameEvent);
+        }
+      })
+      .catch(() => undefined);
   }
 
   private async handleTurnTimeout(playerId: PlayerId): Promise<void> {

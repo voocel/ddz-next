@@ -2,11 +2,19 @@ import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { readTokenConfig } from "@ddz/auth";
 import { loadRootEnv } from "@ddz/env";
+import { listModels } from "@ddz/bot-ai";
+import { loadBotProviderRegistry } from "./botProviders.js";
 import { readApiSyncConfig } from "./api/config.js";
 import { HttpGameActionClient } from "./api/gameActionClient.js";
 import { HttpRoomStatusClient } from "./api/roomStatusClient.js";
 import { DdzRoom } from "./rooms/DdzRoom.js";
 import { MatchmakingRoom } from "./rooms/MatchmakingRoom.js";
+
+/** /bot-models 路由只用到 express Response 的这两个方法,结构化标注避免引入 @types/express。 */
+interface ExpressJsonResponse {
+  set(field: string, value: string): unknown;
+  json(body: unknown): unknown;
+}
 
 loadRootEnv();
 
@@ -22,10 +30,21 @@ const botMoveDelayMs = readOptionalIntegerEnv("BOT_MOVE_DELAY_MS", { min: 0 });
 const turnTimeoutMs = readIntegerEnv("TURN_TIMEOUT_MS", 20_000, {
   min: 1
 });
+// 机器人供应商注册表(含密钥,仅服务端):BOT_PROVIDERS 内联 JSON 优先,否则读 bot-providers.json,
+// 都没有则按 ANTHROPIC_API_KEY 合成默认 anthropic。配置写错会在启动时显式抛错。
+const botRegistry = loadBotProviderRegistry();
 const roomStatusClient = new HttpRoomStatusClient(apiSyncConfig);
 const gameActionClient = new HttpGameActionClient(apiSyncConfig);
 const gameServer = new Server({
-  transport: new WebSocketTransport()
+  transport: new WebSocketTransport(),
+  // 下发可选机器人模型清单(无密钥)给前端「AI 对战」下拉;public 数据,允许跨源 GET。
+  // express/@types/express 非直接依赖,handler 用结构化类型标注,避免引入额外依赖。
+  express: (app) => {
+    app.get("/bot-models", (_req: unknown, res: ExpressJsonResponse) => {
+      res.set("Access-Control-Allow-Origin", "*");
+      res.json({ default: botRegistry.default, models: listModels(botRegistry) });
+    });
+  }
 });
 
 // static onAuth 在房间创建前就会执行，token 配置需在进程启动时注入
@@ -37,7 +56,8 @@ gameServer.define("ddz", DdzRoom, {
   gameActionClient,
   botCount,
   botMoveDelayMs,
-  turnTimeoutMs
+  turnTimeoutMs,
+  botRegistry
 }).filterBy(["roomCode"]);
 
 gameServer.define("matchmaking", MatchmakingRoom, {

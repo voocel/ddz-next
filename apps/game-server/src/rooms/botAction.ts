@@ -18,6 +18,31 @@ export type BotAction =
       readonly cards: readonly CardId[];
     };
 
+/**
+ * 机器人「大脑」:由公开快照 + 手牌决策出一个动作。
+ * decide 返回 Promise,使 LLM 等异步实现可接入;调用方须在锁外 await(决策只读,不改状态)。
+ */
+export interface BotBrain {
+  decide(
+    snapshot: GameSnapshot,
+    playerId: PlayerId,
+    hand: readonly Card[],
+    playedCards: readonly Card[]
+  ): Promise<BotAction>;
+}
+
+/** 现状规则机器人:同步纯函数决策包成 Promise,行为不变、确定性、可单测。 */
+export class RuleBotBrain implements BotBrain {
+  decide(
+    snapshot: GameSnapshot,
+    playerId: PlayerId,
+    hand: readonly Card[],
+    playedCards: readonly Card[]
+  ): Promise<BotAction> {
+    return Promise.resolve(decideBotAction(snapshot, playerId, hand, playedCards));
+  }
+}
+
 export function decideBotAction(
   snapshot: GameSnapshot,
   playerId: PlayerId,

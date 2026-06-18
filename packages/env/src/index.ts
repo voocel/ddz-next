@@ -2,6 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** 把相对路径解析到仓库根(与 loadRootEnv 同一基准:编译产物所在的 packages/env/dist 上溯三级)。 */
+export function resolveRootPath(relativePath: string): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../../", relativePath);
+}
+
+/** 读取仓库根下的文件内容;不存在返回 null(供可选配置文件使用)。relativePath 为绝对路径时按绝对路径读取。 */
+export function readRootFile(relativePath: string): string | null {
+  const path = resolveRootPath(relativePath);
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
 export function loadRootEnv(): void {
   const envPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env");
   if (!existsSync(envPath)) {

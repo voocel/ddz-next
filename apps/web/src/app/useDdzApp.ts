@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CardId } from "@ddz/domain";
-import type { GameEvent, GameSnapshotDto, RoomDto } from "@ddz/protocol";
+import type { BotDecisionMode, BotModelOption, GameEvent, GameSnapshotDto, RoomDto } from "@ddz/protocol";
 import { getTableControlsState } from "../game/controlsState";
 import { createGameClient, isRecoverableDropCode } from "../net/gameClient";
+import { fetchBotModels } from "../net/botModels";
 import { createMatchmakingClient } from "../net/matchmakingClient";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
+import { loadBotPreferences, saveBotPreferences, type BotPreferences } from "../botPreferences";
 import type { TurnTimerState } from "./types";
 import { useAuthSession } from "./useAuthSession";
 import { useHistoryReplay } from "./useHistoryReplay";
@@ -34,12 +36,25 @@ export function useDdzApp() {
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [selectedRoom, setSelectedRoom] = useState<RoomDto | null>(null);
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
+  // 「AI 对战」入口选定的机器人决策(rule/llm + provider/model);普通建房/匹配为 null（走服务端默认=规则）
+  const [selectedRoomBot, setSelectedRoomBot] = useState<{
+    readonly mode: BotDecisionMode;
+    readonly provider: string;
+    readonly model: string;
+  } | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
   const [matchQueue, setMatchQueue] = useState<{ waiting: number; position: number } | null>(null);
   const matchClientRef = useRef<ReturnType<typeof createMatchmakingClient> | null>(null);
   const [theme, setTheme] = useState<ThemeId>(() => loadTheme());
   const [audioLevels, setAudioLevels] = useState<AudioLevels>(() => loadAudioLevels());
+  const [botPreferences, setBotPreferences] = useState<BotPreferences>(() => loadBotPreferences());
+  // 「AI 对战」可选模型清单,从 game-server 的 /bot-models 动态拉取(无密钥);拉取失败为空(只剩「服务端默认」)
+  const [botModels, setBotModels] = useState<readonly BotModelOption[]>([]);
+  // 服务端默认模型(/bot-models 下发),用于在设置里把「服务端默认」标注成具体模型;未拉到为 null
+  const [botModelDefault, setBotModelDefault] = useState<{ readonly provider: string; readonly model: string } | null>(
+    null
+  );
   // 断线自动重连：记录触发时间戳，副作用循环按 deadline 重试（游戏服重启恢复牌局的入口）
   const [reconnectRequest, setReconnectRequest] = useState<number | null>(null);
 
@@ -59,6 +74,26 @@ export function useDdzApp() {
     saveAudioLevels(audioLevels);
   }, [audioLevels]);
 
+  useEffect(() => {
+    saveBotPreferences(botPreferences);
+  }, [botPreferences]);
+
+  // 启动时拉一次可选模型清单(纯展示数据,与登录无关);失败静默,下拉只剩「服务端默认」
+  useEffect(() => {
+    const endpoint = import.meta.env.VITE_GAME_ENDPOINT ?? "http://localhost:2567";
+    let cancelled = false;
+    void fetchBotModels(endpoint).then((response) => {
+      if (!cancelled) {
+        setBotModels(response.models);
+        // provider 为空 = 没拉到/未配置,按 null 处理(设置里仍显示「服务端默认」)
+        setBotModelDefault(response.default.provider ? response.default : null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const client = useMemo(
     () =>
       createGameClient({
@@ -67,12 +102,16 @@ export function useDdzApp() {
         accessToken: auth.session?.accessToken ?? "",
         roomCode: selectedRoom?.code ?? "",
         quickStart: selectedRoomQuickStart,
+        botDecisionMode: selectedRoomBot?.mode,
+        botProvider: selectedRoomBot?.provider,
+        botModel: selectedRoomBot?.model,
         onStatus: setStatus,
         onDropped: (code) => {
           // 被踢/房间故障：重连必败或会互踢，直接回大厅
           if (!isRecoverableDropCode(code)) {
             setSelectedRoom(null);
             setSelectedRoomQuickStart(false);
+            setSelectedRoomBot(null);
             setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
             return;
           }
@@ -83,6 +122,11 @@ export function useDdzApp() {
         onEvent: (event) => {
           if ("snapshot" in event) {
             setSnapshot(event.snapshot);
+            // 回合推进到的玩家与当前倒计时归属不一致时,先清掉旧倒计时:真人回合会紧跟一条 turn_timer 重新点亮;
+            // bot 回合服务端不发 turn_timer(bot 不受规则型回合超时管辖,由自身决策超时管),于是保持无倒计时。
+            setTurnTimer((current) =>
+              current && current.playerId !== event.snapshot.currentPlayerId ? null : current
+            );
           }
           if (event.type === "turn_timer") {
             setTurnTimer({
@@ -99,7 +143,16 @@ export function useDdzApp() {
           setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
-    [history.refreshHistory, selectedRoom?.code, selectedRoomQuickStart, auth.session?.accessToken, auth.session?.user.id]
+    [
+      history.refreshHistory,
+      selectedRoom?.code,
+      selectedRoomQuickStart,
+      selectedRoomBot?.mode,
+      selectedRoomBot?.provider,
+      selectedRoomBot?.model,
+      auth.session?.accessToken,
+      auth.session?.user.id
+    ]
   );
 
   const tableControls = useMemo(
@@ -116,10 +169,17 @@ export function useDdzApp() {
   }, []);
 
   const enterRoom = useCallback(
-    (room: RoomDto, options: { readonly quickStart?: boolean } = {}): void => {
+    (
+      room: RoomDto,
+      options: {
+        readonly quickStart?: boolean;
+        readonly bot?: { readonly mode: BotDecisionMode; readonly provider: string; readonly model: string };
+      } = {}
+    ): void => {
       stopMatching();
       setSelectedRoom(room);
       setSelectedRoomQuickStart(options.quickStart === true);
+      setSelectedRoomBot(options.bot ?? null);
       resetRoomState();
       history.clearReplay();
       setStatus(`准备进入房间 ${room.code}`);
@@ -137,6 +197,7 @@ export function useDdzApp() {
       setRooms([]);
       setSelectedRoom(null);
       setSelectedRoomQuickStart(false);
+      setSelectedRoomBot(null);
       resetRoomState();
     },
     [resetRoomState, stopMatching]
@@ -176,6 +237,7 @@ export function useDdzApp() {
     // 置空 selectedRoom 后，连接副作用会负责断开与游戏状态清理
     setSelectedRoom(null);
     setSelectedRoomQuickStart(false);
+    setSelectedRoomBot(null);
     history.clearReplay();
     void refreshRooms();
   }, [history.clearReplay, refreshRooms, selectedRoom]);
@@ -194,6 +256,25 @@ export function useDdzApp() {
       setRoomStatus(error instanceof Error ? error.message : "创建房间失败");
     }
   }, [api, enterRoom, auth.session]);
+
+  /** 「AI 对战」入口:建房并补满大模型机器人立即开打(quickStart 自动准备),模型取设置里的偏好。 */
+  const aiBattle = useCallback(async (): Promise<void> => {
+    if (!auth.session) {
+      return;
+    }
+
+    setRoomStatus("创建 AI 对战房间中");
+    try {
+      const response = await api.createRoom(auth.session.accessToken);
+      enterRoom(response.room, {
+        quickStart: true,
+        bot: { mode: "llm", provider: botPreferences.provider, model: botPreferences.model }
+      });
+      setRoomStatus(`已创建 AI 对战房间 ${response.room.code}`);
+    } catch (error) {
+      setRoomStatus(error instanceof Error ? error.message : "创建 AI 对战房间失败");
+    }
+  }, [api, enterRoom, auth.session, botPreferences.provider, botPreferences.model]);
 
   const matchRoom = useCallback((): void => {
     if (!auth.session || matchClientRef.current) {
@@ -279,6 +360,7 @@ export function useDdzApp() {
         setReconnectRequest(null);
         setSelectedRoom(null);
         setSelectedRoomQuickStart(false);
+        setSelectedRoomBot(null);
         setRoomStatus("重连失败，请重新进入房间");
       }
     };
@@ -296,8 +378,13 @@ export function useDdzApp() {
     ...history,
     audioLevels,
     setAudioLevels,
+    botPreferences,
+    setBotPreferences,
+    botModels,
+    botModelDefault,
     theme,
     setTheme,
+    aiBattle,
     cancelMatch,
     client,
     createRoom,

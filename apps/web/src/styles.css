@@ -182,6 +182,21 @@ input {
   --btn-face: var(--asset-btn-wood);
 }
 
+/* 「AI 对战」主推入口:蓝按钮基础上加柔和脉冲发光,在大厅里突出 AI 玩法 */
+.btn-ai {
+  animation: ai-glow 2.2s ease-in-out infinite;
+}
+
+@keyframes ai-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 14px 1px rgba(64, 156, 255, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 26px 5px rgba(96, 184, 255, 0.72);
+  }
+}
+
 :root[data-theme="pixel"] .btn-img {
   image-rendering: pixelated;
   letter-spacing: 2px;
@@ -796,6 +811,57 @@ input {
 .audio-settings {
   display: grid;
   gap: 12px;
+}
+
+/* 「AI 对战」机器人模型选择:与音量行同一视觉,放在设置弹窗音量下方 */
+.bot-settings {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bot-model-row {
+  display: grid;
+  grid-template-columns: 24px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #fffdf6, var(--cream-2));
+  border: 2px solid var(--wood-1);
+  border-radius: var(--r-m);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.7);
+}
+
+.bot-model-icon {
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+}
+
+.bot-model-name {
+  color: var(--ink);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.bot-model-select {
+  width: 100%;
+  padding: 6px 10px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  background: var(--cream);
+  border: 2px solid var(--wood-1);
+  border-radius: var(--r-s);
+  cursor: pointer;
+}
+
+.bot-settings-hint {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--wood-3);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* 一行音量：图标 | 名称 | 滑块（占满剩余） | 百分比 */

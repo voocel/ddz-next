@@ -1,0 +1,19 @@
+# 依赖与构建产物：镜像内重新安装/构建，不从构建上下文拷入
+**/node_modules
+**/dist
+**/.turbo
+.git
+.git/**
+
+# 含密钥，绝不进镜像（与 .gitignore 的密钥排除对齐）
+.env
+.env.local
+.env.*.local
+bot-providers.json
+
+# 杂项
+coverage
+*.log
+tasks
+tmp
+.DS_Store

@@ -13,10 +13,16 @@ tmp
 .env.local
 .env.*.local
 
+# 机器人供应商配置(含各家 API key,仅本地/服务端持有)
+bot-providers.json
+
 # Log files
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# LLM 决策留证(含 prompt/手牌,仅本地排错用,不含密钥)
+logs/
 
 # Editor directories and files
 .idea

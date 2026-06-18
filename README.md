@@ -13,6 +13,7 @@ packages/
   domain/       斗地主规则、发牌、牌型识别、局状态机
   protocol/     Zod 消息协议和 DTO
   auth/         JWT 签发与验签
+  bot-ai/       大模型机器人：多 provider 注册表（anthropic / openai-compatible）、LLM 选牌与人格解说
   config/       共享 TypeScript 配置
 ```
 
@@ -44,7 +45,7 @@ pnpm --filter @ddz/web dev
 ./start.sh
 ```
 
-打开 Web 后点击“快速开始”会自动创建带两个机器人的测试房间；“创建房间”仍然创建普通真人房间。
+打开 Web 后点击“快速开始”会自动创建带两个机器人的测试房间；“创建房间”仍然创建普通真人房间；“🤖 AI 对战”会创建一桌**大模型机器人**直接开打。模型在大厅“设置”里选——可选项由 game-server 从 `bot-providers.json` 动态下发(`GET /bot-models`，按 provider 分组，无密钥)；未选则用服务端默认模型。**服务端未配置对应 API key 时直接建房失败并提示**，不会静默降级成规则机器人（目的是实验验证 LLM，缺配置就该让你知道）。该入口按房间携带所选 `{provider, model}`，覆盖服务端 `BOT_DECISION` 默认；**API key 始终只在服务端**，前端只见 provider/model 标签。
 
 本地默认使用已安装的 PostgreSQL：`localhost:5433`，用户 `postgres`，密码 `123456`，数据库名 `ddz`。如果本机还没有数据库，先创建一次：
 
@@ -92,7 +93,60 @@ pnpm smoke:full-stack
 - `BOT_COUNT`：每个牌桌预置机器人数量，默认 `0`；单人调试可设为 `2`。
 - `BOT_MOVE_DELAY_MS`：机器人出牌延迟。默认不设置，按相位模拟真人思考节奏（自由领出想得久、跟牌/过牌更快、叫抢一个短停顿，均带随机抖动）。设置后变为固定延迟并关闭拟真，供冒烟测试等压成极小值。
 - `TURN_TIMEOUT_MS`：服务端权威回合超时时间，默认 `20000`。
+- `BOT_CHAT_ENABLED`：是否启用大模型机器人人格解说，默认 `false`；设为 `true` 时机器人出牌后会异步生成一句台词广播（`bot_chat` 事件）。纯装饰，不参与决策、不阻塞对局；超时/失败/缺 key 均静默。解说使用供应商注册表的默认模型（见下方「多 provider 机器人配置」）。
+- `ANTHROPIC_API_KEY`：未配置 `bot-providers.json` 时的兜底——据此合成单一 `anthropic` 供应商（含 Haiku/Sonnet/Opus）；缺失则解说与 LLM 决策静默降级（不报错）。
+- `BOT_CHAT_PERSONA`：机器人性格描述，默认「爱炫耀、嘴上不饶人但心态好的老牌玩家」。
+- `BOT_CHAT_TIMEOUT_MS` / `BOT_CHAT_MAX_CHARS`：单次解说超时与台词字数上限，默认 `4000` / `40`。
+- `BOT_DECISION`：机器人出牌决策来源，`rule`（默认，规则引擎）或 `llm`（大模型）。设为 `llm` 时，**出牌相位**由模型在 `@ddz/domain` 枚举出的合法走法里选一手；叫/抢地主仍走固定规则（隔离实验变量，只验证 LLM 的出牌能力）。**出牌相位不再静默回退**：模型超时/限流/解析失败/越界一律抛错暴露（线上由房间故障关闭并记日志，selfPlay 里如实记为失败局）；缺 key 则建房直接报错。服务端权威不变（模型只能从合法候选里选）。具体模型由「AI 对战」入口所选或注册表默认决定。
+- `BOT_DECISION_TIMEOUT_MS`：单次决策超时，默认 `8000`（早于 `TURN_TIMEOUT_MS` 兜底）。
+- `BOT_PROVIDERS_FILE`：供应商注册表 JSON 路径（相对仓库根或绝对路径），默认仓库根 `bot-providers.json`。
 - `VITE_API_ENDPOINT` / `VITE_GAME_ENDPOINT`：Web 访问 API 和实时服务的地址。
+
+### 多 provider 机器人配置
+
+大模型机器人支持多家 provider、多模型，配置走一个 JSON 文件（含密钥，**仅服务端持有，已 gitignore，绝不下发前端**）：
+
+```bash
+cp bot-providers.example.json bot-providers.json   # 仓库根；或用 BOT_PROVIDERS_FILE 指定其他路径
+# 编辑 bot-providers.json，填入各家 api_key / base_url / models
+```
+
+文件结构（`type` 为 `anthropic` 时走 Anthropic 原生适配器，其余/缺省一律走 OpenAI 兼容适配器，覆盖 DeepSeek、OpenRouter、MiMo、本地服务等）：
+
+```jsonc
+{
+  "provider": "deepseek",          // 默认 provider（未选模型时用它）
+  "model": "deepseek-v4-pro",      // 默认 model
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible", // 缺省即按 openai-compatible 处理
+      "api_key": "sk-xxx",
+      "base_url": "https://api.deepseek.com",
+      "label": "DeepSeek",         // 可选，前端下拉分组标题
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
+    },
+    "anthropic": { "type": "anthropic", "api_key": "sk-ant-xxx", "models": ["claude-haiku-4-5"] }
+  }
+}
+```
+
+游戏服务启动时读取该文件，构建注册表并把**无密钥**的模型清单通过 `GET /bot-models` 下发给前端「设置」里的下拉。`bot-providers.json` 缺失时，回退用 `ANTHROPIC_API_KEY` 合成单一 `anthropic` 供应商（向后兼容旧用法）。客户端所选 `{provider, model}` 由 game-server 按注册表校验，非法值自动回退默认。
+
+配置来源优先级：`BOT_PROVIDERS` 环境变量（内联 JSON 字符串）> `BOT_PROVIDERS_FILE` 指向的文件（默认仓库根 `bot-providers.json`）> `ANTHROPIC_API_KEY` 兜底。容器化部署时**不要把含密钥的文件 `COPY` 进镜像**（仓库已提供 `.dockerignore` 排除 `.env` 与 `bot-providers.json`）；改用 env 注入 `BOT_PROVIDERS`，或用 volume / secret 挂载文件并以 `BOT_PROVIDERS_FILE` 指向绝对路径。
+
+### 大模型机器人自博弈实验
+
+验证「某个模型到底会不会打斗地主」用自博弈 A/B：焦点座位分别用规则 bot（对照）和 LLM bot（实验）对打 N 局，对比胜率，并采集回退率、决策延迟、token 成本。
+
+密钥可写进根 `bot-providers.json`（多 provider）或根 `.env` 的 `ANTHROPIC_API_KEY`（脚本会自动加载，与线上 game-server 同一套 `loadRootEnv`），也可临时用环境变量传入。
+
+```bash
+# 仅跑规则对照(零成本,自检 harness)
+pnpm --filter @ddz/game-server selfplay -- --games 50 --skip-llm
+# 接入模型对打(产生真实 API 费用)。--provider 缺省 anthropic;配了 bot-providers.json 可指定任意 provider
+pnpm --filter @ddz/game-server selfplay -- --games 30 --provider anthropic --model claude-haiku-4-5
+pnpm --filter @ddz/game-server selfplay -- --games 30 --provider deepseek --model deepseek-v4-pro
+```
 
 ## 前端技术取舍
 

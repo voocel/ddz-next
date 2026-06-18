@@ -21,6 +21,7 @@ describe("table presentation", () => {
       "机器人2 过牌"
     );
     expect(describeEventFeedback({ type: "room_failed", reason: "API 写入失败" }, "p0")).toBe("房间故障: API 写入失败");
+    expect(describeEventFeedback({ type: "bot_chat", playerId: "bot:room:1", text: "这把稳了" }, "p0")).toBe("机器人1: 这把稳了");
   });
 
   it("formats actors compactly", () => {

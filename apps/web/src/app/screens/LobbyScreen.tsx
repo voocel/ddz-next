@@ -16,6 +16,7 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
     cancelMatch,
     logout,
     matchRoom,
+    aiBattle,
     createRoom,
     roomStatus,
     setTheme,
@@ -97,7 +98,16 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
         <img className="stage-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
         <div className="stage-center">
           <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
-          <button type="button" className="btn-img btn-img-orange btn-img-xl" onClick={matchRoom}>
+          <button
+            type="button"
+            className="btn-img btn-img-blue btn-img-xl btn-ai"
+            onClick={() => {
+              void aiBattle();
+            }}
+          >
+            🤖 AI 对战
+          </button>
+          <button type="button" className="btn-img btn-img-orange btn-img-lg" onClick={matchRoom}>
             快速开始
           </button>
           <button type="button" className="btn-img btn-img-green btn-img-lg" onClick={createRoom}>

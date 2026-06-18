@@ -82,6 +82,9 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
       return `命令被拒绝: ${event.reason}`;
     case "room_failed":
       return `房间故障: ${event.reason}`;
+    case "bot_chat":
+      // 机器人台词:暂以反馈行展示;后续可在牌桌上做气泡
+      return `${formatActor(event.playerId, localPlayerId)}: ${event.text}`;
   }
 }
 

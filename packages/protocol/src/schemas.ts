@@ -245,6 +245,11 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("room_failed"),
     reason: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal("bot_chat"),
+    playerId: z.string().min(1),
+    text: z.string().min(1).max(120)
   })
 ]);
 
@@ -283,6 +288,27 @@ export const roomSchema = z.object({
 /** 房间号统一格式：6 位数字（便于输入/口述）。这是 api 生成校验、game-server 入房校验、web 输入的唯一格式来源，禁止各处再写正则。 */
 export const ROOM_CODE_REGEX = /^\d{6}$/;
 export const roomCodeSchema = z.string().regex(ROOM_CODE_REGEX, "房间号必须是 6 位数字");
+
+/** 机器人出牌决策来源：rule 规则引擎、llm 大模型。 */
+export type BotDecisionMode = "rule" | "llm";
+
+/**
+ * GET /bot-models 响应:可选机器人模型清单(无密钥) + 服务端默认选择。web 拉取后据此渲染下拉。
+ * 可选模型由 game-server 从供应商注册表(bot-providers.json)动态下发,服务端按注册表校验客户端所选;
+ * API key 始终只在服务端,客户端只见 provider/model 标签。
+ */
+export const botModelOptionSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  /** provider 展示名(下拉分组标题)。 */
+  providerLabel: z.string()
+});
+export const botModelsResponseSchema = z.object({
+  default: z.object({ provider: z.string(), model: z.string() }),
+  models: z.array(botModelOptionSchema)
+});
+export type BotModelOption = z.infer<typeof botModelOptionSchema>;
+export type BotModelsResponse = z.infer<typeof botModelsResponseSchema>;
 
 export const createRoomRequestSchema = z.object({
   code: roomCodeSchema.optional()

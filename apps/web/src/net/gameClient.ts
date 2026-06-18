@@ -8,6 +8,10 @@ interface GameClientOptions {
   readonly accessToken: string;
   readonly roomCode: string;
   readonly quickStart?: boolean;
+  /** 「AI 对战」入口建房时携带:机器人决策来源与模型(provider+model);服务端 onCreate 按注册表校验后才生效。 */
+  readonly botDecisionMode?: string | undefined;
+  readonly botProvider?: string | undefined;
+  readonly botModel?: string | undefined;
   readonly onEvent: (event: GameEvent) => void;
   readonly onStatus: (status: string) => void;
   /** 房间被服务端/网络异常关闭（非本地主动离开）时回调 */
@@ -58,7 +62,10 @@ export function createGameClient(options: GameClientOptions) {
         const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
           roomCode: options.roomCode,
-          quickStart: options.quickStart === true
+          quickStart: options.quickStart === true,
+          ...(options.botDecisionMode ? { botDecisionMode: options.botDecisionMode } : {}),
+          ...(options.botProvider ? { botProvider: options.botProvider } : {}),
+          ...(options.botModel ? { botModel: options.botModel } : {})
         });
         if (gen !== generation) {
           // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接

@@ -16,15 +16,16 @@ describe("RoomTurnScheduler", () => {
     expect(fixture.enqueuedTasks).toHaveLength(0);
   });
 
-  it("enqueues bot turn callbacks when the scheduled bot timer fires", async () => {
+  it("runs bot turns off the serial queue when the scheduled bot timer fires", async () => {
     const fixture = createFixture();
     const scheduler = createScheduler(fixture, ["bot:room:1"]);
 
     scheduler.scheduleBotTurn(createSnapshot("playing", "bot:room:1"));
     fixture.clock.fire(0);
+    await flushMicrotasks();
 
-    expect(fixture.enqueuedTasks).toHaveLength(1);
-    await fixture.enqueuedTasks[0]?.();
+    // 决策在锁外触发,不再经过 enqueue(让慢速 LLM 不持有串行锁)
+    expect(fixture.enqueuedTasks).toHaveLength(0);
     expect(fixture.botTurns).toEqual(["bot:room:1"]);
   });
 
@@ -46,6 +47,17 @@ describe("RoomTurnScheduler", () => {
     fixture.clock.fire(0);
     await fixture.enqueuedTasks[0]?.();
     expect(fixture.timeoutTurns).toEqual(["p0"]);
+  });
+
+  it("does not schedule the rule-based turn timer for bot turns (bots are governed by their own decision timeout)", () => {
+    const fixture = createFixture();
+    const scheduler = createScheduler(fixture, ["bot:room:1"]);
+
+    scheduler.scheduleTurnTimer(createSnapshot("playing", "bot:room:1"));
+
+    expect(fixture.turnTimers).toEqual([]);
+    expect(fixture.clock.handles).toEqual([]);
+    expect(scheduler.getActiveTurnTimer()).toBeNull();
   });
 
   it("does not schedule turn timers for phases without active turns", () => {
@@ -73,18 +85,18 @@ describe("RoomTurnScheduler", () => {
     expect(fixture.timeoutTurns).toEqual([]);
   });
 
-  it("drops queued bot turn tasks when the bot timer was rescheduled before execution", async () => {
+  it("hands onBotTurn an isValid predicate that goes false once the schedule is cancelled", async () => {
     const fixture = createFixture();
     const scheduler = createScheduler(fixture, ["bot:room:1"]);
 
     scheduler.scheduleBotTurn(createSnapshot("playing", "bot:room:1"));
     fixture.clock.fire(0);
-    expect(fixture.enqueuedTasks).toHaveLength(1);
+    await flushMicrotasks();
 
+    // 触发当下有效;cancelAll 后 isValid 失效——房间据此丢弃锁外算出的过期决策
+    expect(fixture.lastIsValid?.()).toBe(true);
     scheduler.cancelAll();
-    await fixture.enqueuedTasks[0]?.();
-
-    expect(fixture.botTurns).toEqual([]);
+    expect(fixture.lastIsValid?.()).toBe(false);
   });
 
   it("exposes the active turn timer and clears it on cancel", () => {
@@ -102,14 +114,14 @@ describe("RoomTurnScheduler", () => {
     expect(scheduler.getActiveTurnTimer()).toBeNull();
   });
 
-  it("routes scheduled task failures to the room failure handler", async () => {
+  it("routes bot turn failures to the room failure handler", async () => {
     const fixture = createFixture();
     fixture.failBotTurn = true;
     const scheduler = createScheduler(fixture, ["bot:room:1"]);
 
     scheduler.scheduleBotTurn(createSnapshot("playing", "bot:room:1"));
     fixture.clock.fire(0);
-    await fixture.enqueuedTasks[0]?.();
+    await flushMicrotasks();
 
     expect(fixture.failures).toEqual([
       {
@@ -128,7 +140,8 @@ function createScheduler(fixture: Fixture, botIds: readonly PlayerId[]): RoomTur
     enqueue: (task) => {
       fixture.enqueuedTasks.push(task);
     },
-    onBotTurn: async (playerId) => {
+    onBotTurn: async (playerId, isValid) => {
+      fixture.lastIsValid = isValid;
       if (fixture.failBotTurn) {
         throw new Error("bot failed");
       }
@@ -156,6 +169,7 @@ interface Fixture {
   readonly enqueuedTasks: (() => Promise<void>)[];
   failBotTurn: boolean;
   readonly failures: { readonly message: string; readonly reason: string }[];
+  lastIsValid: (() => boolean) | null;
   readonly timeoutTurns: PlayerId[];
   readonly turnTimers: {
     readonly deadlineAt: string;
@@ -172,9 +186,15 @@ function createFixture(): Fixture {
     enqueuedTasks: [],
     failBotTurn: false,
     failures: [],
+    lastIsValid: null,
     timeoutTurns: [],
     turnTimers: []
   };
+}
+
+// bot 回合在锁外 fire-and-forget 执行,用一个宏任务把挂起的微任务跑完再断言。
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 class FakeClock {

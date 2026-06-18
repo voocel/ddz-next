@@ -3,6 +3,7 @@ import { useDdzApp } from "./useDdzApp";
 import { useTurnAlarm } from "./useTurnAlarm";
 import { useBackgroundMusic } from "./useBackgroundMusic";
 import { AudioSettings } from "./components/AudioSettings";
+import { BotSettings } from "./components/BotSettings";
 import { Modal } from "./components/Modal";
 import { AuthScreen } from "./screens/AuthScreen";
 import { LobbyScreen } from "./screens/LobbyScreen";
@@ -38,6 +39,12 @@ export function App() {
       {settingsOpen && app.session ? (
         <Modal title="设置" onClose={() => setSettingsOpen(false)}>
           <AudioSettings levels={app.audioLevels} onChange={app.setAudioLevels} />
+          <BotSettings
+            preferences={app.botPreferences}
+            models={app.botModels}
+            defaultRef={app.botModelDefault}
+            onChange={app.setBotPreferences}
+          />
         </Modal>
       ) : null}
     </>

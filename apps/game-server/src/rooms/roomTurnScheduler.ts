@@ -21,7 +21,8 @@ interface RoomTurnSchedulerOptions {
   readonly nextBotDelayMs: (snapshot: GameSnapshot) => number;
   readonly clock: RoomClock;
   readonly enqueue: (task: () => Promise<void>) => void;
-  readonly onBotTurn: (playerId: PlayerId) => Promise<void>;
+  /** bot 回合在串行锁外触发;isValid 供应用动作前再校验本次调度是否仍生效。 */
+  readonly onBotTurn: (playerId: PlayerId, isValid: () => boolean) => Promise<void>;
   readonly onFailure: (error: unknown, reason: string) => Promise<void>;
   readonly onTurnTimeout: (playerId: PlayerId) => Promise<void>;
   readonly onTurnTimer: (event: TurnTimerEvent) => void;
@@ -63,7 +64,8 @@ export class RoomTurnScheduler {
       }
 
       this.botTimer = null;
-      this.enqueueScheduledTask(() => this.options.onBotTurn(playerId), "Bot action failed.", () => this.botTimerToken === token);
+      // bot 决策可能是慢速 LLM:在串行锁外执行(只读快照),由 onBotTurn 自行把「应用动作」入队。
+      void this.runBotTurn(playerId, () => this.botTimerToken === token);
     }, this.options.nextBotDelayMs(snapshot));
   }
 
@@ -71,6 +73,12 @@ export class RoomTurnScheduler {
     this.cancelTurnTimer();
 
     if (!snapshot.currentPlayerId || snapshot.phase === "waiting" || snapshot.phase === "ready" || snapshot.phase === "settled") {
+      return;
+    }
+
+    // 回合超时只面向真人(挂机自动出牌走规则)。bot 由自身决策超时(BOT_DECISION_TIMEOUT_MS)单独管:
+    // 到点 abort 抛错暴露,绝不让规则型超时动作替 bot 出牌——否则慢速 LLM 会被规则静默顶替,污染纯 LLM 实验。
+    if (this.options.botIds.includes(snapshot.currentPlayerId)) {
       return;
     }
 
@@ -117,6 +125,19 @@ export class RoomTurnScheduler {
     this.turnTimer?.clear();
     this.turnTimer = null;
     this.activeTurnTimer = null;
+  }
+
+  private async runBotTurn(playerId: PlayerId, isValid: () => boolean): Promise<void> {
+    // 触发时机已过期(回合推进/取消)直接放弃;onBotTurn 在锁外 await 决策,失败收口到房间。
+    if (!isValid()) {
+      return;
+    }
+
+    try {
+      await this.options.onBotTurn(playerId, isValid);
+    } catch (error) {
+      await this.options.onFailure(error, "Bot action failed.");
+    }
   }
 
   private enqueueScheduledTask(task: () => Promise<void>, failureReason: string, isStillValid: () => boolean): void {

@@ -1,0 +1,32 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-v4-pro",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "api_key": "sk-xxx",
+      "base_url": "https://api.deepseek.com",
+      "label": "DeepSeek",
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
+    },
+    "anthropic": {
+      "type": "anthropic",
+      "api_key": "sk-ant-xxx",
+      "label": "Anthropic",
+      "models": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"]
+    },
+    "mimo": {
+      "type": "openai-compatible",
+      "api_key": "tp-xxx",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "label": "MiMo",
+      "models": ["mimo-v2.5-pro", "mimo-v2.5"]
+    },
+    "openrouter": {
+      "api_key": "sk-or-v1-xxx",
+      "base_url": "https://openrouter.ai/api/v1",
+      "label": "OpenRouter",
+      "models": ["qwen/qwen3.6-plus-preview:free", "tencent/hy3-preview:free"]
+    }
+  }
+}
