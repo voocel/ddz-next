@@ -1,5 +1,14 @@
 import type { BotModelOption } from "@ddz/protocol";
-import type { BotPreferences } from "../../botPreferences";
+import type { BotPreferences, ReasoningEffort } from "../../botPreferences";
+
+/** 思考强度档位的展示文案(顺序即下拉顺序)。 */
+const EFFORT_OPTIONS: readonly { readonly value: ReasoningEffort; readonly label: string }[] = [
+  { value: "auto", label: "默认（跟随模型）" },
+  { value: "off", label: "关闭（最快）" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" }
+];
 
 /**
  * 设置弹窗内的「AI 对战」机器人模型选择:从 game-server 动态下发的清单里选(按 provider 分组),
@@ -24,12 +33,12 @@ export function BotSettings({
 
   const handleChange = (value: string): void => {
     if (value === "") {
-      onChange({ provider: "", model: "" });
+      onChange({ ...preferences, provider: "", model: "" });
       return;
     }
     const option = models[Number(value)];
     if (option) {
-      onChange({ provider: option.provider, model: option.model });
+      onChange({ ...preferences, provider: option.provider, model: option.model });
     }
   };
 
@@ -58,8 +67,27 @@ export function BotSettings({
           ))}
         </select>
       </label>
+      <label className="bot-model-row">
+        <span className="bot-model-icon" aria-hidden>
+          ⚡
+        </span>
+        <span className="bot-model-name">思考强度</span>
+        <select
+          className="bot-model-select"
+          value={preferences.reasoningEffort}
+          onChange={(event) => onChange({ ...preferences, reasoningEffort: event.target.value as ReasoningEffort })}
+          aria-label="思考强度"
+        >
+          {EFFORT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <p className="bot-settings-hint">
         「AI 对战」时机器人用此模型出牌；服务端未配置对应 API key 时会直接建房失败并提示，不会静默降级成规则机器人。
+        思考强度可给推理模型提速（关闭最快）：Anthropic 各档均生效；DeepSeek V4 可真正关闭，但低/中会被其服务端归到「高」；其它兼容模型无统一关闭语义，关闭会退化为最低档。
       </p>
     </div>
   );

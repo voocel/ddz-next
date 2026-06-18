@@ -210,6 +210,26 @@ describe("LlmBotBrain", () => {
     expect(captured!.hand).toEqual(["3×2", "5"]);
   });
 
+  it("把本局已出的牌(公开信息)按分组计数喂给模型,并写入留证", async () => {
+    let captured: MoveSelectionContext | null = null;
+    const traces: LlmDecisionTrace[] = [];
+    const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
+      captured = ctx;
+    });
+    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+
+    await brain.decide(
+      snapshot({ phase: "playing", landlordId: "p0" }),
+      "p0",
+      hand(["3-clubs", "4-clubs"]),
+      hand(["5-clubs", "5-hearts", "9-spades", "BJ"])
+    );
+
+    // 出过的牌是桌面公开信息,按从小到大分组计数下发(与手牌同口径),并原样进 trace 供离线分析
+    expect(captured!.playedCards).toEqual(["5×2", "9", "大王"]);
+    expect(traces[0]!.playedCards).toEqual(["5×2", "9", "大王"]);
+  });
+
   it("模型返回 null(超时/缺 key)时抛错暴露,不回退、不上报指标", async () => {
     const bidStrategy = recordingBidStrategy({ type: "play_cards", cards: ["3-clubs"] });
     const chooser = chooserReturning(null);
@@ -272,6 +292,7 @@ describe("LlmBotBrain", () => {
     const trace = traces[0]!;
     expect(trace.selfHand).toEqual(["3-clubs", "4-clubs"]);
     expect(trace.role).toBe("landlord");
+    expect(trace.playedCards).toEqual([]);
     expect(trace.candidates).toEqual(["单张3", "单张4"]);
     expect(trace.modelId).toBe("gpt-5.5");
     expect(trace.reasoningText).toBe("对手只剩2张,我先出小的试探");

@@ -31,11 +31,11 @@ describe("parseBotProviderRegistry（多 provider 注册表解析）", () => {
     const registry = parseBotProviderRegistry(SAMPLE);
     expect(registry.default).toEqual({ provider: "deepseek", model: "deepseek-v4-pro" });
     expect(registry.providers.deepseek).toMatchObject({
-      type: "openai-compatible",
+      type: "deepseek",
       apiKey: "sk-xxx",
       baseURL: "https://api.deepseek.com"
     });
-    // anthropic 原样保留;缺 type 的 openrouter 归一化为 openai-compatible
+    // type:deepseek 原生适配器;anthropic 原样保留;缺 type 的 openrouter 归一化为 openai-compatible
     expect(registry.providers.anthropic?.type).toBe("anthropic");
     expect(registry.providers.openrouter?.type).toBe("openai-compatible");
   });

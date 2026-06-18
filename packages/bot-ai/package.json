@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/deepseek": "^1.0.44",
     "@ai-sdk/openai-compatible": "^1.0.41",
     "ai": "^5.0.0",
     "zod": "^4.1.13"

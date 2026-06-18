@@ -1,4 +1,5 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { BotProviderRegistry, ModelRef } from "./registry.js";
@@ -21,6 +22,17 @@ export function resolveModel(ref: ModelRef, registry: BotProviderRegistry): Lang
       return null;
     }
     return createAnthropic({ apiKey, ...(provider.baseURL ? { baseURL: provider.baseURL } : {}) })(ref.model);
+  }
+
+  // DeepSeek 原生适配器:支持 V4 双模(thinking 开/关 + reasoningEffort);baseURL 可选(默认官方端点)。
+  if (provider.type === "deepseek") {
+    if (!provider.apiKey) {
+      return null;
+    }
+    return createDeepSeek({
+      apiKey: provider.apiKey,
+      ...(provider.baseURL ? { baseURL: provider.baseURL } : {})
+    })(ref.model);
   }
 
   // openai-compatible:deepseek / openrouter / 本地服务等,必须同时有 apiKey + baseURL。

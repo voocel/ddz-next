@@ -12,7 +12,15 @@ import { fileURLToPath } from "node:url";
 import { loadRootEnv } from "@ddz/env";
 import { GameTable } from "@ddz/domain";
 import type { PlayerId, Settlement } from "@ddz/domain";
-import { LlmMoveChooser, parseBotProviderRegistry, resolveModel, type ModelRef } from "@ddz/bot-ai";
+import {
+  buildReasoningProviderOptions,
+  decisionConfigFromEnv,
+  LlmMoveChooser,
+  parseBotProviderRegistry,
+  resolveModel,
+  type ModelRef,
+  type ProviderType
+} from "@ddz/bot-ai";
 import { readBotProvidersRaw } from "../botProviders.js";
 import type { BotAction, BotBrain } from "../rooms/botBrain.js";
 import { RuleBotBrain } from "../rooms/ruleBotBrain.js";
@@ -209,25 +217,36 @@ function parseArgs(argv: readonly string[]): CliOptions {
   return { games, provider, model, skipLlm };
 }
 
+interface ResolvedSelfPlayModel {
+  readonly model: NonNullable<ReturnType<typeof resolveModel>>;
+  readonly providerType: ProviderType;
+  readonly providerKey: string;
+}
+
 /**
- * 造自博弈用的注册表 + 目标模型 ref:有 bot-providers.json 用之(支持任意 provider);
+ * 造自博弈用的注册表 + 目标模型:有 bot-providers.json 用之(支持任意 provider);
  * 否则合成仅含目标模型的 anthropic 注册表,沿用 ANTHROPIC_API_KEY(向后兼容旧用法)。
+ * 一并带出 providerType/providerKey,供按思考强度构造 providerOptions。
  */
-function buildModel(options: CliOptions): ReturnType<typeof resolveModel> {
+function buildModel(options: CliOptions): ResolvedSelfPlayModel | null {
   const configRaw = readBotProvidersRaw();
-  if (configRaw) {
-    const registry = parseBotProviderRegistry(configRaw);
-    const ref: ModelRef = { provider: options.provider, model: options.model };
-    return resolveModel(ref, registry);
+  const registry = configRaw
+    ? parseBotProviderRegistry(configRaw)
+    : parseBotProviderRegistry(
+        JSON.stringify({
+          provider: "anthropic",
+          model: options.model,
+          providers: { anthropic: { type: "anthropic", models: [options.model] } }
+        })
+      );
+  const ref: ModelRef = configRaw
+    ? { provider: options.provider, model: options.model }
+    : { provider: "anthropic", model: options.model };
+  const model = resolveModel(ref, registry);
+  if (!model) {
+    return null;
   }
-  const synthesized = parseBotProviderRegistry(
-    JSON.stringify({
-      provider: "anthropic",
-      model: options.model,
-      providers: { anthropic: { type: "anthropic", models: [options.model] } }
-    })
-  );
-  return resolveModel({ provider: "anthropic", model: options.model }, synthesized);
+  return { model, providerType: registry.providers[ref.provider]!.type, providerKey: ref.provider };
 }
 
 async function main(): Promise<void> {
@@ -244,8 +263,8 @@ async function main(): Promise<void> {
     return;
   }
   // 配置缺失就明确报错退出,不静默回退——目的是验证 LLM,缺 key 没法验证。
-  const model = buildModel(options);
-  if (!model) {
+  const resolved = buildModel(options);
+  if (!resolved) {
     console.error(`\n❌ 未能解析模型 ${options.provider}/${options.model}:缺 API key(openai-compatible 还需 base_url)。`);
     console.error("   请在 bot-providers.json / BOT_PROVIDERS 配置;anthropic 也可用 ANTHROPIC_API_KEY + 内置模型名。已跳过 LLM 臂。");
     process.exitCode = 1;
@@ -254,10 +273,16 @@ async function main(): Promise<void> {
 
   const metrics: LlmDecisionMetric[] = [];
   const errors: GameError[] = [];
+  // 思考强度走 env 默认(BOT_REASONING_EFFORT),让自博弈也能压思考/关思考对比延迟与牌力。
+  const providerOptions = buildReasoningProviderOptions(
+    resolved.providerType,
+    resolved.providerKey,
+    decisionConfigFromEnv().reasoningEffort
+  );
   // BOT_DECISION_TRACE=true 时把每手 LLM 决策逐条留证落 JSONL,供离线复盘(同生产用一套 sink)。
   const traceSink = createLlmTraceSink(process.env, `selfplay-${options.provider}-${options.model}`);
   const llmBrain = new LlmBotBrain({
-    chooser: new LlmMoveChooser({ model }),
+    chooser: new LlmMoveChooser({ model: resolved.model, providerOptions }),
     onDecision: (m) => metrics.push(m),
     onTrace: traceSink ? (trace) => traceSink.record(trace) : undefined
   });

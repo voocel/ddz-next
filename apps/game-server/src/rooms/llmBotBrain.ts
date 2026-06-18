@@ -29,6 +29,8 @@ export interface LlmDecisionTrace {
   readonly selfHandCount: number;
   readonly opponentHandCounts: readonly number[];
   readonly lastPlay: string | null;
+  /** 本局已出的牌(分组计数),与喂给模型的口径一致,供离线分析「信息量 ↔ 牌力」。 */
+  readonly playedCards: readonly string[];
   readonly candidates: readonly string[];
   readonly modelId: string | null;
   readonly system: string | null;
@@ -118,7 +120,7 @@ export class LlmBotBrain implements BotBrain {
       }
     }
 
-    const context = buildContext(snapshot, playerId, hand, previous, labels);
+    const context = buildContext(snapshot, playerId, hand, playedCards, previous, labels);
     const start = this.now();
     let decision: MoveDecision | null;
     try {
@@ -187,6 +189,7 @@ export class LlmBotBrain implements BotBrain {
       selfHandCount: hand.length,
       opponentHandCounts: context.opponents.map((opponent) => opponent.handCount),
       lastPlay: context.lastPlay ? `${context.lastPlay.by}打出 ${context.lastPlay.description}` : null,
+      playedCards: context.playedCards,
       candidates: context.candidates,
       modelId: trace?.modelId ?? null,
       system: trace?.system ?? null,
@@ -210,6 +213,7 @@ function buildContext(
   snapshot: GameSnapshot,
   playerId: PlayerId,
   hand: readonly Card[],
+  playedCards: readonly Card[],
   previous: Combination | null,
   labels: readonly string[]
 ): MoveSelectionContext {
@@ -217,7 +221,8 @@ function buildContext(
   const lastPlayerId = snapshot.lastPlay?.playerId ?? null;
   return {
     role: landlordId === playerId ? "landlord" : "farmer",
-    hand: describeHand(hand),
+    hand: groupCardsByRank(hand),
+    playedCards: groupCardsByRank(playedCards),
     opponents: snapshot.players
       .filter((player) => player.id !== playerId)
       .map((player) => ({ label: seatRoleLabel(player.id, playerId, landlordId), handCount: player.handCount })),
@@ -237,10 +242,10 @@ function seatRoleLabel(targetId: PlayerId, selfId: PlayerId, landlordId: PlayerI
   return selfId === landlordId ? "农民" : "队友";
 }
 
-/** 把完整手牌渲染成按从小到大分组的中文,如 ["3","5×2","J","2×2"];同点合并计数,供模型规划。 */
-function describeHand(hand: readonly Card[]): string[] {
+/** 把一组牌按从小到大分组成中文计数,如 ["3","5×2","J","2×2"];供「自己手牌」与「本局已出」复用。 */
+function groupCardsByRank(cards: readonly Card[]): string[] {
   const counts = new Map<Rank, number>();
-  for (const card of hand) {
+  for (const card of cards) {
     counts.set(card.rank, (counts.get(card.rank) ?? 0) + 1);
   }
   return [...counts.keys()]

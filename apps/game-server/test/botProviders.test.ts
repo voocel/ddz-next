@@ -30,7 +30,7 @@ describe("loadBotProviderRegistry", () => {
   it("用 BOT_PROVIDERS 内联 JSON 构建注册表", () => {
     const registry = loadBotProviderRegistry({ BOT_PROVIDERS: INLINE, BOT_PROVIDERS_FILE: NO_FILE });
     expect(registry.default).toEqual({ provider: "deepseek", model: "deepseek-v4-pro" });
-    expect(registry.providers.deepseek?.type).toBe("openai-compatible");
+    expect(registry.providers.deepseek?.type).toBe("deepseek");
   });
 
   it("无配置时用 ANTHROPIC_API_KEY 合成默认 anthropic", () => {

@@ -37,6 +37,7 @@ describe("LlmMoveChooser", () => {
   const context: MoveSelectionContext = {
     role: "landlord",
     hand: ["3", "5×2", "K×2", "2"],
+    playedCards: ["4×2", "9", "J×3", "小王"],
     opponents: [
       { label: "农民", handCount: 8 },
       { label: "农民", handCount: 9 }

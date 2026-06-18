@@ -1,11 +1,14 @@
 import {
+  buildReasoningProviderOptions,
   decisionConfigFromEnv,
   isAllowedModel,
   LlmMoveChooser,
+  parseReasoningEffort,
   resolveModel,
   type BotProviderRegistry,
   type DecisionConfig,
-  type ModelRef
+  type ModelRef,
+  type ReasoningEffort
 } from "@ddz/bot-ai";
 import type { BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
@@ -16,6 +19,7 @@ export interface BotDecisionOptions {
   readonly botDecisionMode?: string | undefined;
   readonly botProvider?: string | undefined;
   readonly botModel?: string | undefined;
+  readonly botReasoningEffort?: string | undefined;
 }
 
 /** LLM bot 的可观测钩子(可选);仅 LLM bot 用,规则 bot 忽略。 */
@@ -29,6 +33,7 @@ export interface ResolvedDecision {
   readonly useLlm: boolean;
   readonly model: ModelRef;
   readonly timeoutMs: number;
+  readonly reasoningEffort: ReasoningEffort;
 }
 
 /**
@@ -46,7 +51,12 @@ export function resolveDecisionConfig(
   const requested: ModelRef | null =
     options.botProvider && options.botModel ? { provider: options.botProvider, model: options.botModel } : null;
   const model = requested && isAllowedModel(registry, requested) ? requested : registry.default;
-  return { useLlm, model, timeoutMs: envConfig.timeoutMs };
+  // 客户端档位(不可信)校验后覆盖 env 默认;非法/缺省回退 env 默认(与上面 mode 同款「非法回退」)。
+  const reasoningEffort =
+    options.botReasoningEffort === undefined
+      ? envConfig.reasoningEffort
+      : parseReasoningEffort(options.botReasoningEffort);
+  return { useLlm, model, timeoutMs: envConfig.timeoutMs, reasoningEffort };
 }
 
 /**
@@ -69,8 +79,11 @@ export function createBotBrain(
         `请在 bot-providers.json / BOT_PROVIDERS 环境变量(或 anthropic 的 ANTHROPIC_API_KEY)中配置后重试。`
     );
   }
+  // resolveModel 非 null 已保证 provider 存在;据其类型把思考强度档位翻成对应 provider 的 providerOptions。
+  const providerType = registry.providers[config.model.provider]!.type;
+  const providerOptions = buildReasoningProviderOptions(providerType, config.model.provider, config.reasoningEffort);
   return new LlmBotBrain({
-    chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs }),
+    chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs, providerOptions }),
     onTrace: hooks?.onTrace,
     onDecision: hooks?.onDecision
   });

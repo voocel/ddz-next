@@ -1,7 +1,12 @@
 import { z } from "zod";
 
-/** 归一化后的供应商类型:anthropic 走原生适配器,其余一律走 OpenAI 兼容适配器。 */
-export type ProviderType = "anthropic" | "openai-compatible";
+/**
+ * 归一化后的供应商类型,决定走哪个 AI SDK 适配器:
+ * - anthropic:原生 @ai-sdk/anthropic(effort / thinking 关闭)。
+ * - deepseek:原生 @ai-sdk/deepseek(DeepSeek V4 双模:thinking 开/关 + reasoningEffort)。
+ * - openai-compatible:其余一律走 @ai-sdk/openai-compatible(OpenAI / OpenRouter / 本地服务等)。
+ */
+export type ProviderType = "anthropic" | "openai-compatible" | "deepseek";
 
 /** 一个 provider+model 选择(无密钥):前端下拉与房间决策都用它表达「选哪个模型」。 */
 export interface ModelRef {
@@ -87,7 +92,7 @@ function normalize(parsed: RawRegistry): BotProviderRegistry {
   const providers: Record<string, ProviderConfig> = {};
   for (const [name, raw] of Object.entries(parsed.providers)) {
     providers[name] = {
-      type: raw.type === "anthropic" ? "anthropic" : "openai-compatible",
+      type: raw.type === "anthropic" ? "anthropic" : raw.type === "deepseek" ? "deepseek" : "openai-compatible",
       apiKey: raw.api_key,
       baseURL: raw.base_url,
       models: raw.models,

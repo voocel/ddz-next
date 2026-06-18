@@ -3,7 +3,7 @@
   "model": "deepseek-v4-pro",
   "providers": {
     "deepseek": {
-      "type": "openai-compatible",
+      "type": "deepseek",
       "api_key": "sk-xxx",
       "base_url": "https://api.deepseek.com",
       "label": "DeepSeek",

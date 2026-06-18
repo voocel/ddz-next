@@ -16,15 +16,16 @@ const registry: BotProviderRegistry = parseBotProviderRegistry(
   })
 );
 
-const ruleEnv: DecisionConfig = { useLlm: false, timeoutMs: 8000 };
-const llmEnv: DecisionConfig = { useLlm: true, timeoutMs: 8000 };
+const ruleEnv: DecisionConfig = { useLlm: false, timeoutMs: 8000, reasoningEffort: "auto" };
+const llmEnv: DecisionConfig = { useLlm: true, timeoutMs: 8000, reasoningEffort: "auto" };
 
 describe("resolveDecisionConfig", () => {
   it("无 options 时沿用 env 开关 + registry 默认模型", () => {
     expect(resolveDecisionConfig({}, registry, ruleEnv)).toEqual({
       useLlm: false,
       model: registry.default,
-      timeoutMs: 8000
+      timeoutMs: 8000,
+      reasoningEffort: "auto"
     });
     expect(resolveDecisionConfig({}, registry, llmEnv).useLlm).toBe(true);
   });
@@ -67,6 +68,20 @@ describe("resolveDecisionConfig", () => {
   it("非法 mode 回退 env 默认(不被当作 llm)", () => {
     expect(resolveDecisionConfig({ botDecisionMode: "evil" }, registry, ruleEnv).useLlm).toBe(false);
     expect(resolveDecisionConfig({ botDecisionMode: "evil" }, registry, llmEnv).useLlm).toBe(true);
+  });
+
+  it("无 botReasoningEffort 时沿用 env 思考强度默认", () => {
+    const env: DecisionConfig = { useLlm: true, timeoutMs: 8000, reasoningEffort: "off" };
+    expect(resolveDecisionConfig({}, registry, env).reasoningEffort).toBe("off");
+  });
+
+  it("客户端思考强度覆盖 env 默认", () => {
+    expect(resolveDecisionConfig({ botReasoningEffort: "high" }, registry, ruleEnv).reasoningEffort).toBe("high");
+  });
+
+  it("非法思考强度回退 auto(显式发了就不再取 env 默认)", () => {
+    const env: DecisionConfig = { useLlm: true, timeoutMs: 8000, reasoningEffort: "off" };
+    expect(resolveDecisionConfig({ botReasoningEffort: "turbo" }, registry, env).reasoningEffort).toBe("auto");
   });
 });
 

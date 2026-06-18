@@ -7,7 +7,7 @@ import { fetchBotModels } from "../net/botModels";
 import { createMatchmakingClient } from "../net/matchmakingClient";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
-import { loadBotPreferences, saveBotPreferences, type BotPreferences } from "../botPreferences";
+import { loadBotPreferences, saveBotPreferences, type BotPreferences, type ReasoningEffort } from "../botPreferences";
 import type { TurnTimerState } from "./types";
 import { useAuthSession } from "./useAuthSession";
 import { useHistoryReplay } from "./useHistoryReplay";
@@ -41,6 +41,7 @@ export function useDdzApp() {
     readonly mode: BotDecisionMode;
     readonly provider: string;
     readonly model: string;
+    readonly reasoningEffort: ReasoningEffort;
   } | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
@@ -105,6 +106,9 @@ export function useDdzApp() {
         botDecisionMode: selectedRoomBot?.mode,
         botProvider: selectedRoomBot?.provider,
         botModel: selectedRoomBot?.model,
+        // auto(默认)不下发,留给服务端 BOT_REASONING_EFFORT 默认;非 auto 才作为显式覆盖发出。
+        botReasoningEffort:
+          selectedRoomBot && selectedRoomBot.reasoningEffort !== "auto" ? selectedRoomBot.reasoningEffort : undefined,
         onStatus: setStatus,
         onDropped: (code) => {
           // 被踢/房间故障：重连必败或会互踢，直接回大厅
@@ -150,6 +154,7 @@ export function useDdzApp() {
       selectedRoomBot?.mode,
       selectedRoomBot?.provider,
       selectedRoomBot?.model,
+      selectedRoomBot?.reasoningEffort,
       auth.session?.accessToken,
       auth.session?.user.id
     ]
@@ -173,7 +178,12 @@ export function useDdzApp() {
       room: RoomDto,
       options: {
         readonly quickStart?: boolean;
-        readonly bot?: { readonly mode: BotDecisionMode; readonly provider: string; readonly model: string };
+        readonly bot?: {
+          readonly mode: BotDecisionMode;
+          readonly provider: string;
+          readonly model: string;
+          readonly reasoningEffort: ReasoningEffort;
+        };
       } = {}
     ): void => {
       stopMatching();
@@ -268,13 +278,25 @@ export function useDdzApp() {
       const response = await api.createRoom(auth.session.accessToken);
       enterRoom(response.room, {
         quickStart: true,
-        bot: { mode: "llm", provider: botPreferences.provider, model: botPreferences.model }
+        bot: {
+          mode: "llm",
+          provider: botPreferences.provider,
+          model: botPreferences.model,
+          reasoningEffort: botPreferences.reasoningEffort
+        }
       });
       setRoomStatus(`已创建 AI 对战房间 ${response.room.code}`);
     } catch (error) {
       setRoomStatus(error instanceof Error ? error.message : "创建 AI 对战房间失败");
     }
-  }, [api, enterRoom, auth.session, botPreferences.provider, botPreferences.model]);
+  }, [
+    api,
+    enterRoom,
+    auth.session,
+    botPreferences.provider,
+    botPreferences.model,
+    botPreferences.reasoningEffort
+  ]);
 
   const matchRoom = useCallback((): void => {
     if (!auth.session || matchClientRef.current) {

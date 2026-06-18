@@ -1,3 +1,5 @@
+import { parseReasoningEffort, type ReasoningEffort } from "./reasoning.js";
+
 /**
  * 解说与决策的「行为开关」配置。模型的选择不在这里:模型由供应商注册表(registry.ts)
  * 统一管理,调用方按 registry.default 或房间内所选 ModelRef 解析,实现注册表单一事实源。
@@ -13,6 +15,8 @@ export interface DecisionConfig {
   /** true 时出牌相位交给 LLM 决策(叫/抢地主仍用规则,隔离实验变量);默认 false 用规则 bot。 */
   readonly useLlm: boolean;
   readonly timeoutMs: number;
+  /** 思考强度档位(默认 auto 不干预);客户端建房可覆盖,见 resolveDecisionConfig。 */
+  readonly reasoningEffort: ReasoningEffort;
 }
 
 const DEFAULT_PERSONA = "爱炫耀、嘴上不饶人但心态好的老牌玩家";
@@ -44,7 +48,8 @@ export function commentaryConfigFromEnv(env: NodeJS.ProcessEnv = process.env): C
 export function decisionConfigFromEnv(env: NodeJS.ProcessEnv = process.env): DecisionConfig {
   return {
     useLlm: env.BOT_DECISION === "llm",
-    timeoutMs: positiveIntOr(env.BOT_DECISION_TIMEOUT_MS, DEFAULT_DECISION_TIMEOUT_MS)
+    timeoutMs: positiveIntOr(env.BOT_DECISION_TIMEOUT_MS, DEFAULT_DECISION_TIMEOUT_MS),
+    reasoningEffort: parseReasoningEffort(env.BOT_REASONING_EFFORT)
   };
 }
 

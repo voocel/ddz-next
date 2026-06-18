@@ -51,6 +51,8 @@ interface RoomCreateOptions extends JoinOptions {
   botDecisionMode?: string;
   botProvider?: string;
   botModel?: string;
+  /** 客户端所选思考强度档位(auto|off|low|medium|high);不可信,resolveDecisionConfig 校验后才生效。 */
+  botReasoningEffort?: string;
   /** 进程启动时注入的供应商注册表(含密钥,仅服务端);未注入时按 env 合成默认 anthropic。 */
   botRegistry?: BotProviderRegistry;
 }

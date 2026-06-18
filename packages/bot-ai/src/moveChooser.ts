@@ -1,4 +1,4 @@
-import { generateText, type LanguageModel } from "ai";
+import { generateText, type JSONValue, type LanguageModel } from "ai";
 
 /** 其他一家:相对自己的身份(地主/队友/农民)+ 剩牌数。 */
 export interface OpponentInfo {
@@ -16,7 +16,7 @@ export interface LastPlayInfo {
 
 /**
  * 选牌所需的公开局势 + 候选走法(由调用方从快照映射,bot-ai 不依赖游戏内部类型)。
- * 刻意给足农民/地主决策所需的事实:自己的完整手牌、各家身份+剩牌、上一手由谁打出——
+ * 刻意给足农民/地主决策所需的事实:自己的完整手牌、本局已出的牌、各家身份+剩牌、上一手由谁打出——
  * 但不灌输策略(出什么由模型自己定),以如实验证模型牌力。
  * candidates 是带编号的中文走法标签,索引即选择值;过牌等特殊选项也由调用方放进列表。
  */
@@ -24,6 +24,11 @@ export interface MoveSelectionContext {
   readonly role: "landlord" | "farmer";
   /** 自己的完整手牌(按从小到大分组的中文描述,如 ["3","5×2","J","2×2"]),供模型规划。 */
   readonly hand: readonly string[];
+  /**
+   * 本局已出的牌(按从小到大分组的中文,如 ["3×2","K","大王"])。公开信息、桌上人人可见,
+   * 给模型用于记牌、推断各点数还剩多少未现——这是事实而非策略。开局领出、本局尚无人出牌时为空数组。
+   */
+  readonly playedCards: readonly string[];
   /** 其他两家,按座位顺序;含身份标签,农民据此分辨地主与队友。 */
   readonly opponents: readonly OpponentInfo[];
   /** 上一手由谁打出的什么;轮到领出时为 null。 */
@@ -73,6 +78,11 @@ export interface LlmMoveChooserOptions {
   /** 已由供应商注册表解析好的语言模型;为 null(缺密钥/未配置)时直接返回 null,不发起请求。 */
   readonly model: LanguageModel | null;
   readonly timeoutMs?: number;
+  /**
+   * 透传给 generateText 的 provider 专属选项(如思考强度);由 buildReasoningProviderOptions 产出。
+   * 不设/undefined 表示不干预,跟随模型默认。
+   */
+  readonly providerOptions?: Record<string, Record<string, JSONValue>> | undefined;
 }
 
 // 与 config.ts 的 DEFAULT_DECISION_TIMEOUT_MS 对齐:推理模型单步思考偏慢,给足头寸(生产路径总会显式传 timeoutMs)。
@@ -107,7 +117,8 @@ export class LlmMoveChooser implements MoveChooser {
         system,
         prompt,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
-        abortSignal: controller.signal
+        abortSignal: controller.signal,
+        ...(this.options.providerOptions ? { providerOptions: this.options.providerOptions } : {})
       });
 
       return {
@@ -198,8 +209,13 @@ function buildSystem(role: "landlord" | "farmer"): string {
 function buildPrompt(ctx: MoveSelectionContext): string {
   const opponents = ctx.opponents.map((opponent) => `${opponent.label}剩 ${opponent.handCount} 张`).join(",");
   const options = ctx.candidates.map((label, index) => `${index}: ${label}`).join("\n");
-  return [
-    `你的手牌(${ctx.hand.length}张):${ctx.hand.join(" ")}`,
+  // 手牌/已出都用分组计数(×N)如实呈现张数,不再额外报一个会和列表对不上的总数。
+  const lines = [`你的手牌:${ctx.hand.join(" ")}`];
+  // 本局已出是公开信息(桌上人人可见),供模型记牌、推断剩余;开局无人出牌时不赘述。
+  if (ctx.playedCards.length > 0) {
+    lines.push(`本局已出:${ctx.playedCards.join(" ")}。`);
+  }
+  lines.push(
     `其他两家:${opponents}。`,
     ctx.lastPlay
       ? `上一手:${ctx.lastPlay.by}打出 ${ctx.lastPlay.description},现在轮到你跟牌(压得过可压、也可过牌)。`
@@ -207,5 +223,6 @@ function buildPrompt(ctx: MoveSelectionContext): string {
     `可选出牌(编号: 描述):`,
     options,
     `请选择最优的一手,只回复其编号数字。`
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
