@@ -9,7 +9,7 @@ describe("mapSnapshotToRoomStatus", () => {
     }
   });
 
-  it("maps settled rounds to playing because the room continues with the next round", () => {
+  it("maps settled rounds to playing because the room is waiting for next-round ready", () => {
     expect(mapSnapshotToRoomStatus(createSnapshot("settled"))).toBe("playing");
   });
 

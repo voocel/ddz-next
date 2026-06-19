@@ -155,6 +155,19 @@ describe("LlmBotBrain", () => {
     expect(metrics).toEqual([{ latencyMs: 42, usage: { inputTokens: 120, outputTokens: 8 } }]);
   });
 
+  it("成功决策时回调模型编号对应的具体候选动作", async () => {
+    const choices: Array<{ playerId: string; index: number; label: string }> = [];
+    const chooser = chooserReturning({ index: 1, trace: traceFixture() });
+    const brain = new LlmBotBrain({
+      chooser,
+      onChoice: (playerId, choice) => choices.push({ playerId, ...choice })
+    });
+
+    await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
+
+    expect(choices).toEqual([{ playerId: "p0", index: 1, label: "单张4" }]);
+  });
+
   it("跟牌时编号 0 表示过牌", async () => {
     const chooser = chooserReturning({ index: 0, trace: traceFixture() });
     const brain = new LlmBotBrain({ chooser });

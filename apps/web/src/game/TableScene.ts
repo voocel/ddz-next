@@ -70,11 +70,16 @@ const HAND_SELECTED_Y = 612;
 export class TableScene extends Phaser.Scene implements TableGameBridge {
   private readonly selection = new HandSelection();
   private hand: CardDto[] = [];
+  private revealedHands = new Map<string, readonly CardDto[]>();
   private snapshot: GameSnapshotDto | null = null;
   private replayMode = false;
   // React 状态可能先于场景 create() 到达，缓存待应用的回放与进入回放前的直播状态
   private replayState: { readonly replay: RoundReplayDto; readonly step: number } | null = null;
-  private liveState: { readonly snapshot: GameSnapshotDto | null; readonly hand: CardDto[] } | null = null;
+  private liveState: {
+    readonly snapshot: GameSnapshotDto | null;
+    readonly hand: CardDto[];
+    readonly revealedHands: ReadonlyMap<string, readonly CardDto[]>;
+  } | null = null;
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
@@ -196,6 +201,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     if ("snapshot" in event) {
       this.snapshot = event.snapshot;
+      this.applyRevealedHands(event);
       this.renderSnapshotViews(event.snapshot);
       if (event.type !== "cards_played") {
         // 同步快照中的上一手牌；cards_played 走下方的动画路径
@@ -255,6 +261,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
         // 退出回放：恢复进入前暂存的直播状态
         this.snapshot = this.liveState?.snapshot ?? null;
         this.hand = this.liveState?.hand ?? [];
+        this.revealedHands = new Map(this.liveState?.revealedHands ?? []);
         this.liveState = null;
         this.selection.clear();
         this.renderLiveState();
@@ -265,11 +272,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     if (!wasReplay) {
       // 进入回放：暂存直播状态，退出时恢复
-      this.liveState = { snapshot: this.snapshot, hand: this.hand };
+      this.liveState = { snapshot: this.snapshot, hand: this.hand, revealedHands: new Map(this.revealedHands) };
     }
     this.replayState = { replay, step };
 
     this.selection.clear();
+    this.revealedHands.clear();
     this.hand = [];
     this.snapshot = null;
     this.renderHand();
@@ -500,6 +508,21 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.phaseText?.setText("等待玩家入座").setVisible(true);
   }
 
+  private applyRevealedHands(event: GameEvent): void {
+    if (!("snapshot" in event)) {
+      return;
+    }
+    if (event.snapshot.phase !== "settled") {
+      this.revealedHands.clear();
+      return;
+    }
+    if ("revealedHands" in event && event.revealedHands) {
+      this.revealedHands = new Map(event.revealedHands.map((item) => [item.playerId, item.cards]));
+    } else {
+      this.revealedHands.clear();
+    }
+  }
+
   private renderStatus(snapshot: GameSnapshotDto): void {
     this.phaseText
       ?.setText(describePhasePrompt(snapshot, this.options.localPlayerId))
@@ -554,7 +577,12 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       );
 
       if (!isLocal) {
-        this.addCardBackStack(seatsLayer, position.x, position.y + 67, player.handCount);
+        const revealed = snapshot.phase === "settled" ? this.revealedHands.get(player.id) : undefined;
+        if (revealed) {
+          this.addRevealedHand(seatsLayer, position.x, position.y + 70, revealed);
+        } else {
+          this.addCardBackStack(seatsLayer, position.x, position.y + 67, player.handCount);
+        }
       }
       seatsLayer.add([plate, avatar, label, meta]);
     });
@@ -766,6 +794,25 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       })
       .setOrigin(0.5);
     layer.add(countText);
+  }
+
+  /** 结算明牌：对手剩余手牌以紧凑小牌面横排展示，便于复盘最后为什么输赢。 */
+  private addRevealedHand(layer: Phaser.GameObjects.Container, x: number, y: number, cards: readonly CardDto[]): void {
+    if (cards.length === 0) {
+      return;
+    }
+
+    const visibleCards = cards.slice(0, 20);
+    const gap = 16;
+    const startX = x - ((visibleCards.length - 1) * gap) / 2;
+    visibleCards.forEach((card, index) => {
+      const cardFace = createCardFace(this, startX + index * gap, y, formatCard(card), isRed(card), {
+        fontSize: "10px",
+        width: 32,
+        height: 46
+      });
+      layer.add(cardFace);
+    });
   }
 
   /** 回合超时提醒（由 React 控制行在本地玩家剩余时间不多时触发） */

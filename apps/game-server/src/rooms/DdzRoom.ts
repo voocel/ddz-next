@@ -23,7 +23,7 @@ import { RuleBotBrain } from "./ruleBotBrain.js";
 import { botTurnDelayMs } from "./botTiming.js";
 import { pickBotNicknames } from "./botNames.js";
 import { resolveBotBrain, type BotBrainHooks } from "./botDecision.js";
-import { LlmBotBrain, takeThinkingChunk, type LlmDecisionTrace } from "./llmBotBrain.js";
+import { LlmBotBrain, takeThinkingChunk, type LlmDecisionChoice, type LlmDecisionTrace } from "./llmBotBrain.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
@@ -61,14 +61,15 @@ const DEFAULT_TURN_TIMEOUT_MS = 20_000;
 // 大模型机器人展示倒计时默认值:比真人(20s)长,留出推理时间;到点不兜底,可停在 0 继续等模型。
 const DEFAULT_LLM_BOT_TURN_TIMER_MS = 30_000;
 const QUICK_START_BOT_COUNT = 2;
-// 结算后 bot 自动准备下一局的延迟，让结算事件先送达客户端
-const SETTLEMENT_DISPLAY_MS = 5000;
 // 活跃房间刷新 DB updatedAt 的心跳间隔，须远小于 API 侧 30min 的孤儿清扫时限
 const HEARTBEAT_INTERVAL_MS = 10 * 60_000;
 // 大模型「AI 输出流」节流阈值:增量累积到约一短句(16 字)才广播一条,避免逐 token 的消息风暴。
 const THINKING_MIN_CHARS = 16;
 type BotStreamChannel = "reasoning" | "text";
-type BotStreamBuffers = Partial<Record<BotStreamChannel, string>>;
+type BotStreamBuffers = Partial<Record<BotStreamChannel, string>> & {
+  readonly choice?: LlmDecisionChoice;
+};
+type RevealedHands = NonNullable<Extract<GameEvent, { type: "round_settled" }>["revealedHands"]>;
 
 /**
  * 单进程内 roomCode → roomId 注册表。
@@ -158,7 +159,8 @@ export class DdzRoom extends Room {
     // onStreamDelta 无条件接上(AI 输出流给玩家看的实时流,与 BOT_DECISION_TRACE 落盘正交);规则 bot 永不触发它。
     const hooks: BotBrainHooks = {
       ...(this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : {}),
-      onStreamDelta: (playerId, delta) => this.appendAiStream(playerId, delta.channel, delta.text)
+      onStreamDelta: (playerId, delta) => this.appendAiStream(playerId, delta.channel, delta.text),
+      onChoice: (playerId, choice) => this.setAiStreamChoice(playerId, choice)
     };
     this.botBrain = resolveBotBrain(options, registry, hooks);
     if (this.commentary.enabled) {
@@ -316,8 +318,7 @@ export class DdzRoom extends Room {
         this.turnScheduler.scheduleBotTurn(snapshot);
         return;
       case "settled":
-        // 结算与 state 同事务落库，已入账；停留结算画面后照常开下一局
-        this.startNextRound();
+        // 结算态不自动开下一局:等待真人点击准备,再重置并让机器人自动准备。
         return;
       case "waiting":
       case "ready":
@@ -539,7 +540,7 @@ export class DdzRoom extends Room {
     try {
       switch (parsed.data.type) {
         case "ready":
-          await this.afterReady(this.table.setReady(playerId));
+          await this.handleReady(playerId);
           break;
         case "bid_landlord":
           await this.afterBid(this.table.bidLandlord(playerId, parsed.data.called));
@@ -565,6 +566,19 @@ export class DdzRoom extends Room {
       }
       this.sendRejected(client, error instanceof Error ? error.message : "Unknown command error.");
     }
+  }
+
+  private async handleReady(playerId: PlayerId): Promise<void> {
+    if (this.table.snapshot().phase === "settled") {
+      this.table.resetForNextRound();
+      // 上一局中途掉线的真人此刻让座，否则其永不 ready 会卡死下一局
+      this.releaseOfflineHumanSeats();
+      await this.afterReady(this.table.setReady(playerId));
+      await this.readyBots();
+      return;
+    }
+
+    await this.afterReady(this.table.setReady(playerId));
   }
 
   private async afterReady(result: ReadyResult): Promise<void> {
@@ -699,10 +713,10 @@ export class DdzRoom extends Room {
         type: "round_settled",
         settlement: toSettlementDto(snapshot.settlement!),
         snapshot: this.snapshotDto(snapshot),
-        hand: toCardsDto(this.table.getHand(playerId))
+        hand: toCardsDto(this.table.getHand(playerId)),
+        revealedHands: this.revealedHandsDto(snapshot)
       }));
       this.turnScheduler.cancelAll();
-      this.startNextRound();
       return;
     }
 
@@ -850,7 +864,16 @@ export class DdzRoom extends Room {
     }
   }
 
-  /** 收尾本手 AI 输出流:把剩余片段连同 done:true 一并广播,清缓冲。本手没产生过输出(无键)则什么都不发。 */
+  /** 记录本手 LLM 最终选择的候选动作;作为 AI 输出流的收尾元数据展示给前端。 */
+  private setAiStreamChoice(playerId: PlayerId, choice: LlmDecisionChoice): void {
+    if (this.failed) {
+      return;
+    }
+    const buffers = this.streamBuffers.get(playerId) ?? {};
+    this.streamBuffers.set(playerId, { ...buffers, choice });
+  }
+
+  /** 收尾本手 AI 输出流:把剩余片段/最终选择连同 done:true 一并广播,清缓冲。本手没产生过输出(无键)则什么都不发。 */
   private endAiStream(playerId: PlayerId): void {
     const buffers = this.streamBuffers.get(playerId);
     if (!buffers) {
@@ -860,6 +883,7 @@ export class DdzRoom extends Room {
     if (this.failed) {
       return;
     }
+    let sent = false;
     for (const channel of ["reasoning", "text"] as const) {
       if (!(channel in buffers)) {
         continue;
@@ -869,7 +893,19 @@ export class DdzRoom extends Room {
         playerId,
         channel,
         text: buffers[channel] ?? "",
-        done: true
+        done: true,
+        ...(buffers.choice ? { choice: buffers.choice } : {})
+      } satisfies GameEvent);
+      sent = true;
+    }
+    if (!sent && buffers.choice) {
+      this.broadcast("event", {
+        type: "bot_ai_stream",
+        playerId,
+        channel: "text",
+        text: "",
+        done: true,
+        choice: buffers.choice
       } satisfies GameEvent);
     }
   }
@@ -947,22 +983,6 @@ export class DdzRoom extends Room {
     return toSnapshotDto(snapshot, this.nicknames);
   }
 
-  /** 结算画面停留一段时间后再重开下一局，否则客户端的结算界面会一闪而过。 */
-  private startNextRound(): void {
-    this.clock.setTimeout(() => {
-      void this.tasks.enqueue(async () => {
-        if (this.failed || this.table.snapshot().phase !== "settled") {
-          return;
-        }
-        this.table.resetForNextRound();
-        // 上一局中途掉线的真人此刻让座，否则其永不 ready 会卡死下一局
-        this.releaseOfflineHumanSeats();
-        this.broadcastPersonalSnapshot("snapshot", this.table.snapshot());
-        await this.readyBots();
-      });
-    }, SETTLEMENT_DISPLAY_MS);
-  }
-
   private async readyBots(): Promise<void> {
     if (this.failed) {
       return;
@@ -988,6 +1008,13 @@ export class DdzRoom extends Room {
     }
   }
 
+  private revealedHandsDto(snapshot: GameSnapshot): RevealedHands {
+    return snapshot.players.map((player) => ({
+      playerId: player.id,
+      cards: toCardsDto(this.table.getHand(player.id))
+    }));
+  }
+
   /** 给客户端补发当前回合计时，重连后才能拿到剩余时间。 */
   private sendTurnTimer(client: Client, snapshot: GameSnapshot): void {
     const timer = this.turnScheduler.getActiveTurnTimer();
@@ -1010,10 +1037,12 @@ export class DdzRoom extends Room {
       return;
     }
 
+    const snapshot = this.table.snapshot();
     client.send("event", {
       type: "snapshot",
-      snapshot: this.snapshotDto(this.table.snapshot()),
-      hand: toCardsDto(this.table.getHand(playerId))
+      snapshot: this.snapshotDto(snapshot),
+      hand: toCardsDto(this.table.getHand(playerId)),
+      ...this.revealedHandsEventPart(snapshot)
     } satisfies GameEvent);
   }
 
@@ -1027,9 +1056,14 @@ export class DdzRoom extends Room {
       client.send("event", {
         type,
         snapshot: this.snapshotDto(snapshot),
-        hand: toCardsDto(this.table.getHand(playerId))
+        hand: toCardsDto(this.table.getHand(playerId)),
+        ...(type === "snapshot" ? this.revealedHandsEventPart(snapshot) : {})
       } satisfies GameEvent);
     }
+  }
+
+  private revealedHandsEventPart(snapshot: GameSnapshot): { readonly revealedHands: RevealedHands } | {} {
+    return snapshot.phase === "settled" ? { revealedHands: this.revealedHandsDto(snapshot) } : {};
   }
 
   private sendRejected(client: Client, reason: string): void {

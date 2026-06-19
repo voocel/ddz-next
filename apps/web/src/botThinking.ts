@@ -5,9 +5,13 @@ type BotAiStreamEvent = Extract<GameEvent, { type: "bot_ai_stream" }>;
 
 export type BotAiStreamChannel = "reasoning" | "text";
 
+export type BotAiChoice = NonNullable<BotAiStreamEvent["choice"]>;
+
 /** 单个机器人的 AI 输出流状态:按 channel 累积文本 + 是否仍在输出。 */
 export interface BotThinkingEntry {
   readonly channels: Readonly<Record<BotAiStreamChannel, string>>;
+  /** 成功解析出的最终编号及其候选动作说明;有它时折叠态优先展示具体动作而不是裸数字。 */
+  readonly choice?: BotAiChoice;
   /** true=正在输出(气泡脉冲);false=本手已收尾(done),文本冻结保留供回看。 */
   readonly active: boolean;
 }
@@ -34,12 +38,14 @@ export function reduceThinking(state: BotThinkingState, event: BotAiStreamEvent)
     ...baseChannels,
     [event.channel]: baseChannels[event.channel] + event.text
   };
+  const choice = event.choice ?? (event.done ? prev?.choice : prev?.active ? prev.choice : undefined);
+  const next = choice ? { channels, choice } : { channels };
   if (event.done) {
-    return { ...state, [event.playerId]: { channels, active: false } };
+    return { ...state, [event.playerId]: { ...next, active: false } };
   }
-  return { ...state, [event.playerId]: { channels, active: true } };
+  return { ...state, [event.playerId]: { ...next, active: true } };
 }
 
 export function hasBotAiStreamText(entry: BotThinkingEntry): boolean {
-  return entry.channels.reasoning.length > 0 || entry.channels.text.length > 0;
+  return Boolean(entry.choice) || entry.channels.reasoning.length > 0 || entry.channels.text.length > 0;
 }

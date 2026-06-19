@@ -4,8 +4,6 @@ import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomSta
 import type { RecordGameActionsInput } from "../../src/api/gameActionClient";
 import { DdzRoom } from "../../src/rooms/DdzRoom";
 
-const SETTLEMENT_DISPLAY_MS = 5000;
-
 describe("DdzRoom crash recovery", () => {
   it("restores a playing room and resumes scheduling", async () => {
     const code = "100011";
@@ -31,7 +29,7 @@ describe("DdzRoom crash recovery", () => {
     await fixture.room.onDispose();
   });
 
-  it("restores a settled room and schedules the next round", async () => {
+  it("restores a settled room and waits for a human ready command before the next round", async () => {
     const code = "100012";
     const table = playingTable(code);
     sweepToSettlement(table);
@@ -40,8 +38,8 @@ describe("DdzRoom crash recovery", () => {
     await fixture.room.onCreate(fixture.options);
 
     expect(fixture.internals().table.snapshot().phase).toBe("settled");
-    // 结算已随 state 同事务落库，恢复后照常停留结算画面再开下一局
-    expect(fixture.clock.setTimeout).toHaveBeenCalledWith(expect.any(Function), SETTLEMENT_DISPLAY_MS);
+    // 结算态不再自动重开下一局,必须等真人点击准备。
+    expect(fixture.clock.setTimeout).not.toHaveBeenCalled();
 
     await fixture.room.onDispose();
   });

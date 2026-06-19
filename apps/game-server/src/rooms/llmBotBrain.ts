@@ -20,6 +20,12 @@ export interface LlmDecisionMetric {
   readonly usage: TokenUsage | null;
 }
 
+/** LLM 成功解析出的候选选择:编号来自模型输出,label 是当手候选列表中该编号对应的具体动作。 */
+export interface LlmDecisionChoice {
+  readonly index: number;
+  readonly label: string;
+}
+
 /** 一次 LLM 出牌决策的结局(四选一);ok 才有动作。 */
 export type LlmDecisionOutcome =
   | { readonly kind: "ok"; readonly index: number; readonly action: BotAction }
@@ -81,6 +87,8 @@ export interface LlmBotBrainOptions {
   readonly onTrace?: ((trace: LlmDecisionTrace) => void) | undefined;
   /** 出牌决策过程中实时回调模型输出增量(playerId + channel + 片段),供上层做牌桌「AI 输出流」;不设则不回调。 */
   readonly onStreamDelta?: ((playerId: PlayerId, delta: MoveStreamDelta) => void) | undefined;
+  /** 模型最终编号合法后回调其对应候选动作,供上层把「1」展示成「单张4」等具体结果。 */
+  readonly onChoice?: ((playerId: PlayerId, choice: LlmDecisionChoice) => void) | undefined;
   /** 可注入时钟,便于测试测延迟;默认 Date.now。 */
   readonly now?: () => number;
 }
@@ -181,7 +189,17 @@ export class LlmBotBrain implements BotBrain {
         latencyMs
       );
     }
+    const label = labels[decision.index];
+    if (!label) {
+      this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "invalid_index", index: decision.index });
+      throw new LlmDecisionError(
+        "invalid_index",
+        `LLM 返回越界选择 index=${decision.index}(候选 ${labels.length} 项)`,
+        latencyMs
+      );
+    }
     // 4) 成功。
+    this.options.onChoice?.(playerId, { index: decision.index, label });
     this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "ok", index: decision.index, action });
     this.options.onDecision?.({ latencyMs, usage: trace.usage });
     return action;

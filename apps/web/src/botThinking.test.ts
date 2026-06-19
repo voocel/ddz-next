@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import { reduceThinking, EMPTY_THINKING } from "./botThinking";
 
 /** 造一个 bot_ai_stream 事件(测试夹具)。 */
-function ev(playerId: string, channel: "reasoning" | "text", text: string, done: boolean) {
-  return { type: "bot_ai_stream", playerId, channel, text, done } as const;
+function ev(
+  playerId: string,
+  channel: "reasoning" | "text",
+  text: string,
+  done: boolean,
+  choice?: { readonly index: number; readonly label: string }
+) {
+  return choice
+    ? ({ type: "bot_ai_stream", playerId, channel, text, done, choice } as const)
+    : ({ type: "bot_ai_stream", playerId, channel, text, done } as const);
 }
 
 describe("reduceThinking", () => {
@@ -47,5 +55,22 @@ describe("reduceThinking", () => {
     state = reduceThinking(state, ev("bot1", "reasoning", "甲续", false));
     expect(state.bot1).toEqual({ channels: { reasoning: "甲想甲续", text: "" }, active: true });
     expect(state.bot2).toEqual({ channels: { reasoning: "", text: "乙答" }, active: true });
+  });
+
+  it("done 事件可携带模型编号对应的具体候选动作", () => {
+    const state = reduceThinking(EMPTY_THINKING, ev("bot1", "text", "", true, { index: 1, label: "单张4" }));
+
+    expect(state.bot1).toEqual({
+      channels: { reasoning: "", text: "" },
+      choice: { index: 1, label: "单张4" },
+      active: false
+    });
+  });
+
+  it("done 后新一轮增量清空上一手 choice", () => {
+    let state = reduceThinking(EMPTY_THINKING, ev("bot1", "text", "", true, { index: 1, label: "单张4" }));
+    state = reduceThinking(state, ev("bot1", "reasoning", "新一手", false));
+
+    expect(state.bot1).toEqual({ channels: { reasoning: "新一手", text: "" }, active: true });
   });
 });

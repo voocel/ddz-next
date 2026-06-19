@@ -13,7 +13,12 @@ import {
 } from "@ddz/bot-ai";
 import type { BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
-import { LlmBotBrain, type LlmDecisionMetric, type LlmDecisionTrace } from "./llmBotBrain.js";
+import {
+  LlmBotBrain,
+  type LlmDecisionChoice,
+  type LlmDecisionMetric,
+  type LlmDecisionTrace
+} from "./llmBotBrain.js";
 import type { PlayerId } from "@ddz/domain";
 
 /** 客户端建房时所选的机器人决策(不可信,resolveDecisionConfig 校验后才生效)。 */
@@ -30,6 +35,8 @@ export interface BotBrainHooks {
   readonly onDecision?: (metric: LlmDecisionMetric) => void;
   /** 出牌决策中模型输出增量(playerId + channel + 片段),供牌桌「AI 输出流」实时广播;与 onTrace 落盘正交。 */
   readonly onStreamDelta?: (playerId: PlayerId, delta: MoveStreamDelta) => void;
+  /** 出牌决策成功后模型编号对应的具体候选动作,供牌桌把原始数字显示成可理解结果。 */
+  readonly onChoice?: (playerId: PlayerId, choice: LlmDecisionChoice) => void;
 }
 
 /** 校验后的决策配置:model 保证落在注册表内(命中客户端所选,否则回退 registry.default)。 */
@@ -90,7 +97,8 @@ export function createBotBrain(
     chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs, providerOptions }),
     onTrace: hooks?.onTrace,
     onDecision: hooks?.onDecision,
-    onStreamDelta: hooks?.onStreamDelta
+    onStreamDelta: hooks?.onStreamDelta,
+    onChoice: hooks?.onChoice
   });
 }
 

@@ -23,6 +23,11 @@ describe("table controls state", () => {
     });
   });
 
+  it("enables ready on settlement so the local player controls when the next round starts", () => {
+    expect(getTableControlsState(snapshot("settled", { currentPlayerId: null, localReady: false }), "p0", true).ready).toBe(true);
+    expect(getTableControlsState(snapshot("settled", { currentPlayerId: null, localReady: true }), "p0", true).ready).toBe(true);
+  });
+
   it("enables bidding only on the local bidding turn", () => {
     expect(getTableControlsState(snapshot("bidding", { currentPlayerId: "p0", localReady: true }), "p0", true).bid).toBe(true);
     expect(getTableControlsState(snapshot("bidding", { currentPlayerId: "p1", localReady: true }), "p0", true).bid).toBe(false);

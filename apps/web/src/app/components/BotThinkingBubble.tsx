@@ -37,9 +37,10 @@ export function BotThinkingBubble({
       return {
         playerId,
         name: player.nickname ?? "机器人",
+        choice: entry.choice,
         reasoning: entry.channels.reasoning,
         output: entry.channels.text,
-        preview: previewText(entry.channels.text || entry.channels.reasoning),
+        preview: previewText(entry.choice ? `选择: ${entry.choice.label}` : entry.channels.text || entry.channels.reasoning),
         active: entry.active,
         side: relative === 1 ? ("right" as const) : ("left" as const)
       };
@@ -67,7 +68,12 @@ export function BotThinkingBubble({
                   −
                 </button>
               </div>
-              <BotThinkingBody reasoning={bubble.reasoning} output={bubble.output} active={bubble.active} />
+              <BotThinkingBody
+                reasoning={bubble.reasoning}
+                output={bubble.output}
+                choice={bubble.choice}
+                active={bubble.active}
+              />
             </div>
           </div>
         ) : (
@@ -102,10 +108,12 @@ function previewText(text: string): string {
 function BotThinkingBody({
   reasoning,
   output,
+  choice,
   active
 }: {
   readonly reasoning: string;
   readonly output: string;
+  readonly choice: { readonly index: number; readonly label: string } | undefined;
   readonly active: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +124,7 @@ function BotThinkingBody({
       return;
     }
     body.scrollTop = body.scrollHeight;
-  }, [reasoning, output, active]);
+  }, [reasoning, output, choice?.index, choice?.label, active]);
 
   return (
     <div ref={bodyRef} className="bot-think-body">
@@ -130,6 +138,14 @@ function BotThinkingBody({
         <section className="bot-think-section">
           <div className="bot-think-label">输出</div>
           <div>{output}</div>
+        </section>
+      ) : null}
+      {choice ? (
+        <section className="bot-think-section">
+          <div className="bot-think-label">选择</div>
+          <div>
+            {choice.index}: {choice.label}
+          </div>
         </section>
       ) : null}
       {active ? <span className="bot-think-caret">▌</span> : null}

@@ -169,11 +169,19 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   leaveCommandSchema
 ]);
 
+const revealedHandSchema = z.object({
+  playerId: z.string().min(1),
+  cards: z.array(cardSchema)
+});
+const revealedHandsSchema = z.array(revealedHandSchema);
+
 export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("snapshot"),
     snapshot: gameSnapshotSchema,
-    hand: z.array(cardSchema)
+    hand: z.array(cardSchema),
+    /** 若当前处于结算态,服务端可附带全员剩余手牌,供刷新/重连后继续展示明牌。 */
+    revealedHands: revealedHandsSchema.optional()
   }),
   z.object({
     type: z.literal("player_joined"),
@@ -224,7 +232,9 @@ export const gameEventSchema = z.discriminatedUnion("type", [
     type: z.literal("round_settled"),
     settlement: settlementSchema,
     snapshot: gameSnapshotSchema,
-    hand: z.array(cardSchema)
+    hand: z.array(cardSchema),
+    /** 结算后公开所有玩家剩余手牌,用于翻开对手牌给全桌复盘。 */
+    revealedHands: revealedHandsSchema.optional()
   }),
   z.object({
     type: z.literal("player_passed"),
@@ -259,7 +269,14 @@ export const gameEventSchema = z.discriminatedUnion("type", [
     playerId: z.string().min(1),
     channel: z.enum(["reasoning", "text"]),
     text: z.string().max(600),
-    done: z.boolean()
+    done: z.boolean(),
+    /** 本手 LLM 最终选中的候选项;成功解析并映射后由服务端附带,便于前端把数字编号展示成具体动作。 */
+    choice: z
+      .object({
+        index: z.number().int().nonnegative(),
+        label: z.string().min(1).max(120)
+      })
+      .optional()
   })
 ]);
 
