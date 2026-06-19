@@ -30,7 +30,7 @@ export interface TableGameBridge {
   pass(): void;
   /** 提示：自动选中可压过上一手的牌 */
   tip(): void;
-  /** 回合超时提醒：本地玩家剩余时间不多时由 React 控制行触发，播放闹钟音 */
+  /** 回合超时提醒：本地玩家剩余时间不多时由 React 回合计时器触发，播放闹钟音 */
   alertTimeout(): void;
   /** 设置音效音量（0..1，0 即静音）：React 音效滑块变动时实时下发（背景音乐由 App 级全局管理） */
   setSfxLevel(level: number): void;
@@ -61,7 +61,7 @@ const RELATIVE_SEAT_POSITIONS = [
   { x: 1064, y: 300 },
   { x: 216, y: 300 }
 ] as const;
-// 出牌展示区回到上半部居中，把下半部让给操作控制行（操作按钮与闹钟现为 HTML 控制行）
+// 出牌展示区回到上半部居中，把下半部让给 HTML 操作控制行。
 const LAST_PLAY_Y = 330;
 // 手牌横排贴底；选中的牌上抬 20px
 const HAND_RESTING_Y = 632;

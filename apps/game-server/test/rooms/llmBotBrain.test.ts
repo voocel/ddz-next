@@ -6,6 +6,7 @@ import type { BotAction, BotBrain } from "../../src/rooms/botBrain";
 import {
   LlmBotBrain,
   LlmDecisionError,
+  takeThinkingChunk,
   type LlmDecisionMetric,
   type LlmDecisionTrace
 } from "../../src/rooms/llmBotBrain";
@@ -323,5 +324,56 @@ describe("LlmBotBrain", () => {
     expect(trace.outcome).toEqual({ kind: "error", message: "This operation was aborted" });
     expect(trace.system).toBe("你是斗地主高手");
     expect(trace.prompt).toBe("可选出牌...");
+  });
+
+  it("把模型 reasoning/text 增量经 onStreamDelta 透传(带上 playerId)", async () => {
+    const chooser: MoveChooser = {
+      choose: (_ctx, hooks) => {
+        hooks?.onDelta?.({ channel: "reasoning", text: "先压" });
+        hooks?.onDelta?.({ channel: "text", text: "1" });
+        return Promise.resolve({ index: 1, trace: traceFixture() });
+      }
+    };
+    const deltas: Array<[string, "reasoning" | "text", string]> = [];
+    const brain = new LlmBotBrain({
+      chooser,
+      onStreamDelta: (pid, delta) => deltas.push([pid, delta.channel, delta.text])
+    });
+
+    await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
+    expect(deltas).toEqual([
+      ["p0", "reasoning", "先压"],
+      ["p0", "text", "1"]
+    ]);
+  });
+
+  it("不设 onStreamDelta 时不向 chooser 传 streamHooks(可选钩子,行为等价)", async () => {
+    let receivedHooks: unknown = "unset";
+    const chooser: MoveChooser = {
+      choose: (_ctx, hooks) => {
+        receivedHooks = hooks;
+        return Promise.resolve({ index: 1, trace: traceFixture() });
+      }
+    };
+    const brain = new LlmBotBrain({ chooser });
+
+    await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
+    expect(receivedHooks).toBeUndefined();
+  });
+});
+
+describe("takeThinkingChunk(思考流节流)", () => {
+  it("不足阈值时只累积不发出", () => {
+    expect(takeThinkingChunk("短片段", 16)).toEqual({ chunk: null, rest: "短片段" });
+  });
+
+  it("达到阈值时整段发出并清空待累积", () => {
+    const pending = "一二三四五六七八九十一二三四五六"; // 16 字
+    expect(takeThinkingChunk(pending, 16)).toEqual({ chunk: pending, rest: "" });
+  });
+
+  it("超过阈值同样整段发出(下次从空累积)", () => {
+    const pending = "这是一段比阈值更长的思考片段内容继续写满"; // 20 字
+    expect(takeThinkingChunk(pending, 16)).toEqual({ chunk: pending, rest: "" });
   });
 });

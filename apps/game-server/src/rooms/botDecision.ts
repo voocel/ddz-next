@@ -8,11 +8,13 @@ import {
   type BotProviderRegistry,
   type DecisionConfig,
   type ModelRef,
+  type MoveStreamDelta,
   type ReasoningEffort
 } from "@ddz/bot-ai";
 import type { BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
 import { LlmBotBrain, type LlmDecisionMetric, type LlmDecisionTrace } from "./llmBotBrain.js";
+import type { PlayerId } from "@ddz/domain";
 
 /** 客户端建房时所选的机器人决策(不可信,resolveDecisionConfig 校验后才生效)。 */
 export interface BotDecisionOptions {
@@ -26,6 +28,8 @@ export interface BotDecisionOptions {
 export interface BotBrainHooks {
   readonly onTrace?: (trace: LlmDecisionTrace) => void;
   readonly onDecision?: (metric: LlmDecisionMetric) => void;
+  /** 出牌决策中模型输出增量(playerId + channel + 片段),供牌桌「AI 输出流」实时广播;与 onTrace 落盘正交。 */
+  readonly onStreamDelta?: (playerId: PlayerId, delta: MoveStreamDelta) => void;
 }
 
 /** 校验后的决策配置:model 保证落在注册表内(命中客户端所选,否则回退 registry.default)。 */
@@ -71,7 +75,7 @@ export function createBotBrain(
   if (!config.useLlm) {
     return new RuleBotBrain();
   }
-  const model = resolveModel(config.model, registry);
+  const model = resolveModel(config.model, registry, { reasoningEffort: config.reasoningEffort });
   if (!model) {
     const { provider, model: name } = config.model;
     throw new Error(
@@ -85,7 +89,8 @@ export function createBotBrain(
   return new LlmBotBrain({
     chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs, providerOptions }),
     onTrace: hooks?.onTrace,
-    onDecision: hooks?.onDecision
+    onDecision: hooks?.onDecision,
+    onStreamDelta: hooks?.onStreamDelta
   });
 }
 

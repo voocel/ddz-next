@@ -11,7 +11,7 @@ export interface PhaserTableHandle {
   play(): void;
   pass(): void;
   tip(): void;
-  /** 回合超时提醒：播放闹钟音（由 React 控制行在本地玩家剩余时间不多时触发） */
+  /** 回合超时提醒：播放闹钟音（由 React 回合计时器在本地玩家剩余时间不多时触发） */
   alertTimeout(): void;
 }
 

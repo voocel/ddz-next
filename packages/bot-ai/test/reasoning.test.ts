@@ -34,16 +34,16 @@ describe("buildReasoningProviderOptions", () => {
     expect(buildReasoningProviderOptions("anthropic", "anthropic", "high")).toEqual({ anthropic: { effort: "high" } });
   });
 
-  it("deepseek:关闭走 thinking.disabled,强度走 reasoningEffort,键固定为 deepseek", () => {
+  it("deepseek:关闭走 thinking.disabled,强度走官方 reasoning_effort,键固定为 deepseek", () => {
     expect(buildReasoningProviderOptions("deepseek", "deepseek", "off")).toEqual({
       deepseek: { thinking: { type: "disabled" } }
     });
     expect(buildReasoningProviderOptions("deepseek", "deepseek", "high")).toEqual({
-      deepseek: { reasoningEffort: "high" }
+      deepseek: { thinking: { type: "enabled" }, reasoning_effort: "high" }
     });
     // 即使注册表里把它命名成别的(ds-alias),providerOptions 键仍是适配器固定的 "deepseek"
     expect(buildReasoningProviderOptions("deepseek", "ds-alias", "medium")).toEqual({
-      deepseek: { reasoningEffort: "medium" }
+      deepseek: { thinking: { type: "enabled" }, reasoning_effort: "high" }
     });
   });
 

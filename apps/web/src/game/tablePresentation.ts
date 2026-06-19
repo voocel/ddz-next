@@ -61,6 +61,7 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
     case "snapshot":
     case "turn_timer":
     case "player_connection_changed":
+    case "bot_ai_stream":
       return null;
     case "player_joined":
       return `${actor(event.playerId, event.snapshot)} 入座`;

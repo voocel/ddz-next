@@ -22,8 +22,8 @@ import type { BotAction, BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
 import { botTurnDelayMs } from "./botTiming.js";
 import { pickBotNicknames } from "./botNames.js";
-import { resolveBotBrain } from "./botDecision.js";
-import { LlmBotBrain, type LlmDecisionTrace } from "./llmBotBrain.js";
+import { resolveBotBrain, type BotBrainHooks } from "./botDecision.js";
+import { LlmBotBrain, takeThinkingChunk, type LlmDecisionTrace } from "./llmBotBrain.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
@@ -65,6 +65,10 @@ const QUICK_START_BOT_COUNT = 2;
 const SETTLEMENT_DISPLAY_MS = 5000;
 // 活跃房间刷新 DB updatedAt 的心跳间隔，须远小于 API 侧 30min 的孤儿清扫时限
 const HEARTBEAT_INTERVAL_MS = 10 * 60_000;
+// 大模型「AI 输出流」节流阈值:增量累积到约一短句(16 字)才广播一条,避免逐 token 的消息风暴。
+const THINKING_MIN_CHARS = 16;
+type BotStreamChannel = "reasoning" | "text";
+type BotStreamBuffers = Partial<Record<BotStreamChannel, string>>;
 
 /**
  * 单进程内 roomCode → roomId 注册表。
@@ -94,6 +98,8 @@ export class DdzRoom extends Room {
   private turnScheduler!: RoomTurnScheduler;
   // LLM 出牌决策的逐手留证(JSONL);仅 BOT_DECISION_TRACE=true 时非空,供实验排错/优化。
   private traceSink: LlmTraceSink | null = null;
+  // 大模型「AI 输出流」每个 bot 的待广播片段缓冲(按字数节流);有键即代表本手产生过输出(决定收尾是否发 done)。
+  private readonly streamBuffers = new Map<PlayerId, BotStreamBuffers>();
   private roomCode!: string;
   // null = 走 botTiming 的拟真区间;非空 = 固定延迟(测试/CI 逃生阀)
   private fixedBotDelayMs: number | null = null;
@@ -149,7 +155,11 @@ export class DdzRoom extends Room {
     const registry = options.botRegistry ?? parseBotProviderRegistry(null);
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
-    const hooks = this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : undefined;
+    // onStreamDelta 无条件接上(AI 输出流给玩家看的实时流,与 BOT_DECISION_TRACE 落盘正交);规则 bot 永不触发它。
+    const hooks: BotBrainHooks = {
+      ...(this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : {}),
+      onStreamDelta: (playerId, delta) => this.appendAiStream(playerId, delta.channel, delta.text)
+    };
     this.botBrain = resolveBotBrain(options, registry, hooks);
     if (this.commentary.enabled) {
       this.commentator = new LlmCommentator({
@@ -773,12 +783,13 @@ export class DdzRoom extends Room {
       return;
     }
 
-    const action = await this.botBrain.decide(
-      snapshot,
-      playerId,
-      this.table.getHand(playerId),
-      this.table.playedCards()
-    );
+    let action: BotAction;
+    try {
+      action = await this.botBrain.decide(snapshot, playerId, this.table.getHand(playerId), this.table.playedCards());
+    } finally {
+      // 无论决策成功/抛错(失败将关房),都收尾本手 AI 输出流:flush 剩余片段 + done,清缓冲。
+      this.endAiStream(playerId);
+    }
 
     // 锁内:应用权威动作 + 落库 + 广播。await 期间局面可能已推进,入队后再校验一次。
     await this.tasks.enqueue(async () => {
@@ -813,6 +824,53 @@ export class DdzRoom extends Room {
       throw new Error(error instanceof Error ? error.message : "Bot action failed.", {
         cause: error
       });
+    }
+  }
+
+  /**
+   * AI 输出流:累积该 bot 的 reasoning/text 增量,按字数节流广播 bot_ai_stream(done:false)。
+   * 锁外回调(决策在锁外流式产出);只要被调用过就在 streamBuffers 留键,作为「本手产生过输出」的标记。
+   */
+  private appendAiStream(playerId: PlayerId, channel: BotStreamChannel, delta: string): void {
+    if (this.failed) {
+      return;
+    }
+    const buffers = this.streamBuffers.get(playerId) ?? {};
+    const pending = (buffers[channel] ?? "") + delta;
+    const { chunk, rest } = takeThinkingChunk(pending, THINKING_MIN_CHARS);
+    this.streamBuffers.set(playerId, { ...buffers, [channel]: rest });
+    if (chunk !== null) {
+      this.broadcast("event", {
+        type: "bot_ai_stream",
+        playerId,
+        channel,
+        text: chunk,
+        done: false
+      } satisfies GameEvent);
+    }
+  }
+
+  /** 收尾本手 AI 输出流:把剩余片段连同 done:true 一并广播,清缓冲。本手没产生过输出(无键)则什么都不发。 */
+  private endAiStream(playerId: PlayerId): void {
+    const buffers = this.streamBuffers.get(playerId);
+    if (!buffers) {
+      return;
+    }
+    this.streamBuffers.delete(playerId);
+    if (this.failed) {
+      return;
+    }
+    for (const channel of ["reasoning", "text"] as const) {
+      if (!(channel in buffers)) {
+        continue;
+      }
+      this.broadcast("event", {
+        type: "bot_ai_stream",
+        playerId,
+        channel,
+        text: buffers[channel] ?? "",
+        done: true
+      } satisfies GameEvent);
     }
   }
 

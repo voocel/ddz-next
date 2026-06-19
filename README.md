@@ -31,11 +31,12 @@ packages/
 
 - **选牌而非生成牌**：服务端用 `@ddz/domain` 枚举全部合法走法（规范化去重）并编号，模型只回一个数字——物理上无法出非法牌。
 - **只给公开事实，不灌输策略**：手牌、本局已出的牌、各家身份与剩牌、上一手——和真人所见一致，出什么由模型自己想，如实验牌力。
+- **牌桌内实时 AI 输出流**：决策走 `streamText`，模型的 reasoning 与普通文本输出都会流式广播到机器人座位上方气泡（默认折叠「AI 输出中」，点击展开看实时文本）——即使模型只吐最终编号，也能看到请求仍在推进。
 - **不静默降级**：超时 / 解析失败 / 越界 / 缺 key 一律抛错暴露，绝不偷偷回退规则机器人假装在跑 AI。
 - **全程留证**：`BOT_DECISION_TRACE` 开启后每手决策落一行 JSONL（prompt / reasoning / 用量 / 延迟 / 已出牌），逐手可复盘。
 - **慢决策不卡房间**：决策在串行锁外执行，牌桌上一样有倒计时闹钟（纯视觉、更长），到点不抢牌、继续等模型。
-- **思考强度可调 / 可关**：嫌慢？在「设置」里把推理强度调低甚至关闭（`effort` / `thinking.disabled`），即时提速。
-- **provider 无关**：`@ddz/bot-ai` 零依赖游戏规则，原生支持 Anthropic、DeepSeek（V4 双模），以及任意 OpenAI 兼容服务（OpenRouter / 本地模型等），兼容推理类模型。
+- **思考强度可调 / 默认关闭**：出牌只需要选编号，默认关闭 DeepSeek thinking；需要观察模型原生推理时，可在「设置」里切到模型默认或高强度。
+- **provider 无关**：`@ddz/bot-ai` 零依赖游戏规则，支持 Anthropic、DeepSeek（V4 双模）以及任意 OpenAI 兼容服务（OpenRouter / 本地模型等），兼容推理类模型。
 
 > 当前只有出牌相位交给大模型，叫 / 抢地主仍走固定规则以隔离实验变量。配置见「多 provider 机器人配置」，牌力验证见「大模型机器人自博弈实验」。
 
@@ -59,7 +60,7 @@ pnpm --filter @ddz/web dev
 ./start.sh
 ```
 
-打开 Web 后点击“快速开始”会自动创建带两个机器人的测试房间（规则机器人）；“创建房间”仍然创建普通真人房间；“大模型对战”会创建一桌**大模型机器人**直接开打（设计见上文「大模型机器人（项目亮点）」）。模型在大厅“设置”里选——可选项由 game-server 从 `bot-providers.json` 动态下发(`GET /bot-models`，按 provider 分组，无密钥)；未选则用服务端默认模型。**服务端未配置对应 API key 时直接建房失败并提示**，不会静默降级成规则机器人（目的是实验验证 LLM，缺配置就该让你知道）。该入口按房间携带所选 `{provider, model}` 与**思考强度**（默认 / 关闭 / 低 / 中 / 高，给推理模型提速、可直接关闭），覆盖服务端 `BOT_DECISION` / `BOT_REASONING_EFFORT` 默认；**API key 始终只在服务端**，前端只见 provider/model 标签。
+打开 Web 后点击“快速开始”会自动创建带两个机器人的测试房间（规则机器人）；“创建房间”仍然创建普通真人房间；“大模型对战”会创建一桌**大模型机器人**直接开打（设计见上文「大模型机器人（项目亮点）」）。模型在大厅“设置”里选——可选项由 game-server 从 `bot-providers.json` 动态下发(`GET /bot-models`，按 provider 分组，无密钥)；未选则用服务端默认模型。**服务端未配置对应 API key 时直接建房失败并提示**，不会静默降级成规则机器人（目的是实验验证 LLM，缺配置就该让你知道）。该入口按房间携带所选 `{provider, model}` 与**思考强度**（默认关闭 / 模型默认 / 低 / 中 / 高，给推理模型提速、可直接关闭），覆盖服务端 `BOT_DECISION` / `BOT_REASONING_EFFORT` 默认；**API key 始终只在服务端**，前端只见 provider/model 标签。
 
 本地默认使用已安装的 PostgreSQL：`localhost:5433`，用户 `postgres`，密码 `123456`，数据库名 `ddz`。如果本机还没有数据库，先创建一次：
 
@@ -113,7 +114,7 @@ pnpm smoke:full-stack
 - `BOT_CHAT_TIMEOUT_MS` / `BOT_CHAT_MAX_CHARS`：单次解说超时与台词字数上限，默认 `4000` / `40`。
 - `BOT_DECISION`：机器人出牌决策来源，`rule`（默认，规则引擎）或 `llm`（大模型）。设为 `llm` 时，**出牌相位**由模型在 `@ddz/domain` 枚举出的合法走法里选一手；叫/抢地主仍走固定规则（隔离实验变量，只验证 LLM 的出牌能力）。**出牌相位不再静默回退**：模型超时/限流/解析失败/越界一律抛错暴露（线上由房间故障关闭并记日志，selfPlay 里如实记为失败局）；缺 key 则建房直接报错。服务端权威不变（模型只能从合法候选里选）。具体模型由「大模型对战」入口所选或注册表默认决定，决策设计与可观测性详见上文「大模型机器人（项目亮点）」。
 - `BOT_DECISION_TIMEOUT_MS`：大模型单次出牌决策的真超时，默认 `60000`（推理 / thinking 模型单步思考动辄十几秒，给足头寸避免误判失败）。到点 abort 并**抛错暴露**（不回退规则）。注意机器人回合**不受面向真人的 `TURN_TIMEOUT_MS` 管辖**，这是机器人唯一的决策时钟。
-- `BOT_REASONING_EFFORT`：大模型「思考强度」服务端默认，`auto`（默认，跟随模型）/ `off`（关闭思考，最快）/ `low` / `medium` / `high`。主要为推理模型提速；客户端「设置」里的选择会覆盖它。各 provider 行为：**Anthropic** 各档均生效（`effort` / 关闭走 `thinking.disabled`）；**DeepSeek V4** 双模可真正关闭思考（`thinking.disabled`），但 `reasoningEffort` 的 low/medium 会被其服务端归到 high（强度降不下来，只有「关闭」与「高」两档真正不同）；**其它 openai-compatible** 无统一关闭语义，关闭会退化为最低档 `low`。
+- `BOT_REASONING_EFFORT`：大模型「思考强度」服务端默认，`off`（默认，关闭思考，最快）/ `auto`（跟随模型）/ `low` / `medium` / `high`。出牌决策只需要选合法候选编号，默认关闭可避免 DeepSeek 把输出 token 全耗在 reasoning 里而不给最终编号；客户端「设置」里的选择会覆盖它。各 provider 行为：**Anthropic** 各档均生效（`effort` / 关闭走 `thinking.disabled`）；**DeepSeek V4** 双模可真正关闭思考（`thinking.disabled`），但官方 `reasoning_effort` 的 low/medium 会被其服务端归到 high（强度降不下来，只有「关闭」与「高」两档真正不同）；**其它 openai-compatible** 无统一关闭语义，关闭会退化为最低档 `low`。
 - `BOT_LLM_TURN_TIMER_MS`：大模型机器人回合在牌桌上展示的倒计时（ms），默认 `30000`。**纯视觉**——和真人一样有个闹钟在转，但到点不触发任何兜底动作（不替模型抢牌），真超时由上面的 `BOT_DECISION_TIMEOUT_MS` 收口。规则机器人则沿用 `TURN_TIMEOUT_MS`。
 - `BOT_DECISION_TRACE`：设为 `true` 时把每一手大模型决策落 JSONL 留证（含 prompt / reasoning / 用量 / 延迟 / 已出牌 / 结局），供逐手排错与牌力分析；默认关闭。
 - `BOT_TRACE_DIR`：留证 JSONL 的输出目录（相对仓库根或绝对路径），默认 `logs/llm-traces`，每房一文件 `<房间号>-<起始时间>.jsonl`。
@@ -129,7 +130,7 @@ cp bot-providers.example.json bot-providers.json   # 仓库根；或用 BOT_PROV
 # 编辑 bot-providers.json，填入各家 api_key / base_url / models
 ```
 
-文件结构（`type` 为 `anthropic` 走 Anthropic 原生适配器，`deepseek` 走 DeepSeek 原生适配器（V4 双模：思考开/关 + `reasoningEffort`），其余/缺省一律走 OpenAI 兼容适配器，覆盖 OpenRouter、MiMo、本地服务等）：
+文件结构（`type` 为 `anthropic` 走 Anthropic 原生适配器，`deepseek` 走 DeepSeek 官方 OpenAI-compatible 接口并注入 V4 `thinking` / `reasoning_effort`，其余/缺省一律走 OpenAI 兼容适配器，覆盖 OpenRouter、MiMo、本地服务等）：
 
 ```jsonc
 {
@@ -137,7 +138,7 @@ cp bot-providers.example.json bot-providers.json   # 仓库根；或用 BOT_PROV
   "model": "deepseek-v4-pro",      // 默认 model
   "providers": {
     "deepseek": {
-      "type": "deepseek",          // DeepSeek 原生适配器：V4 双模，可真正关闭思考
+      "type": "deepseek",          // DeepSeek 官方兼容接口：V4 双模，可真正关闭思考
       "api_key": "sk-xxx",
       "base_url": "https://api.deepseek.com",
       "label": "DeepSeek",         // 可选，前端下拉分组标题

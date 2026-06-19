@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * 归一化后的供应商类型,决定走哪个 AI SDK 适配器:
  * - anthropic:原生 @ai-sdk/anthropic(effort / thinking 关闭)。
- * - deepseek:原生 @ai-sdk/deepseek(DeepSeek V4 双模:thinking 开/关 + reasoningEffort)。
+ * - deepseek:DeepSeek 官方 OpenAI-compatible 接口 + V4 thinking/reasoning_effort 注入。
  * - openai-compatible:其余一律走 @ai-sdk/openai-compatible(OpenAI / OpenRouter / 本地服务等)。
  */
 export type ProviderType = "anthropic" | "openai-compatible" | "deepseek";

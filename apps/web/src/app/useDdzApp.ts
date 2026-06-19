@@ -8,6 +8,7 @@ import { createMatchmakingClient } from "../net/matchmakingClient";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
 import { loadBotPreferences, saveBotPreferences, type BotPreferences, type ReasoningEffort } from "../botPreferences";
+import { reduceThinking, EMPTY_THINKING, type BotThinkingState } from "../botThinking";
 import type { TurnTimerState } from "./types";
 import { useAuthSession } from "./useAuthSession";
 import { useHistoryReplay } from "./useHistoryReplay";
@@ -44,6 +45,8 @@ export function useDdzApp() {
     readonly reasoningEffort: ReasoningEffort;
   } | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
+  // 大模型「AI 输出流」:按 playerId 累积各机器人的实时 reasoning/text,供牌桌座位气泡展示。
+  const [thinking, setThinking] = useState<BotThinkingState>(EMPTY_THINKING);
   const [turnTimer, setTurnTimer] = useState<TurnTimerState | null>(null);
   const [matchQueue, setMatchQueue] = useState<{ waiting: number; position: number } | null>(null);
   const matchClientRef = useRef<ReturnType<typeof createMatchmakingClient> | null>(null);
@@ -106,9 +109,8 @@ export function useDdzApp() {
         botDecisionMode: selectedRoomBot?.mode,
         botProvider: selectedRoomBot?.provider,
         botModel: selectedRoomBot?.model,
-        // auto(默认)不下发,留给服务端 BOT_REASONING_EFFORT 默认;非 auto 才作为显式覆盖发出。
-        botReasoningEffort:
-          selectedRoomBot && selectedRoomBot.reasoningEffort !== "auto" ? selectedRoomBot.reasoningEffort : undefined,
+        // 设置里的档位显式下发；auto 表示让模型自己决定，off 表示关闭 thinking。
+        botReasoningEffort: selectedRoomBot?.reasoningEffort,
         onStatus: setStatus,
         onDropped: (code) => {
           // 被踢/房间故障：重连必败或会互踢，直接回大厅
@@ -144,6 +146,11 @@ export function useDdzApp() {
             setTurnTimer(null);
             void history.refreshHistory();
           }
+          if (event.type === "bot_ai_stream") {
+            setThinking((current) => reduceThinking(current, event));
+            // AI 输出流不进 events 反馈行(它走座位气泡),避免刷屏挤掉真正的出牌/提示反馈。
+            return;
+          }
           setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
@@ -169,6 +176,7 @@ export function useDdzApp() {
   const resetRoomState = useCallback((): void => {
     setSnapshot(null);
     setTurnTimer(null);
+    setThinking(EMPTY_THINKING);
     setEvents([]);
     setReconnectRequest(null);
   }, []);
@@ -425,6 +433,7 @@ export function useDdzApp() {
     snapshot,
     status,
     tableControls,
+    thinking,
     turnTimer
   };
 }

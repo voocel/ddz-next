@@ -1,6 +1,15 @@
 import { compareRank, enumerateLegalMoves } from "@ddz/domain";
 import type { Card, Combination, GameSnapshot, LegalMove, PlayerId, Rank } from "@ddz/domain";
-import type { ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext, TokenUsage } from "@ddz/bot-ai";
+import type {
+  ChooserTrace,
+  MoveChooser,
+  MoveDecision,
+  MoveSelectionContext,
+  MoveStreamDelta,
+  MoveStreamHooks,
+  ProviderRequestSummary,
+  TokenUsage
+} from "@ddz/bot-ai";
 import type { BotAction, BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
 import { describeCombination, rankLabel } from "./combinationLabels.js";
@@ -39,6 +48,7 @@ export interface LlmDecisionTrace {
   readonly reasoningText: string | null;
   readonly finishReason: string | null;
   readonly usage: TokenUsage | null;
+  readonly requestSummary: ProviderRequestSummary | null;
   readonly latencyMs: number;
   readonly outcome: LlmDecisionOutcome;
 }
@@ -69,6 +79,8 @@ export interface LlmBotBrainOptions {
   readonly onDecision?: ((metric: LlmDecisionMetric) => void) | undefined;
   /** 每次 LLM 出牌决策(成功/no_choice/越界/请求出错)都回调一次完整留证,供落盘排错;不设则不记。 */
   readonly onTrace?: ((trace: LlmDecisionTrace) => void) | undefined;
+  /** 出牌决策过程中实时回调模型输出增量(playerId + channel + 片段),供上层做牌桌「AI 输出流」;不设则不回调。 */
+  readonly onStreamDelta?: ((playerId: PlayerId, delta: MoveStreamDelta) => void) | undefined;
   /** 可注入时钟,便于测试测延迟;默认 Date.now。 */
   readonly now?: () => number;
 }
@@ -121,10 +133,15 @@ export class LlmBotBrain implements BotBrain {
     }
 
     const context = buildContext(snapshot, playerId, hand, playedCards, previous, labels);
+    // AI 输出流:把模型 reasoning/text 增量带上 playerId 转给上层(只在 LLM 出牌路径产生,叫抢/强制出牌不产生)。
+    const onStreamDelta = this.options.onStreamDelta;
+    const streamHooks: MoveStreamHooks | undefined = onStreamDelta
+      ? { onDelta: (delta) => onStreamDelta(playerId, delta) }
+      : undefined;
     const start = this.now();
     let decision: MoveDecision | null;
     try {
-      decision = await this.options.chooser.choose(context);
+      decision = await this.options.chooser.choose(context, streamHooks);
     } catch (error) {
       // 真实 chooser 会把 API/abort 错误捕获进 trace.error;走到这里说明是自定义 chooser 直接抛——
       // 尽力记一条 error 留证后原样冒泡(暴露真因)。
@@ -198,6 +215,7 @@ export class LlmBotBrain implements BotBrain {
       reasoningText: trace?.reasoningText ?? null,
       finishReason: trace?.finishReason ?? null,
       usage: trace?.usage ?? null,
+      requestSummary: trace?.requestSummary ?? null,
       latencyMs,
       outcome
     });
@@ -255,6 +273,15 @@ function groupCardsByRank(cards: readonly Card[]): string[] {
       const label = rankLabel(rank);
       return count > 1 ? `${label}×${count}` : label;
     });
+}
+
+/**
+ * AI 输出流节流:模型增量逐 token 太碎(每片可能 1~3 字),累积到 ≥ minChars 才成片发出,避免广播风暴。
+ * 攒够则返回整段 chunk、rest 清空;不足则 chunk=null、rest 保留待续。done 收尾时由调用方直接取走剩余。
+ * 纯函数,导出供 DdzRoom 节流广播与单测复用。
+ */
+export function takeThinkingChunk(pending: string, minChars: number): { chunk: string | null; rest: string } {
+  return pending.length >= minChars ? { chunk: pending, rest: "" } : { chunk: null, rest: pending };
 }
 
 /** 把候选编号映射回具体动作;canPass 时编号 0 为过牌。越界返回 null(由调用方抛错暴露)。 */

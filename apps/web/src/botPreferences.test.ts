@@ -8,22 +8,35 @@ describe("parseBotPreferences（AI 机器人偏好解析）", () => {
     expect(parseBotPreferences("")).toEqual(DEFAULT_BOT_PREFERENCES);
   });
 
-  it("完整 provider+model 原样解析（思考强度缺省回退 auto）", () => {
+  it("完整 provider+model 原样解析（思考强度缺省回退关闭）", () => {
     expect(parseBotPreferences(JSON.stringify({ provider: "deepseek", model: "deepseek-v4-pro" }))).toEqual({
       provider: "deepseek",
       model: "deepseek-v4-pro",
-      reasoningEffort: "auto"
+      reasoningEffort: "off"
     });
   });
 
-  it("合法思考强度原样解析，非法档位回退 auto", () => {
+  it("合法思考强度原样解析，非法档位回退关闭", () => {
     expect(
       parseBotPreferences(JSON.stringify({ provider: "anthropic", model: "claude-haiku-4-5", reasoningEffort: "off" }))
     ).toEqual({ provider: "anthropic", model: "claude-haiku-4-5", reasoningEffort: "off" });
     expect(
       parseBotPreferences(JSON.stringify({ provider: "anthropic", model: "claude-haiku-4-5", reasoningEffort: "turbo" }))
         .reasoningEffort
-    ).toBe("auto");
+    ).toBe("off");
+  });
+
+  it("迁移旧版默认 auto 为 off，新版显式 auto 保留", () => {
+    expect(parseBotPreferences(JSON.stringify({ provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "auto" }))).toEqual({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      reasoningEffort: "off"
+    });
+    expect(
+      parseBotPreferences(
+        JSON.stringify({ version: 2, provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "auto" })
+      )
+    ).toEqual({ provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "auto" });
   });
 
   it("缺字段/类型错误回退默认", () => {

@@ -15,7 +15,7 @@ export interface DecisionConfig {
   /** true 时出牌相位交给 LLM 决策(叫/抢地主仍用规则,隔离实验变量);默认 false 用规则 bot。 */
   readonly useLlm: boolean;
   readonly timeoutMs: number;
-  /** 思考强度档位(默认 auto 不干预);客户端建房可覆盖,见 resolveDecisionConfig。 */
+  /** 思考强度档位(默认 off,避免 DeepSeek V4 默认长思考吞掉最终编号);客户端建房可覆盖。 */
   readonly reasoningEffort: ReasoningEffort;
 }
 
@@ -27,6 +27,8 @@ const DEFAULT_MAX_CHARS = 40;
 // 注意:bot 回合不受面向真人的回合超时管辖(见 roomTurnScheduler),这是 bot 唯一的决策时钟,
 // 超时即 abort 抛错暴露(不回退规则),与「纯 LLM 实验」一致。
 const DEFAULT_DECISION_TIMEOUT_MS = 60_000;
+// 出牌决策只需要在合法候选中选编号；默认关闭 thinking，减少 DeepSeek 把 token 全耗在 reasoning 的概率。
+const DEFAULT_DECISION_REASONING_EFFORT: ReasoningEffort = "off";
 
 /**
  * 从环境变量读取解说配置。默认关闭;只有 BOT_CHAT_ENABLED=true 才启用。
@@ -49,7 +51,10 @@ export function decisionConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Dec
   return {
     useLlm: env.BOT_DECISION === "llm",
     timeoutMs: positiveIntOr(env.BOT_DECISION_TIMEOUT_MS, DEFAULT_DECISION_TIMEOUT_MS),
-    reasoningEffort: parseReasoningEffort(env.BOT_REASONING_EFFORT)
+    reasoningEffort:
+      env.BOT_REASONING_EFFORT === undefined
+        ? DEFAULT_DECISION_REASONING_EFFORT
+        : parseReasoningEffort(env.BOT_REASONING_EFFORT)
   };
 }
 

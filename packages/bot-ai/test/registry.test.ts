@@ -35,7 +35,7 @@ describe("parseBotProviderRegistry（多 provider 注册表解析）", () => {
       apiKey: "sk-xxx",
       baseURL: "https://api.deepseek.com"
     });
-    // type:deepseek 原生适配器;anthropic 原样保留;缺 type 的 openrouter 归一化为 openai-compatible
+    // type:deepseek 使用 DeepSeek 官方兼容接口;anthropic 原样保留;缺 type 的 openrouter 归一化为 openai-compatible
     expect(registry.providers.anthropic?.type).toBe("anthropic");
     expect(registry.providers.openrouter?.type).toBe("openai-compatible");
   });

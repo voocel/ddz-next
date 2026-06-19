@@ -3,8 +3,8 @@ import type { BotPreferences, ReasoningEffort } from "../../botPreferences";
 
 /** 思考强度档位的展示文案(顺序即下拉顺序)。 */
 const EFFORT_OPTIONS: readonly { readonly value: ReasoningEffort; readonly label: string }[] = [
-  { value: "auto", label: "默认（跟随模型）" },
-  { value: "off", label: "关闭（最快）" },
+  { value: "off", label: "关闭（推荐，最快）" },
+  { value: "auto", label: "模型默认（可能较慢）" },
   { value: "low", label: "低" },
   { value: "medium", label: "中" },
   { value: "high", label: "高" }
@@ -87,7 +87,8 @@ export function BotSettings({
       </label>
       <p className="bot-settings-hint">
         「AI 对战」时机器人用此模型出牌；服务端未配置对应 API key 时会直接建房失败并提示，不会静默降级成规则机器人。
-        思考强度可给推理模型提速（关闭最快）：Anthropic 各档均生效；DeepSeek V4 可真正关闭，但低/中会被其服务端归到「高」；其它兼容模型无统一关闭语义，关闭会退化为最低档。
+        出牌只需要选择编号，默认关闭思考以避免 DeepSeek 长时间推理后不输出答案；需要观察模型原生推理时可切到模型默认或高强度。
+        Anthropic 各档均生效；DeepSeek V4 可真正关闭，但低/中会被其服务端归到「高」；其它兼容模型无统一关闭语义，关闭会退化为最低档。
       </p>
     </div>
   );

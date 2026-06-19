@@ -78,6 +78,7 @@ describe("decisionConfigFromEnv", () => {
     const config = decisionConfigFromEnv({});
     expect(config.useLlm).toBe(false);
     expect(config.timeoutMs).toBe(60000);
+    expect(config.reasoningEffort).toBe("off");
   });
 
   it("BOT_DECISION=llm 才启用,超时可覆盖", () => {
@@ -87,5 +88,10 @@ describe("decisionConfigFromEnv", () => {
     });
     expect(config.useLlm).toBe(true);
     expect(config.timeoutMs).toBe(12000);
+  });
+
+  it("BOT_REASONING_EFFORT 可显式切回模型默认或指定强度", () => {
+    expect(decisionConfigFromEnv({ BOT_REASONING_EFFORT: "auto" }).reasoningEffort).toBe("auto");
+    expect(decisionConfigFromEnv({ BOT_REASONING_EFFORT: "high" }).reasoningEffort).toBe("high");
   });
 });

@@ -1,5 +1,5 @@
 /**
- * 思考强度档位:auto 跟随模型(默认)、off 关闭、low/medium/high。
+ * 思考强度档位:off 关闭(默认)、auto 跟随模型、low/medium/high。
  * 与服务端 @ddz/bot-ai 的 ReasoningEffort 取值一致(本地声明以保持 web 不依赖服务端包;
  * 服务端 parseReasoningEffort 仍是校验权威,非法值回退 auto)。
  */
@@ -18,7 +18,8 @@ export interface BotPreferences {
 }
 
 const STORAGE_KEY = "ddz-bot";
-export const DEFAULT_BOT_PREFERENCES: BotPreferences = { provider: "", model: "", reasoningEffort: "auto" };
+const STORAGE_VERSION = 2;
+export const DEFAULT_BOT_PREFERENCES: BotPreferences = { provider: "", model: "", reasoningEffort: "off" };
 
 /** 把存储的原始字符串解析成偏好;空/损坏/缺字段都安全回退默认(纯函数,便于单测)。 */
 export function parseBotPreferences(raw: string | null): BotPreferences {
@@ -26,14 +27,18 @@ export function parseBotPreferences(raw: string | null): BotPreferences {
     return DEFAULT_BOT_PREFERENCES;
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<BotPreferences>;
+    const parsed = JSON.parse(raw) as Partial<BotPreferences> & { version?: unknown };
     if (typeof parsed.provider !== "string" || typeof parsed.model !== "string") {
       return DEFAULT_BOT_PREFERENCES;
     }
-    const reasoningEffort =
+    let reasoningEffort =
       typeof parsed.reasoningEffort === "string" && (REASONING_EFFORTS as readonly string[]).includes(parsed.reasoningEffort)
         ? (parsed.reasoningEffort as ReasoningEffort)
-        : "auto";
+        : DEFAULT_BOT_PREFERENCES.reasoningEffort;
+    // v1 的默认值是 auto,很多浏览器会在用户未主动选择时保存下来；迁移为 off,避免 DeepSeek 默认长思考。
+    if (parsed.version !== STORAGE_VERSION && reasoningEffort === "auto") {
+      reasoningEffort = DEFAULT_BOT_PREFERENCES.reasoningEffort;
+    }
     return { provider: parsed.provider, model: parsed.model, reasoningEffort };
   } catch {
     return DEFAULT_BOT_PREFERENCES;
@@ -50,7 +55,7 @@ export function loadBotPreferences(): BotPreferences {
 
 export function saveBotPreferences(preferences: BotPreferences): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...preferences, version: STORAGE_VERSION }));
   } catch {
     // 存储不可用时静默忽略，偏好仅本次会话生效
   }

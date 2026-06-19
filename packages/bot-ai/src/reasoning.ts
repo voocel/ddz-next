@@ -13,6 +13,11 @@ export type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["auto", "off", "low", "medium", "high"];
 
+export interface ReasoningRequestControls {
+  readonly thinking?: { readonly type: "enabled" | "disabled" } | undefined;
+  readonly reasoning_effort?: "high" | "max" | undefined;
+}
+
 /** 校验任意输入为合法档位,非法(含 undefined)一律回退 auto。供服务端校验不可信的客户端入参。 */
 export function parseReasoningEffort(raw: unknown): ReasoningEffort {
   return typeof raw === "string" && (REASONING_EFFORTS as readonly string[]).includes(raw)
@@ -20,16 +25,31 @@ export function parseReasoningEffort(raw: unknown): ReasoningEffort {
     : "auto";
 }
 
-/** generateText 的 providerOptions 形状(provider key → 该 provider 的选项),与 SDK 的 JSONValue 对齐。 */
+/** streamText 的 providerOptions 形状(provider key → 该 provider 的选项),与 SDK 的 JSONValue 对齐。 */
 export type ReasoningProviderOptions = Record<string, Record<string, JSONValue>>;
 
 /**
- * 把一个档位翻译成对应 provider 的 generateText.providerOptions;auto 返回 undefined(完全不干预)。
+ * 把一个档位翻译成 DeepSeek 官方 OpenAI 格式的请求体控制字段。
+ * 官方文档:thinking 默认 enabled;关闭必须显式传顶层 `thinking:{"type":"disabled"}`。
+ * low/medium 为兼容档,服务端会映射到 high;xhigh 才映射 max,本项目不暴露 xhigh。
+ */
+export function buildDeepSeekRequestControls(effort: ReasoningEffort): ReasoningRequestControls | undefined {
+  if (effort === "auto") {
+    return undefined;
+  }
+  if (effort === "off") {
+    return { thinking: { type: "disabled" } };
+  }
+  return { thinking: { type: "enabled" }, reasoning_effort: "high" };
+}
+
+/**
+ * 把一个档位翻译成对应 provider 的 streamText.providerOptions;auto 返回 undefined(完全不干预)。
  *
  * - Anthropic(`@ai-sdk/anthropic`):强度走 `effort`(跨模型代际通用),关闭走 `thinking:{type:"disabled"}`。
  *   刻意不用 `thinking:{type:"enabled",budgetTokens}`——它在 Opus 4.7+(含本项目 claude-opus-4-8)会 400。
- * - DeepSeek(`@ai-sdk/deepseek`):V4 双模——关闭走 `thinking:{type:"disabled"}`,强度走 `reasoningEffort`。
- *   注意 DeepSeek 服务端把 low/medium 映射到 high(只有 关闭 / 高·max 真正不同);providerOptions 键固定为 "deepseek"。
+ * - DeepSeek:V4 双模最终在 provider.transformRequestBody 注入顶层 `thinking` / `reasoning_effort`;
+ *   这里仍保留 providerOptions 摘要,供 trace 证明本手档位,不依赖它作为唯一落点。
  * - openai-compatible(OpenAI / 本地等):走 `reasoningEffort`(键为 provider 名,与 createOpenAICompatible 的 name 一致)。
  *   该协议无可靠通用的「关闭」,off 退化为最低档 low。
  */
@@ -48,10 +68,18 @@ export function buildReasoningProviderOptions(
     return { anthropic: { effort } };
   }
   if (providerType === "deepseek") {
-    if (effort === "off") {
-      return { deepseek: { thinking: { type: "disabled" } } };
+    const controls = buildDeepSeekRequestControls(effort);
+    if (!controls) {
+      return undefined;
     }
-    return { deepseek: { reasoningEffort: effort } };
+    const options: Record<string, JSONValue> = {};
+    if (controls.thinking) {
+      options.thinking = controls.thinking;
+    }
+    if (controls.reasoning_effort) {
+      options.reasoning_effort = controls.reasoning_effort;
+    }
+    return { deepseek: options };
   }
   return { [providerKey]: { reasoningEffort: effort === "off" ? "low" : effort } };
 }

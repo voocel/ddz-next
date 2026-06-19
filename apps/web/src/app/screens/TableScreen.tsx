@@ -1,5 +1,7 @@
 import { Suspense, lazy, type RefObject } from "react";
 import { TableControlRow } from "../components/TableControlRow";
+import { BotThinkingBubble } from "../components/BotThinkingBubble";
+import { SeatTurnClock } from "../components/SeatTurnClock";
 import type { PhaserTableHandle } from "../../PhaserTable";
 import type { DdzApp } from "../useDdzApp";
 
@@ -37,6 +39,7 @@ export function TableScreen({
     client,
     turnTimer,
     snapshot,
+    thinking,
     replayPlaying,
     setReplayPlaying,
     setReplayStep
@@ -62,6 +65,14 @@ export function TableScreen({
           onPlay={handlePlay}
         />
       </Suspense>
+
+      {!selectedReplay ? (
+        <BotThinkingBubble thinking={thinking} snapshot={snapshot} localPlayerId={session.user.id} />
+      ) : null}
+
+      {!selectedReplay ? (
+        <SeatTurnClock snapshot={snapshot} turnTimer={turnTimer} localPlayerId={session.user.id} theme={theme} />
+      ) : null}
 
       <header className="table-hud">
         <button

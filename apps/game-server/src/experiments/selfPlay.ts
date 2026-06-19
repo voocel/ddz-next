@@ -242,7 +242,8 @@ function buildModel(options: CliOptions): ResolvedSelfPlayModel | null {
   const ref: ModelRef = configRaw
     ? { provider: options.provider, model: options.model }
     : { provider: "anthropic", model: options.model };
-  const model = resolveModel(ref, registry);
+  const reasoningEffort = decisionConfigFromEnv().reasoningEffort;
+  const model = resolveModel(ref, registry, { reasoningEffort });
   if (!model) {
     return null;
   }
@@ -273,11 +274,12 @@ async function main(): Promise<void> {
 
   const metrics: LlmDecisionMetric[] = [];
   const errors: GameError[] = [];
+  const reasoningEffort = decisionConfigFromEnv().reasoningEffort;
   // 思考强度走 env 默认(BOT_REASONING_EFFORT),让自博弈也能压思考/关思考对比延迟与牌力。
   const providerOptions = buildReasoningProviderOptions(
     resolved.providerType,
     resolved.providerKey,
-    decisionConfigFromEnv().reasoningEffort
+    reasoningEffort
   );
   // BOT_DECISION_TRACE=true 时把每手 LLM 决策逐条留证落 JSONL,供离线复盘(同生产用一套 sink)。
   const traceSink = createLlmTraceSink(process.env, `selfplay-${options.provider}-${options.model}`);

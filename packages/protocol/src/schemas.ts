@@ -251,6 +251,15 @@ export const gameEventSchema = z.discriminatedUnion("type", [
     playerId: z.string().min(1),
     nickname: z.string().min(1).optional(),
     text: z.string().min(1).max(120)
+  }),
+  // 大模型出牌时的「AI 输出流」:reasoning 与普通文本增量,服务端按字数节流后广播。
+  // text 为节流后的片段(done 收尾时可为空);done=true 表示本手输出结束。
+  z.object({
+    type: z.literal("bot_ai_stream"),
+    playerId: z.string().min(1),
+    channel: z.enum(["reasoning", "text"]),
+    text: z.string().max(600),
+    done: z.boolean()
   })
 ]);
 
