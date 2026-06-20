@@ -70,6 +70,60 @@ createdb -h localhost -p 5433 -U postgres ddz
 
 `docker-compose.yml` 只保留为备用 PostgreSQL 方案；当前项目不依赖 Redis。
 
+### Docker Compose 生产部署
+
+生产一键部署使用 `docker-compose.prod.yml`，会启动 PostgreSQL、执行 Prisma migration、启动 API、Game Server 和 Nginx 静态 Web。
+
+```bash
+cp .env.production.example .env.production
+# 编辑 .env.production：必须替换 POSTGRES_PASSWORD / JWT_SECRET / INTERNAL_API_TOKEN。
+# 如果部署到服务器，把 PUBLIC_* 和 CORS_ORIGINS 改成公网域名或服务器 IP。
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+默认暴露端口：
+
+- Web: `http://localhost:8080`
+- API: `http://localhost:3000`
+- Game Server: `http://localhost:2567`
+
+容器内部地址和浏览器地址不要混用：
+
+- `API_ENDPOINT=http://api:3000` 是 Game Server 在容器网络里访问 API，用 compose 固定配置。
+- `PUBLIC_API_ENDPOINT` / `PUBLIC_GAME_ENDPOINT` 是浏览器访问地址，会在 Web 构建时写入前端包；上服务器时必须改成公网可访问地址。
+- `CORS_ORIGINS` 必须包含 Web 的真实访问 origin，例如 `https://ddz.example.com` 或 `http://1.2.3.4:8080`。
+
+大模型 provider 密钥不要写进镜像。容器部署优先用 `.env.production` 注入 `BOT_PROVIDERS` 内联 JSON，或只部署规则机器人并保持 `BOT_DECISION=rule`。如果开启 `BOT_DECISION_TRACE=true`，trace 会写入 Docker volume `ddz-llm-traces`。
+
+需要自动 HTTPS 时，使用内置 Caddy profile。先把 3 个域名解析到服务器，并确保 80/443 端口对公网开放：
+
+```env
+ACME_EMAIL=admin@example.com
+CADDY_WEB_HOST=ddz.example.com
+CADDY_API_HOST=api.ddz.example.com
+CADDY_GAME_HOST=game.ddz.example.com
+PUBLIC_WEB_ORIGIN=https://ddz.example.com
+PUBLIC_API_ENDPOINT=https://api.ddz.example.com
+PUBLIC_GAME_ENDPOINT=https://game.ddz.example.com
+CORS_ORIGINS=https://ddz.example.com
+```
+
+然后启动：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production --profile https up -d --build
+```
+
+启用 Caddy 后浏览器只需要访问 `https://ddz.example.com`。API 和 Game Server 会分别通过 `https://api.ddz.example.com`、`https://game.ddz.example.com` 暴露；WebSocket 由 Caddy 自动反代。服务器安全组可以只开放 80/443，`8080/3000/2567` 不必对公网开放。
+如果同机只通过 Caddy 访问，可在 `.env.production` 里把 `WEB_BIND` / `API_BIND` / `GAME_BIND` 改成 `127.0.0.1`，避免这些直连端口监听公网。
+
+查看状态和日志：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production ps
+docker compose -f docker-compose.prod.yml --env-file .env.production logs -f api game-server web
+```
+
 完整链路冒烟需要先启动真实数据库、API 和 Game Server，不会使用 mock 或模拟成功路径。以下命令分别在不同终端运行：
 
 ```bash

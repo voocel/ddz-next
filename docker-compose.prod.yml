@@ -1,0 +1,173 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ddz}
+      POSTGRES_USER: ${POSTGRES_USER:-ddz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ddz}
+    volumes:
+      - ddz-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: app
+      args:
+        VITE_API_ENDPOINT: ${PUBLIC_API_ENDPOINT:-http://localhost:3000}
+        VITE_GAME_ENDPOINT: ${PUBLIC_GAME_ENDPOINT:-http://localhost:2567}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ddz}:${POSTGRES_PASSWORD:-ddz}@postgres:5432/${POSTGRES_DB:-ddz}
+    command: ["pnpm", "--filter", "@ddz/api", "db:deploy"]
+
+  api:
+    build:
+      context: .
+      target: app
+      args:
+        VITE_API_ENDPOINT: ${PUBLIC_API_ENDPOINT:-http://localhost:3000}
+        VITE_GAME_ENDPOINT: ${PUBLIC_GAME_ENDPOINT:-http://localhost:2567}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ddz}:${POSTGRES_PASSWORD:-ddz}@postgres:5432/${POSTGRES_DB:-ddz}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.production}
+      JWT_ISSUER: ${JWT_ISSUER:-ddz-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-ddz-web}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-3600}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env.production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      DEMO_USER_ENABLED: ${DEMO_USER_ENABLED:-false}
+      DEMO_USER_USERNAME: ${DEMO_USER_USERNAME:-alice}
+      DEMO_USER_NICKNAME: ${DEMO_USER_NICKNAME:-Alice}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-}
+    ports:
+      - "${API_BIND:-0.0.0.0}:${API_PORT:-3000}:3000"
+    command: ["node", "apps/api/dist/index.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  game-server:
+    build:
+      context: .
+      target: app
+      args:
+        VITE_API_ENDPOINT: ${PUBLIC_API_ENDPOINT:-http://localhost:3000}
+        VITE_GAME_ENDPOINT: ${PUBLIC_GAME_ENDPOINT:-http://localhost:2567}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      GAME_PORT: 2567
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.production}
+      JWT_ISSUER: ${JWT_ISSUER:-ddz-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-ddz-web}
+      API_ENDPOINT: http://api:3000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env.production}
+      API_SYNC_RETRY_ATTEMPTS: ${API_SYNC_RETRY_ATTEMPTS:-3}
+      API_SYNC_RETRY_DELAY_MS: ${API_SYNC_RETRY_DELAY_MS:-150}
+      API_SYNC_TIMEOUT_MS: ${API_SYNC_TIMEOUT_MS:-5000}
+      BOT_COUNT: ${BOT_COUNT:-0}
+      MATCH_TIMEOUT_MS: ${MATCH_TIMEOUT_MS:-8000}
+      TURN_TIMEOUT_MS: ${TURN_TIMEOUT_MS:-20000}
+      BOT_MOVE_DELAY_MS: ${BOT_MOVE_DELAY_MS:-}
+      BOT_LLM_TURN_TIMER_MS: ${BOT_LLM_TURN_TIMER_MS:-30000}
+      BOT_PROVIDERS: ${BOT_PROVIDERS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BOT_CHAT_ENABLED: ${BOT_CHAT_ENABLED:-false}
+      BOT_CHAT_PERSONA: ${BOT_CHAT_PERSONA:-爱炫耀、嘴上不饶人但心态好的老牌玩家}
+      BOT_CHAT_TIMEOUT_MS: ${BOT_CHAT_TIMEOUT_MS:-4000}
+      BOT_CHAT_MAX_CHARS: ${BOT_CHAT_MAX_CHARS:-40}
+      BOT_DECISION: ${BOT_DECISION:-rule}
+      BOT_DECISION_TIMEOUT_MS: ${BOT_DECISION_TIMEOUT_MS:-60000}
+      BOT_REASONING_EFFORT: ${BOT_REASONING_EFFORT:-off}
+      BOT_DECISION_TRACE: ${BOT_DECISION_TRACE:-false}
+      BOT_TRACE_DIR: ${BOT_TRACE_DIR:-logs/llm-traces}
+    ports:
+      - "${GAME_BIND:-0.0.0.0}:${GAME_PORT:-2567}:2567"
+    command: ["node", "apps/game-server/dist/index.js"]
+    volumes:
+      - ddz-llm-traces:/app/logs/llm-traces
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:2567/bot-models').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        VITE_API_ENDPOINT: ${PUBLIC_API_ENDPOINT:-http://localhost:3000}
+        VITE_GAME_ENDPOINT: ${PUBLIC_GAME_ENDPOINT:-http://localhost:2567}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      game-server:
+        condition: service_healthy
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  caddy:
+    image: caddy:2.8-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      game-server:
+        condition: service_healthy
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      CADDY_WEB_HOST: ${CADDY_WEB_HOST:-localhost}
+      CADDY_API_HOST: ${CADDY_API_HOST:-api.localhost}
+      CADDY_GAME_HOST: ${CADDY_GAME_HOST:-game.localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  ddz-postgres-data:
+  ddz-llm-traces:
+  caddy-data:
+  caddy-config:

@@ -24,6 +24,7 @@ interface ServerDependencies {
   readonly historyService: HistoryService;
   readonly tokenConfig: TokenConfig;
   readonly internalConfig: InternalConfig;
+  readonly healthCheck?: () => Promise<void>;
   readonly close?: () => Promise<void>;
 }
 
@@ -80,10 +81,13 @@ export function buildServer(dependencies: ServerDependencies) {
     return reply.code(500).send({ message: "Internal server error." });
   });
 
-  app.get("/health", async () => ({
-    ok: true,
-    service: "ddz-api"
-  }));
+  app.get("/health", async () => {
+    await dependencies.healthCheck?.();
+    return {
+      ok: true,
+      service: "ddz-api"
+    };
+  });
 
   // 认证路由需在 rate-limit 插件加载完成后注册，限流配置才会生效
   app.after(() => {

@@ -6,9 +6,9 @@
 .git/**
 
 # 含密钥，绝不进镜像（与 .gitignore 的密钥排除对齐）
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
+!.env.production.example
 bot-providers.json
 
 # 杂项

@@ -17,6 +17,8 @@ export interface DefaultAuthDependencies {
   readonly historyService: HistoryService;
   readonly tokenConfig: ReturnType<typeof readTokenConfig>;
   readonly internalConfig: InternalConfig;
+  connect(): Promise<void>;
+  healthCheck(): Promise<void>;
   ensureDemoUser(): Promise<DemoUserSeedResult>;
   close(): Promise<void>;
 }
@@ -32,6 +34,10 @@ export function createDefaultAuthDependencies(): DefaultAuthDependencies {
     historyService: new HistoryService(new PrismaHistoryRepository(prisma)),
     tokenConfig,
     internalConfig: readInternalConfig(),
+    connect: () => prisma.$connect(),
+    healthCheck: async () => {
+      await prisma.$queryRaw`SELECT 1`;
+    },
     ensureDemoUser: () => ensureDemoUser(prisma, readDemoUserConfig()),
     close: () => prisma.$disconnect()
   };

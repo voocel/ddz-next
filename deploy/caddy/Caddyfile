@@ -1,0 +1,18 @@
+{
+  email {$ACME_EMAIL}
+}
+
+{$CADDY_WEB_HOST} {
+  encode zstd gzip
+  reverse_proxy web:80
+}
+
+{$CADDY_API_HOST} {
+  encode zstd gzip
+  reverse_proxy api:3000
+}
+
+{$CADDY_GAME_HOST} {
+  encode zstd gzip
+  reverse_proxy game-server:2567
+}
