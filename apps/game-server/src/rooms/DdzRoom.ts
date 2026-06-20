@@ -630,7 +630,8 @@ export class DdzRoom extends Room {
             type: "round_started",
             playerId: null,
             payload: {
-              currentPlayerId: result.snapshot.currentPlayerId
+              currentPlayerId: result.snapshot.currentPlayerId,
+              initialHands: this.initialHandsPayload(result.snapshot)
             }
           }
         ],
@@ -1064,6 +1065,10 @@ export class DdzRoom extends Room {
       playerId: player.id,
       cards: toCardsDto(this.table.getHand(player.id))
     }));
+  }
+
+  private initialHandsPayload(snapshot: GameSnapshot): Record<string, string[]> {
+    return Object.fromEntries(snapshot.players.map((player) => [player.id, this.table.getHand(player.id).map((card) => card.id)]));
   }
 
   /** 给客户端补发当前回合计时，重连后才能拿到剩余时间。 */

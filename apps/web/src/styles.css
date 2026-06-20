@@ -490,6 +490,28 @@ input {
   visibility: hidden;
 }
 
+.stage-status-button {
+  border: 1px solid rgba(255, 232, 158, 0.55);
+  cursor: pointer;
+  box-shadow:
+    0 3px 0 rgba(70, 38, 6, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition:
+    transform 110ms var(--pop),
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.stage-status-button:hover {
+  background: rgba(88, 48, 8, 0.54);
+  border-color: rgba(255, 236, 174, 0.85);
+  transform: translateY(-1px);
+}
+
+.stage-status-button:active {
+  transform: translateY(1px);
+}
+
 /* 底部功能图标栏 */
 
 .feature-bar {

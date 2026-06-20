@@ -61,6 +61,41 @@ describe("GameActionService", () => {
     expect(repository.actions.map((action) => action.type)).toEqual(["round_started"]);
   });
 
+  it("preserves initial hands on round_started replay payloads", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.rooms.set("100012", "room-12");
+    const service = new GameActionService(repository);
+
+    await service.record({
+      roomCode: "100012",
+      mutationId: mutationId(12),
+      actions: [
+        {
+          playerId: null,
+          playerKind: null,
+          type: "round_started",
+          payload: {
+            currentPlayerId: "p0",
+            initialHands: {
+              p0: ["3-clubs", "SJ"],
+              p1: ["4-hearts"],
+              p2: ["5-spades"]
+            }
+          }
+        }
+      ]
+    });
+
+    expect(repository.actions[0]?.payload).toMatchObject({
+      currentPlayerId: "p0",
+      initialHands: {
+        p0: ["3-clubs", "SJ"],
+        p1: ["4-hearts"],
+        p2: ["5-spades"]
+      }
+    });
+  });
+
   it("rejects missing rooms", async () => {
     const service = new GameActionService(new InMemoryGameActionRepository());
 

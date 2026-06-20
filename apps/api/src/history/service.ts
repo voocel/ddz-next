@@ -1,10 +1,12 @@
 import type {
+  CardDto,
   CoinLedgerResponse,
   RoundActionType,
   RoundHistoryItemDto,
   RoundHistoryResponse,
   RoundReplayResponse
 } from "@ddz/protocol";
+import { cardSchema } from "@ddz/protocol";
 import { HistoryError } from "./errors.js";
 
 export interface RoundHistoryActionRecord {
@@ -73,7 +75,7 @@ export class HistoryService {
     }
 
     return {
-      round: toRoundReplayDto(round)
+      round: toRoundReplayDto(round, userId)
     };
   }
 
@@ -111,9 +113,10 @@ function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
   };
 }
 
-function toRoundReplayDto(round: RoundReplayRecord): RoundReplayResponse["round"] {
+function toRoundReplayDto(round: RoundReplayRecord, userId: string): RoundReplayResponse["round"] {
   return {
     ...toRoundHistoryDto(round),
+    viewerInitialHand: readViewerInitialHand(round, userId),
     actions: round.actions.map((action) => ({
       id: action.id,
       type: action.type,
@@ -123,4 +126,53 @@ function toRoundReplayDto(round: RoundReplayRecord): RoundReplayResponse["round"
       createdAt: action.createdAt.toISOString()
     }))
   };
+}
+
+function readViewerInitialHand(round: RoundReplayRecord, userId: string): CardDto[] {
+  const started = round.actions.find((action) => action.type === "round_started");
+  const initialHands = readObject(started?.payload.initialHands);
+  const hand = readUnknownArray(initialHands?.[userId]);
+  if (!hand) {
+    return [];
+  }
+
+  return hand.map((cardId) => {
+    const parsed = cardSchema.safeParse(readReplayCard(cardId));
+    if (!parsed.success) {
+      throw new HistoryError("Round replay contains an invalid viewer initial hand.", 500);
+    }
+    return parsed.data;
+  });
+}
+
+function readReplayCard(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  if (value === "SJ" || value === "BJ") {
+    return {
+      id: value,
+      rank: value
+    };
+  }
+
+  const separator = value.indexOf("-");
+  if (separator <= 0) {
+    return value;
+  }
+
+  return {
+    id: value,
+    rank: value.slice(0, separator),
+    suit: value.slice(separator + 1)
+  };
+}
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function readUnknownArray(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
 }

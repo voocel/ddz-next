@@ -10,7 +10,6 @@ import type { AudioLevels } from "../audio";
 import {
   describeEventFeedback,
   describePhasePrompt,
-  describeSettlement,
   formatActor,
   formatCardId,
   formatReplayAction,
@@ -278,10 +277,10 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     this.selection.clear();
     this.revealedHands.clear();
-    this.hand = [];
     this.snapshot = null;
-    this.renderHand();
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
+    this.hand = this.replayHandAtStep(replay, currentStep);
+    this.renderHand();
     const action = replay.actions[currentStep];
     const replayNickname = (playerId: string): string | undefined =>
       replay.players.find((player) => player.playerId === playerId)?.nickname;
@@ -317,6 +316,25 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     } else {
       this.lastPlayLayer?.removeAll(true);
     }
+  }
+
+  private replayHandAtStep(replay: RoundReplayDto, step: number): CardDto[] {
+    const hand = replay.viewerInitialHand.slice();
+    if (hand.length === 0) {
+      return hand;
+    }
+
+    const played = new Set<CardId>();
+    for (const action of replay.actions.slice(0, step + 1)) {
+      if (action.type !== "cards_played" || action.playerId !== this.options.localPlayerId) {
+        continue;
+      }
+      for (const cardId of parseReplayCardIds(action.payload.cards)) {
+        played.add(cardId as CardId);
+      }
+    }
+
+    return hand.filter((card) => !played.has(card.id as CardId));
   }
 
   /** 出牌：校验当前选中的牌，非法则画布内反馈，合法则提交并清空选牌 */
@@ -588,6 +606,11 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     });
   }
 
+  private settlementActorName(snapshot: GameSnapshotDto, playerId: string): string {
+    const player = snapshot.players.find((item) => item.id === playerId);
+    return formatActor(playerId, this.options.localPlayerId, player?.nickname);
+  }
+
   private seatPositionFor(seat: number, localSeat: number | null): { x: number; y: number } {
     const relative = localSeat === null ? seat : (seat - localSeat + 3) % 3;
     return RELATIVE_SEAT_POSITIONS[relative] ?? RELATIVE_SEAT_POSITIONS[0];
@@ -642,42 +665,142 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       return;
     }
 
-    const rows = describeSettlement(snapshot, this.options.localPlayerId);
-    const panelX = 360;
-    const panelY = 220;
-    const panelWidth = 560;
-    const panelHeight = 254;
-    const panelRadius = 26;
-    const titleY = panelY + 1;
-    const rowStartY = panelY + 79;
+    const { settlement } = snapshot;
+    const panelX = 332;
+    const panelY = 172;
+    const panelWidth = 616;
+    const panelHeight = 336;
+    const panelRadius = 30;
+    const titleY = panelY + 4;
+    const localResult = settlement.players.find((player) => player.playerId === this.options.localPlayerId);
+    const localWon = localResult ? localResult.scoreDelta > 0 : settlement.winnerId === this.options.localPlayerId;
+    const resultText = localWon ? "胜利" : "惜败";
+    const resultColor = localWon ? "#9a3d09" : "#31506e";
+    const rows = settlement.players.slice().sort((a, b) => a.seat - b.seat);
+
     const backdrop = this.add.graphics();
-    backdrop.fillStyle(0x8c5318, 0.6);
-    backdrop.fillRoundedRect(panelX + 4, panelY + 7, panelWidth, panelHeight, panelRadius);
-    backdrop.fillStyle(0xfff6e0, 0.98);
+    backdrop.fillStyle(0x6a3b10, 0.24);
+    backdrop.fillRoundedRect(panelX + 10, panelY + 14, panelWidth, panelHeight, panelRadius);
+    backdrop.fillStyle(0xb9772f, 0.22);
+    backdrop.fillRoundedRect(panelX + 4, panelY + 6, panelWidth, panelHeight, panelRadius);
+    backdrop.fillStyle(0xfff7df, 0.98);
     backdrop.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
     backdrop.lineStyle(5, 0xb9772f, 1);
     backdrop.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
-    const ribbon = this.add.image(640, titleY + 4, "ribbon-title").setDisplaySize(248, 62);
-    const title = this.add.text(640, titleY, "本局结算", {
-      ...TEXT_STYLE,
-      fontSize: "24px",
-      fontStyle: "900",
-      color: "#ffffff"
-    }).setOrigin(0.5);
-    title.setShadow(0, 2, "rgba(80, 40, 0, 0.45)", 2);
-    layer.add([backdrop, ribbon, title]);
+    backdrop.lineStyle(2, 0xffffff, 0.55);
+    backdrop.strokeRoundedRect(panelX + 10, panelY + 10, panelWidth - 20, panelHeight - 20, panelRadius - 8);
+    layer.add(backdrop);
 
-    rows.forEach((row, index) => {
-      // 前 3 行为赢家/地主/倍数摘要，其余为玩家明细
-      const text = this.add
-        .text(640, rowStartY + index * 30, row, {
+    const ribbon = this.add.image(640, titleY + 2, "ribbon-title").setDisplaySize(284, 70);
+    const title = this.add
+      .text(640, titleY - 1, "本局结算", {
+        ...TEXT_STYLE,
+        fontSize: "26px",
+        fontStyle: "900",
+        color: "#ffffff"
+      })
+      .setOrigin(0.5);
+    title.setShadow(0, 2, "rgba(80, 40, 0, 0.45)", 2);
+    layer.add([ribbon, title]);
+
+    const resultBadge = this.createSettlementPill(640, panelY + 82, resultText, resultColor, 104, 42);
+    const winnerName = this.settlementActorName(snapshot, settlement.winnerId);
+    const summary = this.add
+      .text(640, panelY + 122, `${winnerName} 获得本局胜利`, {
+        ...TEXT_STYLE,
+        fontSize: "18px",
+        fontStyle: "900",
+        color: INK
+      })
+      .setOrigin(0.5);
+    layer.add([resultBadge, summary]);
+
+    const metricY = panelY + 160;
+    layer.add([
+      this.createSettlementMetric(panelX + 116, metricY, "地主", this.settlementActorName(snapshot, settlement.landlordId)),
+      this.createSettlementMetric(panelX + 308, metricY, "倍数", `x${settlement.multiplier}`),
+      this.createSettlementMetric(panelX + 500, metricY, "底分", String(settlement.baseScore))
+    ]);
+    if (settlement.spring) {
+      layer.add(this.createSettlementPill(panelX + 515, panelY + 82, "春天", "#bd4a0b", 82, 34));
+    }
+
+    const tableX = panelX + 44;
+    const tableY = panelY + 205;
+    const tableWidth = panelWidth - 88;
+    const rowHeight = 34;
+    const table = this.add.graphics();
+    table.fillStyle(0xffedd3, 0.9);
+    table.fillRoundedRect(tableX, tableY, tableWidth, 132, 18);
+    table.lineStyle(2, 0xe4b46d, 0.95);
+    table.strokeRoundedRect(tableX, tableY, tableWidth, 132, 18);
+    table.fillStyle(0xf2c77f, 0.55);
+    table.fillRoundedRect(tableX + 4, tableY + 4, tableWidth - 8, 32, 14);
+    for (let index = 1; index <= 3; index += 1) {
+      table.lineStyle(1, 0xe5c08a, 0.8);
+      table.lineBetween(tableX + 14, tableY + 32 + index * rowHeight, tableX + tableWidth - 14, tableY + 32 + index * rowHeight);
+    }
+    layer.add(table);
+
+    const headerStyle = {
+      ...TEXT_STYLE,
+      fontSize: "13px",
+      fontStyle: "900",
+      color: "#8a5c2d"
+    } satisfies Phaser.Types.GameObjects.Text.TextStyle;
+    layer.add([
+      this.add.text(tableX + 24, tableY + 12, "玩家", headerStyle).setOrigin(0, 0.5),
+      this.add.text(tableX + 238, tableY + 12, "身份", headerStyle).setOrigin(0.5),
+      this.add.text(tableX + 352, tableY + 12, "本局", headerStyle).setOrigin(0.5),
+      this.add.text(tableX + 470, tableY + 12, "总分", headerStyle).setOrigin(0.5)
+    ]);
+
+    rows.forEach((player, index) => {
+      const rowY = tableY + 51 + index * rowHeight;
+      const won = player.scoreDelta > 0;
+      const name = this.settlementActorName(snapshot, player.playerId);
+      const nameColor = player.playerId === settlement.winnerId ? "#9a3d09" : INK;
+      const roleLabel = player.role === "landlord" ? "地主" : "农民";
+      const roleColor = player.role === "landlord" ? "#bd4a0b" : "#33705a";
+      const scoreColor = player.scoreDelta > 0 ? "#c23f1d" : player.scoreDelta < 0 ? "#2f6f9d" : INK_SOFT;
+      const nameText = this.add
+        .text(tableX + 24, rowY, name, {
           ...TEXT_STYLE,
-          fontSize: index < 3 ? "17px" : "15px",
-          fontStyle: index < 3 ? "900" : "700",
-          color: index < 3 ? INK : INK_SOFT
+          fontSize: "16px",
+          fontStyle: "900",
+          color: nameColor
         })
-        .setOrigin(0.5, 0);
-      layer.add(text);
+        .setOrigin(0, 0.5);
+      const role = this.createSettlementPill(tableX + 238, rowY, roleLabel, roleColor, 58, 24);
+      const delta = this.add
+        .text(tableX + 352, rowY, formatScore(player.scoreDelta), {
+          ...TEXT_STYLE,
+          fontSize: "18px",
+          fontStyle: "900",
+          color: scoreColor
+        })
+        .setOrigin(0.5);
+      const total = this.add
+        .text(tableX + 470, rowY, String(player.totalScore), {
+          ...TEXT_STYLE,
+          fontSize: "16px",
+          fontStyle: "900",
+          color: INK
+        })
+        .setOrigin(0.5);
+
+      if (won) {
+        const marker = this.add
+          .text(tableX + 8, rowY, "▲", {
+            ...TEXT_STYLE,
+            fontSize: "12px",
+            fontStyle: "900",
+            color: "#d64b1f"
+          })
+          .setOrigin(0.5);
+        layer.add(marker);
+      }
+      layer.add([nameText, role, delta, total]);
     });
 
     layer.setVisible(true).setAlpha(0);
@@ -687,6 +810,66 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       duration: 180,
       ease: "Cubic.easeOut"
     });
+  }
+
+  private createSettlementPill(
+    x: number,
+    y: number,
+    label: string,
+    color: string,
+    width: number,
+    height: number
+  ): Phaser.GameObjects.Container {
+    const container = this.add.container(x, y);
+    const fillColor = Number.parseInt(color.slice(1), 16);
+    const radius = height / 2;
+    const background = this.add.graphics();
+    background.fillStyle(0x4c2a0c, 0.18);
+    background.fillRoundedRect(-width / 2 + 2, -height / 2 + 3, width, height, radius);
+    background.fillStyle(fillColor, 0.96);
+    background.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
+    background.lineStyle(2, 0xffffff, 0.52);
+    background.strokeRoundedRect(-width / 2 + 2, -height / 2 + 2, width - 4, height - 4, radius - 2);
+    const text = this.add
+      .text(0, 1, label, {
+        ...TEXT_STYLE,
+        fontSize: height >= 34 ? "18px" : "13px",
+        fontStyle: "900",
+        color: "#fff8de"
+      })
+      .setOrigin(0.5);
+    text.setShadow(0, 1, "rgba(70, 30, 0, 0.45)", 2);
+    container.add([background, text]);
+    return container;
+  }
+
+  private createSettlementMetric(x: number, y: number, label: string, value: string): Phaser.GameObjects.Container {
+    const container = this.add.container(x, y);
+    const width = 150;
+    const height = 54;
+    const background = this.add.graphics();
+    background.fillStyle(0x8c5318, 0.12);
+    background.fillRoundedRect(-width / 2, -height / 2, width, height, 16);
+    background.lineStyle(1, 0xe8bd77, 0.75);
+    background.strokeRoundedRect(-width / 2, -height / 2, width, height, 16);
+    const labelText = this.add
+      .text(0, -11, label, {
+        ...TEXT_STYLE,
+        fontSize: "12px",
+        fontStyle: "900",
+        color: "#9b6a35"
+      })
+      .setOrigin(0.5);
+    const valueText = this.add
+      .text(0, 12, value, {
+        ...TEXT_STYLE,
+        fontSize: "17px",
+        fontStyle: "900",
+        color: INK
+      })
+      .setOrigin(0.5);
+    container.add([background, labelText, valueText]);
+    return container;
   }
 
   private renderLastPlay(cards: readonly CardDto[], playerId?: string, animated = true): void {

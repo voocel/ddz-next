@@ -35,6 +35,11 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
     return null;
   }
 
+  const openRoomsModal = (): void => {
+    setLobbyModal("rooms");
+    void refreshRooms();
+  };
+
   const historyRows = (
     <div className="round-history">
       {roundHistory.length ? (
@@ -113,10 +118,12 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
           <button type="button" className="btn-img btn-img-green btn-img-lg" onClick={createRoom}>
             创建房间
           </button>
-          <p className="stage-status">{roomStatus}</p>
+          <button type="button" className="stage-status stage-status-button" onClick={openRoomsModal}>
+            {roomStatus}
+          </button>
         </div>
         <nav className="feature-bar">
-          <button type="button" onClick={() => setLobbyModal("rooms")}>
+          <button type="button" onClick={openRoomsModal}>
             <span className="feature-icon feature-icon-emoji">🀄</span>
             <span>牌桌</span>
           </button>

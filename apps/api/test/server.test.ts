@@ -358,6 +358,21 @@ describe("API auth routes", () => {
       ],
       actions: [
         {
+          id: "action-0",
+          type: "round_started",
+          playerId: null,
+          playerKind: null,
+          payload: {
+            currentPlayerId: userId,
+            initialHands: {
+              [userId]: ["3-clubs", "SJ"],
+              "other-1": ["4-hearts"],
+              "bot:100099:1": ["5-spades"]
+            }
+          },
+          createdAt: new Date(Date.UTC(2026, 0, 1, 10, 0, 1))
+        },
+        {
           id: "action-1",
           type: "round_settled",
           playerId: userId,
@@ -434,7 +449,16 @@ describe("API auth routes", () => {
       }
     });
     expect(replay.statusCode).toBe(200);
+    expect(replay.json().round.viewerInitialHand).toEqual([
+      { id: "3-clubs", rank: "3", suit: "clubs" },
+      { id: "SJ", rank: "SJ" }
+    ]);
+    expect(JSON.stringify(replay.json().round.viewerInitialHand)).not.toContain("4-hearts");
     expect(replay.json().round.actions).toEqual([
+      expect.objectContaining({
+        id: "action-0",
+        type: "round_started"
+      }),
       expect.objectContaining({
         id: "action-1",
         type: "round_settled",

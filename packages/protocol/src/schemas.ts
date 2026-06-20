@@ -508,7 +508,9 @@ export const roundHistoryResponseSchema = z.object({
 });
 
 export const roundReplaySchema = roundHistoryItemSchema.extend({
-  actions: z.array(roundHistoryActionSchema)
+  actions: z.array(roundHistoryActionSchema),
+  /** 当前查看者自己的初始牌；旧对局或缺失时为空，绝不包含其他玩家手牌。 */
+  viewerInitialHand: z.array(cardSchema).default([])
 });
 
 export const roundReplayResponseSchema = z.object({
