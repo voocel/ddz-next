@@ -29,10 +29,18 @@ export interface BotDecisionOptions {
   readonly botReasoningEffort?: string | undefined;
 }
 
+export interface BotSettingsUpdate {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+}
+
 /** LLM bot 的可观测钩子(可选);仅 LLM bot 用,规则 bot 忽略。 */
 export interface BotBrainHooks {
   readonly onTrace?: (trace: LlmDecisionTrace) => void;
   readonly onDecision?: (metric: LlmDecisionMetric) => void;
+  /** LLM 出牌请求开始前触发,用于清理上一手 AI 输出面板。 */
+  readonly onStreamStart?: (playerId: PlayerId) => void;
   /** 出牌决策中模型输出增量(playerId + channel + 片段),供牌桌「AI 输出流」实时广播;与 onTrace 落盘正交。 */
   readonly onStreamDelta?: (playerId: PlayerId, delta: MoveStreamDelta) => void;
   /** 出牌决策成功后模型编号对应的具体候选动作,供牌桌把原始数字显示成可理解结果。 */
@@ -97,6 +105,7 @@ export function createBotBrain(
     chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs, providerOptions }),
     onTrace: hooks?.onTrace,
     onDecision: hooks?.onDecision,
+    onStreamStart: hooks?.onStreamStart,
     onStreamDelta: hooks?.onStreamDelta,
     onChoice: hooks?.onChoice
   });
@@ -109,4 +118,37 @@ export function resolveBotBrain(
   envConfig?: DecisionConfig
 ): BotBrain {
   return createBotBrain(resolveDecisionConfig(options, registry, envConfig), registry, hooks);
+}
+
+/**
+ * 牌桌内热更新必须显式失败:provider/model 非空时必须命中注册表,否则告诉客户端更新被拒。
+ * provider/model 皆空表示切回服务端默认模型。
+ */
+export function resolveBotBrainUpdate(
+  update: BotSettingsUpdate,
+  registry: BotProviderRegistry,
+  hooks?: BotBrainHooks,
+  envConfig: DecisionConfig = decisionConfigFromEnv()
+): BotBrain {
+  const hasProvider = update.provider.trim().length > 0;
+  const hasModel = update.model.trim().length > 0;
+  if (hasProvider !== hasModel) {
+    throw new Error("AI 模型更新失败: provider 和 model 必须同时为空或同时提供。");
+  }
+
+  const model: ModelRef = hasProvider ? { provider: update.provider, model: update.model } : registry.default;
+  if (hasProvider && !isAllowedModel(registry, model)) {
+    throw new Error(`AI 模型更新失败: ${model.provider}/${model.model} 不在服务端允许的模型列表中。`);
+  }
+
+  return createBotBrain(
+    {
+      useLlm: true,
+      model,
+      timeoutMs: envConfig.timeoutMs,
+      reasoningEffort: parseReasoningEffort(update.reasoningEffort)
+    },
+    registry,
+    hooks
+  );
 }

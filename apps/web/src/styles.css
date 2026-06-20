@@ -29,6 +29,8 @@
   --asset-btn-blue: url("/assets/images/themes/cartoon/btn_pill_blue.png");
   --asset-btn-wood: url("/assets/images/themes/cartoon/btn_pill_wood.png");
   --asset-btn-ai: url("/assets/images/themes/cartoon/btn_pill_ai.png");
+  --asset-ai-bubble-cloud: url("/assets/images/themes/cartoon/ai_bubble_cloud.svg");
+  --asset-ai-bubble-tail: url("/assets/images/themes/cartoon/ai_bubble_tail.svg");
 
   color: #f5f1e6;
   background: #101915;
@@ -69,6 +71,8 @@
   --asset-btn-blue: url("/assets/images/themes/pixel/btn_pill_blue.png");
   --asset-btn-wood: url("/assets/images/themes/pixel/btn_pill_wood.png");
   --asset-btn-ai: url("/assets/images/themes/pixel/btn_pill_ai.png");
+  --asset-ai-bubble-cloud: url("/assets/images/themes/pixel/ai_bubble_cloud.svg");
+  --asset-ai-bubble-tail: url("/assets/images/themes/pixel/ai_bubble_tail.svg");
 }
 
 :root[data-theme="pixel"] img {
@@ -839,46 +843,76 @@ input {
 .bot-think-layer {
   position: absolute;
   inset: 0;
-  z-index: 9;
+  z-index: 12;
   pointer-events: none;
 }
 
-/* 按相对座位方位固定锚到上方两角(与 Phaser 内部坐标解耦,贴近机器人所在角落即可)。 */
+/* 按相对座位方位锚到两个对手头像上方,让 AI 输出和对应机器人形成明确关系。 */
 .bot-think {
   position: absolute;
-  top: 11%;
+  top: 24%;
   pointer-events: none;
 }
 
 .bot-think--left {
-  left: 3.5%;
+  left: 10%;
 }
 
 .bot-think--right {
-  right: 3.5%;
+  right: 6%;
 }
 
-/* 折叠态:单行流式预览，点击后展开完整面板 */
+/* 折叠态:云朵气泡内展示单行流式预览，点击后展开完整面板 */
 .bot-think-preview {
+  position: relative;
+  isolation: isolate;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 28px auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  width: min(360px, 38vw);
-  height: 36px;
-  padding: 6px 12px;
+  gap: 9px;
+  width: min(420px, 42vw);
+  min-height: 58px;
+  padding: 12px 18px 10px 12px;
   color: var(--ink);
   font-size: 13px;
   font-weight: 800;
-  background: linear-gradient(180deg, var(--cream), var(--cream-2));
-  border: 2px solid var(--wood-2);
-  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(127, 233, 255, 0), rgba(127, 233, 255, 0.28), rgba(127, 233, 255, 0)) 0 0 / 180% 100%,
+    var(--asset-ai-bubble-cloud) center / 100% 100% no-repeat;
+  border: 0;
+  border-radius: 34px;
   box-shadow:
-    0 3px 0 var(--wood-3),
-    0 8px 16px rgba(20, 10, 2, 0.3);
+    0 12px 24px rgba(20, 10, 2, 0.34);
   cursor: pointer;
   pointer-events: auto;
-  transition: transform 110ms var(--pop);
+  transition:
+    box-shadow 140ms var(--pop),
+    transform 110ms var(--pop);
+}
+
+.bot-think-preview::after {
+  position: absolute;
+  bottom: -40px;
+  z-index: -1;
+  width: 74px;
+  height: 60px;
+  content: "";
+  background: var(--asset-ai-bubble-tail) center / contain no-repeat;
+  pointer-events: none;
+}
+
+.bot-think-preview > * {
+  position: relative;
+  z-index: 1;
+}
+
+.bot-think--left .bot-think-preview::after {
+  left: 82px;
+}
+
+.bot-think--right .bot-think-preview::after {
+  right: 82px;
+  transform: scaleX(-1);
 }
 
 .bot-think-preview:hover {
@@ -886,11 +920,29 @@ input {
 }
 
 .bot-think-preview.is-active {
-  animation: bot-think-pulse 1.5s ease-in-out infinite;
+  animation:
+    bot-think-pulse 1.5s ease-in-out infinite,
+    bot-think-scan 2.2s linear infinite;
+}
+
+.bot-think-ai-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #083342;
+  font-size: 11px;
+  font-weight: 900;
+  background: linear-gradient(180deg, #9ef5ff, #4fc5dc);
+  border: 1px solid rgba(4, 70, 89, 0.45);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.68),
+    0 2px 0 rgba(6, 60, 78, 0.42);
 }
 
 .bot-think-preview-name {
-  max-width: 92px;
+  max-width: 82px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -904,26 +956,139 @@ input {
   text-overflow: ellipsis;
 }
 
-.bot-think-preview-caret {
-  margin-left: 1px;
-  font-weight: 900;
-  animation: bot-think-blink 1s step-end infinite;
+.bot-think-ai-signal {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 8px;
 }
 
-/* 展开态:像帘子一样从预览条下方拉开 */
+.bot-think-ai-spark {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  background: linear-gradient(180deg, #fff7ba, #f8d35f);
+  clip-path: polygon(50% 0, 60% 37%, 100% 50%, 60% 63%, 50% 100%, 40% 63%, 0 50%, 40% 37%);
+  filter: drop-shadow(0 0 5px rgba(248, 211, 95, 0.82));
+  transform: scale(0.75);
+  animation: bot-think-sparkle 1.7s ease-in-out infinite;
+}
+
+.bot-think-ai-spark::after {
+  position: absolute;
+  inset: 3px;
+  content: "";
+  background: #fffdf2;
+  border-radius: 999px;
+}
+
+.bot-think-ai-signal-rail {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 5px;
+  overflow: hidden;
+  background: rgba(4, 70, 89, 0.14);
+  border: 1px solid rgba(4, 70, 89, 0.2);
+  border-radius: 999px;
+}
+
+.bot-think-ai-signal-rail::after {
+  position: absolute;
+  inset: -1px auto -1px 0;
+  width: 28px;
+  content: "";
+  background: linear-gradient(90deg, rgba(79, 197, 220, 0), rgba(79, 197, 220, 0.95), rgba(79, 197, 220, 0));
+  transform: translateX(-100%);
+  animation: bot-think-rail-scan 1.15s ease-in-out infinite;
+}
+
+.bot-think-ai-signal-dots {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+}
+
+.bot-think-ai-signal-dots > span {
+  width: 5px;
+  height: 5px;
+  background: #0c6b80;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(79, 197, 220, 0.2);
+  animation: bot-think-dot-wave 0.9s ease-in-out infinite;
+}
+
+.bot-think-ai-signal-dots > span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.bot-think-ai-signal-dots > span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+.bot-think-ai-signal--preview {
+  justify-self: end;
+  gap: 0;
+}
+
+.bot-think-ai-signal--preview .bot-think-ai-spark--one {
+  right: -4px;
+  top: -9px;
+}
+
+.bot-think-ai-signal--preview .bot-think-ai-spark--two {
+  display: none;
+}
+
+.bot-think-ai-signal--preview .bot-think-ai-signal-rail {
+  display: none;
+}
+
+.bot-think-ai-signal--panel {
+  display: flex;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(92, 55, 26, 0.2);
+}
+
+.bot-think-ai-signal--panel .bot-think-ai-spark--one {
+  left: 23px;
+  top: 3px;
+}
+
+.bot-think-ai-signal--panel .bot-think-ai-spark--two {
+  left: 82px;
+  top: 9px;
+  width: 7px;
+  height: 7px;
+  animation-delay: 0.45s;
+}
+
+/* 展开态:从云朵预览条下拉完整面板，正文保持规整可读 */
 .bot-think-card {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(440px, 46vw);
-  background: linear-gradient(180deg, var(--cream), var(--cream-2));
-  border: 3px solid var(--wood-2);
+  width: min(520px, 50vw);
+  background: linear-gradient(180deg, #fffdf2, var(--cream-2));
+  border: 3px solid rgba(127, 233, 255, 0.86);
   border-radius: var(--r-m);
   box-shadow:
-    0 5px 0 var(--wood-3),
+    0 5px 0 rgba(64, 98, 112, 0.6),
+    0 0 0 2px rgba(255, 248, 216, 0.7),
     0 18px 36px rgba(20, 10, 2, 0.42);
   pointer-events: auto;
   transform-origin: top center;
   animation: bot-think-drop 180ms var(--pop);
+}
+
+.bot-think-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .bot-think-head {
@@ -932,7 +1097,7 @@ input {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 2px solid var(--wood-2);
+  border-bottom: 2px solid rgba(92, 55, 26, 0.22);
 }
 
 .bot-think-title {
@@ -954,13 +1119,13 @@ input {
   font-weight: 900;
   line-height: 1;
   background: transparent;
-  border: 2px solid var(--wood-2);
+  border: 2px solid rgba(92, 55, 26, 0.45);
   border-radius: 8px;
   cursor: pointer;
 }
 
 .bot-think-body {
-  max-height: 300px;
+  max-height: 360px;
   overflow: auto;
   overscroll-behavior: contain;
   padding: 10px 12px;
@@ -984,37 +1149,71 @@ input {
   font-weight: 900;
 }
 
-.bot-think-caret {
-  display: block;
-  margin-left: 1px;
-  font-weight: 900;
-  animation: bot-think-blink 1s step-end infinite;
-}
-
 @keyframes bot-think-pulse {
   0%,
   100% {
     box-shadow:
-      0 3px 0 var(--wood-3),
-      0 8px 16px rgba(20, 10, 2, 0.3);
+      0 3px 0 rgba(64, 98, 112, 0.55),
+      0 0 0 2px rgba(255, 248, 216, 0.65),
+      0 12px 24px rgba(20, 10, 2, 0.34);
   }
 
   50% {
     box-shadow:
-      0 3px 0 var(--wood-3),
-      0 0 0 4px rgba(127, 233, 255, 0.35),
-      0 8px 18px rgba(20, 10, 2, 0.34);
+      0 3px 0 rgba(64, 98, 112, 0.55),
+      0 0 0 4px rgba(127, 233, 255, 0.42),
+      0 14px 28px rgba(20, 10, 2, 0.38);
   }
 }
 
-@keyframes bot-think-blink {
+@keyframes bot-think-scan {
+  from {
+    background-position: 180% 0, center;
+  }
+
+  to {
+    background-position: -180% 0, center;
+  }
+}
+
+@keyframes bot-think-rail-scan {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(270%);
+  }
+}
+
+@keyframes bot-think-dot-wave {
   0%,
   100% {
-    opacity: 1;
+    opacity: 0.45;
+    transform: translateY(0) scale(0.86);
   }
 
   50% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.08);
+  }
+}
+
+@keyframes bot-think-sparkle {
+  0%,
+  100% {
     opacity: 0;
+    transform: scale(0.45);
+  }
+
+  34% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  58% {
+    opacity: 0.42;
+    transform: scale(0.7);
   }
 }
 
@@ -1032,8 +1231,9 @@ input {
 
 @media (prefers-reduced-motion: reduce) {
   .bot-think-preview.is-active,
-  .bot-think-caret,
-  .bot-think-preview-caret,
+  .bot-think-ai-signal-rail::after,
+  .bot-think-ai-signal-dots > span,
+  .bot-think-ai-spark,
   .bot-think-card {
     animation: none;
   }
@@ -1276,8 +1476,11 @@ input {
 .table-settled-dock {
   position: absolute;
   left: 50%;
-  bottom: 26px;
+  bottom: clamp(118px, 17vh, 150px);
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 18px;
   transform: translateX(-50%);
 }
 
@@ -1533,6 +1736,47 @@ h2 {
 
   .table-control-row {
     gap: 12px;
+  }
+
+  .bot-think {
+    top: 30%;
+  }
+
+  .bot-think--left {
+    left: 4%;
+  }
+
+  .bot-think--right {
+    right: 4%;
+  }
+
+  .bot-think-preview {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    width: min(320px, 44vw);
+    min-height: 54px;
+    padding: 10px 10px 9px 10px;
+  }
+
+  .bot-think--left .bot-think-preview::after {
+    left: 54px;
+  }
+
+  .bot-think--right .bot-think-preview::after {
+    right: 54px;
+  }
+
+  .bot-think-ai-mark {
+    width: 26px;
+    height: 26px;
+    font-size: 10px;
+  }
+
+  .bot-think-preview-name {
+    display: none;
+  }
+
+  .bot-think-card {
+    width: min(460px, 92vw);
   }
 
   /* 窄屏允许 hud 换行，配合匹配条独占一行（match-bar 媒体覆写见下，须置于其基础规则之后才生效） */

@@ -17,10 +17,25 @@ import { useTurnTimerTicker } from "./useTurnTimerTicker";
 const RECONNECT_RETRY_MS = 2_000;
 const RECONNECT_DEADLINE_MS = 15_000;
 
+interface SelectedRoomBot {
+  readonly mode: BotDecisionMode;
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+}
+
 function delay(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
+}
+
+function sameSelectedRoomBot(left: SelectedRoomBot | null, right: SelectedRoomBot): boolean {
+  return (
+    left?.provider === right.provider &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort
+  );
 }
 
 /**
@@ -37,13 +52,10 @@ export function useDdzApp() {
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [selectedRoom, setSelectedRoom] = useState<RoomDto | null>(null);
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
-  // 「AI 对战」入口选定的机器人决策(rule/llm + provider/model);普通建房/匹配为 null（走服务端默认=规则）
-  const [selectedRoomBot, setSelectedRoomBot] = useState<{
-    readonly mode: BotDecisionMode;
-    readonly provider: string;
-    readonly model: string;
-    readonly reasoningEffort: ReasoningEffort;
-  } | null>(null);
+  // 「AI 对战」入口选定的机器人决策(rule/llm + provider/model);设置变更时会同步热更新当前 AI 房间。普通建房/匹配为 null。
+  const [selectedRoomBot, setSelectedRoomBot] = useState<SelectedRoomBot | null>(null);
+  const selectedRoomBotRef = useRef<SelectedRoomBot | null>(null);
+  const pendingRoomBotRef = useRef<SelectedRoomBot | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshotDto | null>(null);
   // 大模型「AI 输出流」:按 playerId 累积各机器人的实时 reasoning/text,供牌桌座位气泡展示。
   const [thinking, setThinking] = useState<BotThinkingState>(EMPTY_THINKING);
@@ -82,6 +94,10 @@ export function useDdzApp() {
     saveBotPreferences(botPreferences);
   }, [botPreferences]);
 
+  useEffect(() => {
+    selectedRoomBotRef.current = selectedRoomBot;
+  }, [selectedRoomBot]);
+
   // 启动时拉一次可选模型清单(纯展示数据,与登录无关);失败静默,下拉只剩「服务端默认」
   useEffect(() => {
     const endpoint = import.meta.env.VITE_GAME_ENDPOINT ?? "http://localhost:2567";
@@ -106,11 +122,7 @@ export function useDdzApp() {
         accessToken: auth.session?.accessToken ?? "",
         roomCode: selectedRoom?.code ?? "",
         quickStart: selectedRoomQuickStart,
-        botDecisionMode: selectedRoomBot?.mode,
-        botProvider: selectedRoomBot?.provider,
-        botModel: selectedRoomBot?.model,
-        // 设置里的档位显式下发；auto 表示让模型自己决定，off 表示关闭 thinking。
-        botReasoningEffort: selectedRoomBot?.reasoningEffort,
+        getBotSettings: () => selectedRoomBotRef.current,
         onStatus: setStatus,
         onDropped: (code) => {
           // 被踢/房间故障：重连必败或会互踢，直接回大厅
@@ -151,6 +163,22 @@ export function useDdzApp() {
             // AI 输出流不进 events 反馈行(它走座位气泡),避免刷屏挤掉真正的出牌/提示反馈。
             return;
           }
+          if (event.type === "bot_settings_updated") {
+            const confirmed: SelectedRoomBot = {
+              mode: "llm",
+              provider: event.provider,
+              model: event.model,
+              reasoningEffort: event.reasoningEffort
+            };
+            const pending = pendingRoomBotRef.current;
+            if (pending && !sameSelectedRoomBot(pending, confirmed)) {
+              return;
+            }
+            pendingRoomBotRef.current = null;
+            selectedRoomBotRef.current = confirmed;
+            setSelectedRoomBot(confirmed);
+            return;
+          }
           setEvents((items) => [event, ...items].slice(0, 16));
         }
       }),
@@ -158,10 +186,6 @@ export function useDdzApp() {
       history.refreshHistory,
       selectedRoom?.code,
       selectedRoomQuickStart,
-      selectedRoomBot?.mode,
-      selectedRoomBot?.provider,
-      selectedRoomBot?.model,
-      selectedRoomBot?.reasoningEffort,
       auth.session?.accessToken,
       auth.session?.user.id
     ]
@@ -172,12 +196,50 @@ export function useDdzApp() {
     [selectedRoom, auth.session?.user.id, snapshot]
   );
 
+  useEffect(() => {
+    if (!selectedRoom || history.selectedReplay || selectedRoomBot?.mode !== "llm") {
+      return;
+    }
+
+    const next: SelectedRoomBot = {
+      mode: "llm",
+      provider: botPreferences.provider,
+      model: botPreferences.model,
+      reasoningEffort: botPreferences.reasoningEffort
+    };
+    if (sameSelectedRoomBot(selectedRoomBot, next)) {
+      return;
+    }
+    const pending = pendingRoomBotRef.current;
+    if (sameSelectedRoomBot(pending, next)) {
+      return;
+    }
+
+    if (!client.updateBotSettings({
+      provider: next.provider,
+      model: next.model,
+      reasoningEffort: next.reasoningEffort
+    })) {
+      return;
+    }
+    pendingRoomBotRef.current = next;
+  }, [
+    botPreferences.model,
+    botPreferences.provider,
+    botPreferences.reasoningEffort,
+    client,
+    history.selectedReplay,
+    selectedRoom,
+    selectedRoomBot
+  ]);
+
   // 房间内游戏状态的统一清理
   const resetRoomState = useCallback((): void => {
     setSnapshot(null);
     setTurnTimer(null);
     setThinking(EMPTY_THINKING);
     setEvents([]);
+    pendingRoomBotRef.current = null;
     setReconnectRequest(null);
   }, []);
 
@@ -275,7 +337,7 @@ export function useDdzApp() {
     }
   }, [api, enterRoom, auth.session]);
 
-  /** 「AI 对战」入口:建房并补满大模型机器人立即开打(quickStart 自动准备),模型取设置里的偏好。 */
+  /** 「AI 对战」入口:建房并补满大模型机器人立即开打(quickStart 自动准备),初始模型取设置里的偏好。 */
   const aiBattle = useCallback(async (): Promise<void> => {
     if (!auth.session) {
       return;

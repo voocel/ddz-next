@@ -339,7 +339,7 @@ describe("LlmBotBrain", () => {
     expect(trace.prompt).toBe("可选出牌...");
   });
 
-  it("把模型 reasoning/text 增量经 onStreamDelta 透传(带上 playerId)", async () => {
+  it("发起 LLM 出牌请求时先触发 onStreamStart,再透传 reasoning/text 增量", async () => {
     const chooser: MoveChooser = {
       choose: (_ctx, hooks) => {
         hooks?.onDelta?.({ channel: "reasoning", text: "先压" });
@@ -347,16 +347,18 @@ describe("LlmBotBrain", () => {
         return Promise.resolve({ index: 1, trace: traceFixture() });
       }
     };
-    const deltas: Array<[string, "reasoning" | "text", string]> = [];
+    const events: Array<["start", string] | ["delta", string, "reasoning" | "text", string]> = [];
     const brain = new LlmBotBrain({
       chooser,
-      onStreamDelta: (pid, delta) => deltas.push([pid, delta.channel, delta.text])
+      onStreamStart: (pid) => events.push(["start", pid]),
+      onStreamDelta: (pid, delta) => events.push(["delta", pid, delta.channel, delta.text])
     });
 
     await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
-    expect(deltas).toEqual([
-      ["p0", "reasoning", "先压"],
-      ["p0", "text", "1"]
+    expect(events).toEqual([
+      ["start", "p0"],
+      ["delta", "p0", "reasoning", "先压"],
+      ["delta", "p0", "text", "1"]
     ]);
   });
 

@@ -8,15 +8,19 @@ interface GameClientOptions {
   readonly accessToken: string;
   readonly roomCode: string;
   readonly quickStart?: boolean;
-  /** 「AI 对战」入口建房时携带:机器人决策来源与模型(provider+model)+ 思考强度;服务端 onCreate 按注册表/档位校验后才生效。 */
-  readonly botDecisionMode?: string | undefined;
-  readonly botProvider?: string | undefined;
-  readonly botModel?: string | undefined;
-  readonly botReasoningEffort?: string | undefined;
+  /** 当前 AI 房间的机器人设置:连接时作为初始值,连接后也可通过 update_bot_settings 热更新。 */
+  readonly getBotSettings?: (() => BotSettings | null) | undefined;
   readonly onEvent: (event: GameEvent) => void;
   readonly onStatus: (status: string) => void;
   /** 房间被服务端/网络异常关闭（非本地主动离开）时回调 */
   readonly onDropped: (code: number) => void;
+}
+
+interface BotSettings {
+  readonly mode: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort: string;
 }
 
 /** Colyseus 主动离开的正常关闭码 */
@@ -36,6 +40,23 @@ export function createGameClient(options: GameClientOptions) {
   let generation = 0;
   // 快速开始只在首次入房时自动准备；断线重连回到牌局中再补发会被拒绝
   let quickStartPending = options.quickStart === true;
+
+  const sendBotSettings = (settings: {
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningEffort: string;
+  }): boolean => {
+    if (!room) {
+      return false;
+    }
+    room.send("command", {
+      type: "update_bot_settings",
+      provider: settings.provider,
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort
+    });
+    return true;
+  };
 
   const disconnect = (): void => {
     generation += 1;
@@ -60,14 +81,15 @@ export function createGameClient(options: GameClientOptions) {
 
         options.onStatus("连接中");
         const client = new Client(options.endpoint);
+        const botSettings = options.getBotSettings?.() ?? null;
         const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
           roomCode: options.roomCode,
           quickStart: options.quickStart === true,
-          ...(options.botDecisionMode ? { botDecisionMode: options.botDecisionMode } : {}),
-          ...(options.botProvider ? { botProvider: options.botProvider } : {}),
-          ...(options.botModel ? { botModel: options.botModel } : {}),
-          ...(options.botReasoningEffort ? { botReasoningEffort: options.botReasoningEffort } : {})
+          ...(botSettings?.mode ? { botDecisionMode: botSettings.mode } : {}),
+          ...(botSettings?.provider ? { botProvider: botSettings.provider } : {}),
+          ...(botSettings?.model ? { botModel: botSettings.model } : {}),
+          ...(botSettings?.reasoningEffort ? { botReasoningEffort: botSettings.reasoningEffort } : {})
         });
         if (gen !== generation) {
           // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接
@@ -114,6 +136,11 @@ export function createGameClient(options: GameClientOptions) {
           options.onStatus(`房间错误 ${code}: ${message}`);
         });
 
+        const latestBotSettings = options.getBotSettings?.() ?? null;
+        if (latestBotSettings?.mode === "llm") {
+          sendBotSettings(latestBotSettings);
+        }
+
         if (quickStartPending) {
           quickStartPending = false;
           joined.send("command", {
@@ -157,6 +184,9 @@ export function createGameClient(options: GameClientOptions) {
         type: "play_cards",
         cards
       });
+    },
+    updateBotSettings(settings: { readonly provider: string; readonly model: string; readonly reasoningEffort: string }): boolean {
+      return sendBotSettings(settings);
     }
   };
 }

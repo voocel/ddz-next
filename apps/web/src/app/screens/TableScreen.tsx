@@ -96,7 +96,7 @@ export function TableScreen({
         </button>
       </header>
 
-      {!selectedReplay ? (
+      {!selectedReplay && snapshot?.phase !== "settled" ? (
         <TableControlRow
           controls={tableControls}
           turnTimer={turnTimer}
@@ -109,7 +109,12 @@ export function TableScreen({
 
       {!selectedReplay && snapshot?.phase === "settled" ? (
         <div className="table-settled-dock">
-          <button type="button" className="btn-img btn-img-orange" onClick={leaveRoom}>
+          {tableControls.ready ? (
+            <button type="button" className="btn-img btn-img-orange" onClick={() => client.ready()}>
+              准备
+            </button>
+          ) : null}
+          <button type="button" className="btn-img btn-img-wood" onClick={leaveRoom}>
             返回大厅
           </button>
         </div>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 132" preserveAspectRatio="none" shape-rendering="crispEdges">
+  <defs>
+    <linearGradient id="fill" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#fff7df"/>
+      <stop offset="1" stop-color="#efe2b8"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M64 40 H96 V24 H160 V12 H224 V28 H288 V40 H440 V28 H504 V16 H568 V32 H648 V44 H696 V104 H672 V120 H48 V108 H24 V60 H40 V48 H64 Z"
+    fill="#3a2a18"
+    opacity="0.28"/>
+  <path
+    d="M60 34 H94 V18 H158 V6 H222 V22 H286 V34 H438 V22 H502 V10 H566 V26 H646 V38 H694 V96 H670 V112 H46 V100 H22 V54 H38 V42 H60 Z"
+    fill="url(#fill)"
+    stroke="#65c7d8"
+    stroke-width="6"/>
+  <path
+    d="M72 42 H154 V30 H218 V42 H440 V34 H562 V42 H656"
+    fill="none"
+    stroke="#fffdf2"
+    stroke-width="8"/>
+</svg>

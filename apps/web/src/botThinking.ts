@@ -21,6 +21,8 @@ export type BotThinkingState = Readonly<Record<string, BotThinkingEntry>>;
 
 export const EMPTY_THINKING: BotThinkingState = {};
 
+const EMPTY_CHANNELS: Readonly<Record<BotAiStreamChannel, string>> = { reasoning: "", text: "" };
+
 /**
  * 把一个 bot_ai_stream 事件并入输出状态(纯函数,供 useDdzApp reducer 与单测复用):
  * - done=false:上轮已收尾(active=false)或不存在 → 新一轮,从空开始追加;否则在原文本上追加。
@@ -30,10 +32,10 @@ export const EMPTY_THINKING: BotThinkingState = {};
 export function reduceThinking(state: BotThinkingState, event: BotAiStreamEvent): BotThinkingState {
   const prev = state[event.playerId];
   const baseChannels = event.done
-    ? (prev?.channels ?? { reasoning: "", text: "" })
+    ? (prev?.channels ?? EMPTY_CHANNELS)
     : prev?.active
       ? prev.channels
-      : { reasoning: "", text: "" };
+      : EMPTY_CHANNELS;
   const channels = {
     ...baseChannels,
     [event.channel]: baseChannels[event.channel] + event.text
@@ -47,5 +49,5 @@ export function reduceThinking(state: BotThinkingState, event: BotAiStreamEvent)
 }
 
 export function hasBotAiStreamText(entry: BotThinkingEntry): boolean {
-  return Boolean(entry.choice) || entry.channels.reasoning.length > 0 || entry.channels.text.length > 0;
+  return entry.active || Boolean(entry.choice) || entry.channels.reasoning.length > 0 || entry.channels.text.length > 0;
 }

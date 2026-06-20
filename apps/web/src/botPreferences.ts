@@ -9,7 +9,8 @@ const REASONING_EFFORTS: readonly ReasoningEffort[] = ["auto", "off", "low", "me
 /**
  * 「AI 对战」机器人偏好:选定的 provider + model + 思考强度(API key 始终在服务端,前端永不接触)。
  * provider/model 皆空表示「用服务端默认模型」;具体可选项由 game-server 的 /bot-models 动态下发。
- * 偏好不在前端做白名单校验——服务端 onCreate 会按注册表校验,非法值自动回退默认。持久化到 localStorage。
+ * 偏好不在前端做白名单校验——服务端会按注册表校验。建房初始值非法时回退默认；牌桌内热更新非法时显式拒绝。
+ * 持久化到 localStorage。
  */
 export interface BotPreferences {
   readonly provider: string;

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 132" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="fill" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#fffdf2"/>
+      <stop offset="0.62" stop-color="#fff7df"/>
+      <stop offset="1" stop-color="#ffeec6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.48" stop-color="#ffffff" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-4%" y="-16%" width="108%" height="132%">
+      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#2c1808" flood-opacity="0.28"/>
+      <feDropShadow dx="0" dy="1.5" stdDeviation="0" flood-color="#fff9d8" flood-opacity="0.75"/>
+    </filter>
+  </defs>
+  <path
+    d="M65 36 C73 13 104 8 124 28 C142 4 186 1 205 29 C230 13 266 17 286 38 C339 22 399 22 455 38 C476 14 523 8 546 33 C604 24 681 31 699 64 C718 99 681 119 640 119 L72 119 C29 119 5 95 21 62 C28 48 43 39 65 36 Z"
+    fill="#5fc6d8"
+    opacity="0.55"/>
+  <path
+    d="M65 31 C73 8 104 3 124 23 C142 -1 186 -4 205 24 C230 8 266 12 286 33 C339 17 399 17 455 33 C476 9 523 3 546 28 C604 19 681 26 699 59 C718 94 681 114 640 114 L72 114 C29 114 5 90 21 57 C28 43 43 34 65 31 Z"
+    fill="url(#fill)"
+    stroke="#76d7e6"
+    stroke-width="5"
+    filter="url(#shadow)"/>
+  <path
+    d="M74 38 C100 23 122 33 136 43 C166 20 198 20 221 44 C300 30 413 29 488 45 C515 25 549 29 570 48 C612 43 654 45 681 64"
+    fill="none"
+    stroke="url(#shine)"
+    stroke-width="9"
+    stroke-linecap="round"
+    opacity="0.85"/>
+</svg>

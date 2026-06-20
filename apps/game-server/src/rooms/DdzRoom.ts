@@ -14,7 +14,7 @@ import {
 import { GameTable } from "@ddz/domain";
 import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE, ROOM_CODE_REGEX } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
-import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
+import type { ClientCommand, GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
@@ -22,7 +22,7 @@ import type { BotAction, BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
 import { botTurnDelayMs } from "./botTiming.js";
 import { pickBotNicknames } from "./botNames.js";
-import { resolveBotBrain, type BotBrainHooks } from "./botDecision.js";
+import { resolveBotBrain, resolveBotBrainUpdate, type BotBrainHooks } from "./botDecision.js";
 import { LlmBotBrain, takeThinkingChunk, type LlmDecisionChoice, type LlmDecisionTrace } from "./llmBotBrain.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel } from "./combinationLabels.js";
@@ -47,7 +47,7 @@ interface RoomCreateOptions extends JoinOptions {
   turnTimeoutMs?: number;
   /** 大模型机器人回合的展示倒计时(ms):仅视觉,到点不触发兜底,LLM 决策真超时由 BOT_DECISION_TIMEOUT_MS 收口。 */
   llmBotTurnTimerMs?: number;
-  /** 客户端建房时选的机器人决策来源(rule|llm)与模型(provider+model);不可信,resolveBotBrain 校验后才生效。 */
+  /** 客户端选择的机器人决策来源(rule|llm)与模型(provider+model);不可信,服务端校验后才生效。 */
   botDecisionMode?: string;
   botProvider?: string;
   botModel?: string;
@@ -68,6 +68,7 @@ const THINKING_MIN_CHARS = 16;
 type BotStreamChannel = "reasoning" | "text";
 type BotStreamBuffers = Partial<Record<BotStreamChannel, string>> & {
   readonly choice?: LlmDecisionChoice;
+  readonly emitted?: boolean;
 };
 type RevealedHands = NonNullable<Extract<GameEvent, { type: "round_settled" }>["revealedHands"]>;
 
@@ -86,9 +87,12 @@ export class DdzRoom extends Room {
   maxClients = 3;
   private readonly table = new GameTable();
   private readonly tasks = new SerialTaskQueue();
-  // 机器人大脑:onCreate 时按「建房 options + BOT_DECISION env 默认」解析(见 resolveBotBrain),默认规则 bot。
-  // 决策一律在串行锁外执行(见 BotBrain 契约);叫/抢地主走固定规则隔离实验变量;选 LLM 但缺 key 时建房直接报错(不回退)。
+  // 机器人大脑:onCreate 先按「建房 options + BOT_DECISION env 默认」解析；牌桌内 update_bot_settings 可热替换。
+  // 决策一律在串行锁外执行(见 BotBrain 契约);叫/抢地主走固定规则隔离实验变量;选 LLM 但缺 key 直接报错(不回退)。
   private botBrain: BotBrain = new RuleBotBrain();
+  private botRegistry: BotProviderRegistry | null = null;
+  private botBrainHooks: BotBrainHooks = {};
+  private botSettingsUpdatesEnabled = false;
   // 机器人人格解说:默认关闭(BOT_CHAT_ENABLED=true 才启用);纯装饰,不参与决策、不持有串行锁。
   // 解说用注册表默认模型,需在 setupRoom 拿到注册表后重建;此处先给空解说兜底。
   private readonly commentary = commentaryConfigFromEnv();
@@ -154,14 +158,18 @@ export class DdzRoom extends Room {
   private async setupRoom(options: RoomCreateOptions): Promise<void> {
     // 注册表持有各 provider 的密钥(仅服务端);未注入时按 env 合成默认 anthropic 注册表。
     const registry = options.botRegistry ?? parseBotProviderRegistry(null);
+    this.botRegistry = registry;
+    this.botSettingsUpdatesEnabled = options.botDecisionMode === "llm";
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
     // onStreamDelta 无条件接上(AI 输出流给玩家看的实时流,与 BOT_DECISION_TRACE 落盘正交);规则 bot 永不触发它。
     const hooks: BotBrainHooks = {
       ...(this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : {}),
+      onStreamStart: (playerId) => this.startAiStream(playerId),
       onStreamDelta: (playerId, delta) => this.appendAiStream(playerId, delta.channel, delta.text),
       onChoice: (playerId, choice) => this.setAiStreamChoice(playerId, choice)
     };
+    this.botBrainHooks = hooks;
     this.botBrain = resolveBotBrain(options, registry, hooks);
     if (this.commentary.enabled) {
       this.commentator = new LlmCommentator({
@@ -558,6 +566,9 @@ export class DdzRoom extends Room {
         case "leave_room":
           client.leave();
           break;
+        case "update_bot_settings":
+          this.handleBotSettingsUpdate(client, playerId, parsed.data);
+          break;
       }
     } catch (error) {
       if (error instanceof RoomPersistenceError) {
@@ -566,6 +577,31 @@ export class DdzRoom extends Room {
       }
       this.sendRejected(client, error instanceof Error ? error.message : "Unknown command error.");
     }
+  }
+
+  private handleBotSettingsUpdate(
+    client: Client,
+    playerId: PlayerId,
+    update: Extract<ClientCommand, { type: "update_bot_settings" }>
+  ): void {
+    if (!this.botRegistry) {
+      throw new Error("AI 配置更新失败: 服务端模型注册表未初始化。");
+    }
+    const player = this.table.snapshot().players.find((item) => item.id === playerId);
+    if (!player || player.kind !== "human") {
+      throw new Error("AI 配置只能由房间内真人玩家更新。");
+    }
+    if (!this.botSettingsUpdatesEnabled) {
+      throw new Error("当前房间不支持动态更新 AI 配置。");
+    }
+
+    this.botBrain = resolveBotBrainUpdate(update, this.botRegistry, this.botBrainHooks);
+    client.send("event", {
+      type: "bot_settings_updated",
+      provider: update.provider,
+      model: update.model,
+      reasoningEffort: update.reasoningEffort
+    } satisfies GameEvent);
   }
 
   private async handleReady(playerId: PlayerId): Promise<void> {
@@ -845,14 +881,29 @@ export class DdzRoom extends Room {
    * AI 输出流:累积该 bot 的 reasoning/text 增量,按字数节流广播 bot_ai_stream(done:false)。
    * 锁外回调(决策在锁外流式产出);只要被调用过就在 streamBuffers 留键,作为「本手产生过输出」的标记。
    */
+  private startAiStream(playerId: PlayerId): void {
+    if (this.failed) {
+      return;
+    }
+    this.streamBuffers.set(playerId, { text: "", emitted: false });
+    this.broadcast("event", {
+      type: "bot_ai_stream",
+      playerId,
+      channel: "text",
+      text: "",
+      done: false
+    } satisfies GameEvent);
+  }
+
   private appendAiStream(playerId: PlayerId, channel: BotStreamChannel, delta: string): void {
     if (this.failed) {
       return;
     }
     const buffers = this.streamBuffers.get(playerId) ?? {};
     const pending = (buffers[channel] ?? "") + delta;
-    const { chunk, rest } = takeThinkingChunk(pending, THINKING_MIN_CHARS);
-    this.streamBuffers.set(playerId, { ...buffers, [channel]: rest });
+    const firstVisibleChunk = !buffers.emitted && pending.trim().length > 0;
+    const { chunk, rest } = firstVisibleChunk ? { chunk: pending, rest: "" } : takeThinkingChunk(pending, THINKING_MIN_CHARS);
+    this.streamBuffers.set(playerId, { ...buffers, [channel]: rest, emitted: buffers.emitted || chunk !== null });
     if (chunk !== null) {
       this.broadcast("event", {
         type: "bot_ai_stream",

@@ -160,13 +160,21 @@ export const leaveCommandSchema = z.object({
   type: z.literal("leave_room")
 });
 
+export const updateBotSettingsCommandSchema = z.object({
+  type: z.literal("update_bot_settings"),
+  provider: z.string(),
+  model: z.string(),
+  reasoningEffort: z.enum(["auto", "off", "low", "medium", "high"])
+});
+
 export const clientCommandSchema = z.discriminatedUnion("type", [
   readyCommandSchema,
   bidLandlordCommandSchema,
   robLandlordCommandSchema,
   playCardsCommandSchema,
   passCommandSchema,
-  leaveCommandSchema
+  leaveCommandSchema,
+  updateBotSettingsCommandSchema
 ]);
 
 const revealedHandSchema = z.object({
@@ -251,6 +259,12 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("command_rejected"),
     reason: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal("bot_settings_updated"),
+    provider: z.string(),
+    model: z.string(),
+    reasoningEffort: z.enum(["auto", "off", "low", "medium", "high"])
   }),
   z.object({
     type: z.literal("room_failed"),

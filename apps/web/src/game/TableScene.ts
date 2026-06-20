@@ -643,15 +643,22 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     const rows = describeSettlement(snapshot, this.options.localPlayerId);
+    const panelX = 360;
+    const panelY = 220;
+    const panelWidth = 560;
+    const panelHeight = 254;
+    const panelRadius = 26;
+    const titleY = panelY + 1;
+    const rowStartY = panelY + 79;
     const backdrop = this.add.graphics();
     backdrop.fillStyle(0x8c5318, 0.6);
-    backdrop.fillRoundedRect(360 + 4, 261 + 7, 560, 254, 26);
+    backdrop.fillRoundedRect(panelX + 4, panelY + 7, panelWidth, panelHeight, panelRadius);
     backdrop.fillStyle(0xfff6e0, 0.98);
-    backdrop.fillRoundedRect(360, 261, 560, 254, 26);
+    backdrop.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
     backdrop.lineStyle(5, 0xb9772f, 1);
-    backdrop.strokeRoundedRect(360, 261, 560, 254, 26);
-    const ribbon = this.add.image(640, 262, "ribbon-title").setDisplaySize(248, 62);
-    const title = this.add.text(640, 258, "本局结算", {
+    backdrop.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
+    const ribbon = this.add.image(640, titleY + 4, "ribbon-title").setDisplaySize(248, 62);
+    const title = this.add.text(640, titleY, "本局结算", {
       ...TEXT_STYLE,
       fontSize: "24px",
       fontStyle: "900",
@@ -663,7 +670,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     rows.forEach((row, index) => {
       // 前 3 行为赢家/地主/倍数摘要，其余为玩家明细
       const text = this.add
-        .text(640, 340 + index * 30, row, {
+        .text(640, rowStartY + index * 30, row, {
           ...TEXT_STYLE,
           fontSize: index < 3 ? "17px" : "15px",
           fontStyle: index < 3 ? "900" : "700",

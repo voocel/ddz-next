@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduceThinking, EMPTY_THINKING } from "./botThinking";
+import { hasBotAiStreamText, reduceThinking, EMPTY_THINKING } from "./botThinking";
 
 /** 造一个 bot_ai_stream 事件(测试夹具)。 */
 function ev(
@@ -72,5 +72,26 @@ describe("reduceThinking", () => {
     state = reduceThinking(state, ev("bot1", "reasoning", "新一手", false));
 
     expect(state.bot1).toEqual({ channels: { reasoning: "新一手", text: "" }, active: true });
+  });
+
+  it("服务端发起新一手空流事件时先清空上一手内容并显示 active 空面板", () => {
+    let state = reduceThinking(EMPTY_THINKING, ev("bot1", "text", "", true, { index: 1, label: "单张4" }));
+    state = reduceThinking(state, ev("bot1", "text", "", false));
+
+    expect(state.bot1).toEqual({ channels: { reasoning: "", text: "" }, active: true });
+    expect(hasBotAiStreamText(state.bot1!)).toBe(true);
+  });
+
+  it("新回合只重置当前 bot,不影响其它 bot 最近输出", () => {
+    let state = reduceThinking(EMPTY_THINKING, ev("bot1", "text", "1", true, { index: 1, label: "单张4" }));
+    state = reduceThinking(state, ev("bot2", "text", "0", true, { index: 0, label: "过牌(不出)" }));
+    state = reduceThinking(state, ev("bot1", "text", "", false));
+
+    expect(state.bot1).toEqual({ channels: { reasoning: "", text: "" }, active: true });
+    expect(state.bot2).toEqual({
+      channels: { reasoning: "", text: "0" },
+      choice: { index: 0, label: "过牌(不出)" },
+      active: false
+    });
   });
 });

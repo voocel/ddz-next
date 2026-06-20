@@ -3,6 +3,7 @@ import { GameTable } from "@ddz/domain";
 import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import type { RecordGameActionsInput } from "../../src/api/gameActionClient";
 import { DdzRoom } from "../../src/rooms/DdzRoom";
+import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 
 describe("DdzRoom crash recovery", () => {
   it("restores a playing room and resumes scheduling", async () => {
@@ -136,6 +137,28 @@ describe("DdzRoom crash recovery", () => {
     await expect(third.room.onCreate(third.options)).resolves.toBeUndefined();
     await third.room.onDispose();
   });
+
+  it("rejects bot settings updates in non-AI rooms", async () => {
+    const code = "100021";
+    const fixture = createRoomFixture(code, stateResponse(code, "open", null));
+    await fixture.room.onCreate(fixture.options);
+    const client = fixture.bindHumanClient("human-1");
+
+    await fixture.handleCommand(client, {
+      type: "update_bot_settings",
+      provider: "",
+      model: "",
+      reasoningEffort: "off"
+    });
+
+    expect(client.send).toHaveBeenCalledWith(
+      "event",
+      expect.objectContaining({ type: "command_rejected", reason: "当前房间不支持动态更新 AI 配置。" })
+    );
+    expect(fixture.internals().botBrain).toBeInstanceOf(RuleBotBrain);
+
+    await fixture.room.onDispose();
+  });
 });
 
 /** 真人地主 + 双 bot 的确定性 playing 局面 */
@@ -197,11 +220,15 @@ interface RoomFixture {
   /** 让下一次 updateRoomStatus 挂起到给定 promise 解决，用于验证 dispose 期间的竞态 */
   gateNextStatusUpdate(gate: Promise<void>): void;
   internals(): Record<string, never> & {
+    botBrain: unknown;
     table: GameTable;
     botIds: string[];
+    clientPlayers: Map<string, string>;
     nicknames: Map<string, string>;
     tasks: { enqueue(task: () => Promise<void>): Promise<void> };
   };
+  bindHumanClient(playerId: string): { readonly sessionId: string; readonly send: ReturnType<typeof vi.fn> };
+  handleCommand(client: { readonly sessionId: string; readonly send: ReturnType<typeof vi.fn> }, payload: unknown): Promise<void>;
   flushTasks(): Promise<void>;
 }
 
@@ -265,6 +292,14 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
       statusGate = gate;
     },
     internals: () => internals as ReturnType<RoomFixture["internals"]>,
+    bindHumanClient: (playerId: string) => {
+      const client = { sessionId: `session-${playerId}`, send: vi.fn() };
+      (internals.table as GameTable).addPlayer(playerId);
+      (internals.clientPlayers as Map<string, string>).set(client.sessionId, playerId);
+      return client;
+    },
+    handleCommand: (client, payload) =>
+      (room as unknown as { handleCommand(client: unknown, payload: unknown): Promise<void> }).handleCommand(client, payload),
     flushTasks: async () => {
       await (internals.tasks as { enqueue(task: () => Promise<void>): Promise<void> }).enqueue(async () => {});
     }

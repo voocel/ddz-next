@@ -85,6 +85,8 @@ export interface LlmBotBrainOptions {
   readonly onDecision?: ((metric: LlmDecisionMetric) => void) | undefined;
   /** 每次 LLM 出牌决策(成功/no_choice/越界/请求出错)都回调一次完整留证,供落盘排错;不设则不记。 */
   readonly onTrace?: ((trace: LlmDecisionTrace) => void) | undefined;
+  /** 出牌决策正式发起 LLM 请求前回调一次,供上层清理上一手面板并显示“准备分析”。 */
+  readonly onStreamStart?: ((playerId: PlayerId) => void) | undefined;
   /** 出牌决策过程中实时回调模型输出增量(playerId + channel + 片段),供上层做牌桌「AI 输出流」;不设则不回调。 */
   readonly onStreamDelta?: ((playerId: PlayerId, delta: MoveStreamDelta) => void) | undefined;
   /** 模型最终编号合法后回调其对应候选动作,供上层把「1」展示成「单张4」等具体结果。 */
@@ -141,6 +143,7 @@ export class LlmBotBrain implements BotBrain {
     }
 
     const context = buildContext(snapshot, playerId, hand, playedCards, previous, labels);
+    this.options.onStreamStart?.(playerId);
     // AI 输出流:把模型 reasoning/text 增量带上 playerId 转给上层(只在 LLM 出牌路径产生,叫抢/强制出牌不产生)。
     const onStreamDelta = this.options.onStreamDelta;
     const streamHooks: MoveStreamHooks | undefined = onStreamDelta
