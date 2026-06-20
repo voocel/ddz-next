@@ -1,9 +1,14 @@
 import { streamText, type JSONValue, type LanguageModel } from "ai";
 
-/** 其他一家:相对自己的身份(地主/队友/农民)+ 剩牌数。 */
+/** 其他一家:相对自己的身份(地主/队友/农民)+ 剩牌数 + 当前公开可见的手牌。 */
 export interface OpponentInfo {
   readonly label: string;
   readonly handCount: number;
+  /**
+   * 对该 AI 当前公开可见的对手手牌(按从小到大分组的中文描述)。
+   * 普通暗牌局为空;以后支持明牌/局部公开时直接填这里。
+   */
+  readonly revealedCards: readonly string[];
 }
 
 /** 上一手:由谁(按角色)打出的什么牌型。 */
@@ -16,7 +21,7 @@ export interface LastPlayInfo {
 
 /**
  * 选牌所需的公开局势 + 候选走法(由调用方从快照映射,bot-ai 不依赖游戏内部类型)。
- * 刻意给足农民/地主决策所需的事实:自己的完整手牌、本局已出的牌、各家身份+剩牌、上一手由谁打出——
+ * 刻意给足农民/地主决策所需的公开事实:自己的完整手牌、本局已出的牌、各家身份+剩牌+明牌、上一手由谁打出——
  * 但不灌输策略(出什么由模型自己定),以如实验证模型牌力。
  * candidates 是带编号的中文走法标签,索引即选择值;过牌等特殊选项也由调用方放进列表。
  */
@@ -29,7 +34,7 @@ export interface MoveSelectionContext {
    * 给模型用于记牌、推断各点数还剩多少未现——这是事实而非策略。开局领出、本局尚无人出牌时为空数组。
    */
   readonly playedCards: readonly string[];
-  /** 其他两家,按座位顺序;含身份标签,农民据此分辨地主与队友。 */
+  /** 其他两家,按座位顺序;含身份标签/剩牌/公开可见手牌,农民据此分辨地主与队友。 */
   readonly opponents: readonly OpponentInfo[];
   /** 上一手由谁打出的什么;轮到领出时为 null。 */
   readonly lastPlay: LastPlayInfo | null;
@@ -124,7 +129,7 @@ export class LlmMoveChooser implements MoveChooser {
     }
 
     const system = buildSystem(ctx.role);
-    const prompt = buildPrompt(ctx);
+    const prompt = formatMoveSelectionPrompt(ctx);
     const modelId = typeof model === "string" ? model : (model.modelId ?? null);
     const requestSummary = summarizeRequest(this.options.providerOptions);
 
@@ -332,14 +337,14 @@ function buildSystem(role: "landlord" | "farmer"): string {
   return [
     `你是斗地主高手,当前是${roleLabel}。`,
     `一局三人:地主 1 人 对 农民 2 人;两个农民是一队、目标一致,要合力让地主出不完牌。`,
-    `你会看到自己的完整手牌、各家身份与剩牌、上一手由谁打出,以及若干编号的合法出牌选项,只能从中选一个。`,
+    `你会看到自己的完整手牌、各家身份/剩牌/公开明牌、上一手由谁打出,以及若干编号的合法出牌选项,只能从中选一个。`,
     `目标:打赢这一局——地主要尽快出完牌,农民要和队友配合拦截地主。`,
     `快速判断后立刻给答案。只回复你选择的那个选项的编号数字(例如 2),不要复述牌型、不要解释、不要输出分析、不要任何其它文字或标点。`
   ].join("");
 }
 
-function buildPrompt(ctx: MoveSelectionContext): string {
-  const opponents = ctx.opponents.map((opponent) => `${opponent.label}剩 ${opponent.handCount} 张`).join(",");
+export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
+  const opponents = ctx.opponents.map(formatOpponentInfo).join(",");
   const options = ctx.candidates.map((label, index) => `${index}: ${label}`).join("\n");
   // 手牌/已出都用分组计数(×N)如实呈现张数,不再额外报一个会和列表对不上的总数。
   const lines = [`你的手牌:${ctx.hand.join(" ")}`];
@@ -357,4 +362,10 @@ function buildPrompt(ctx: MoveSelectionContext): string {
     `请选择最优的一手,最终只输出一个编号数字(0 到 ${ctx.candidates.length - 1}),不要任何其它文字。`
   );
   return lines.join("\n");
+}
+
+function formatOpponentInfo(opponent: OpponentInfo): string {
+  const revealed =
+    opponent.revealedCards.length > 0 ? `,明牌:${opponent.revealedCards.join(" ")}` : "";
+  return `${opponent.label}剩 ${opponent.handCount} 张${revealed}`;
 }

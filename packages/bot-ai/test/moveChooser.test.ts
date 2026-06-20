@@ -15,8 +15,8 @@ const context: MoveSelectionContext = {
   hand: ["3", "5×2", "K×2", "2"],
   playedCards: ["4×2", "9", "J×3", "小王"],
   opponents: [
-    { label: "农民", handCount: 8 },
-    { label: "农民", handCount: 9 }
+    { label: "农民", handCount: 8, revealedCards: [] },
+    { label: "农民", handCount: 9, revealedCards: ["7×2", "K"] }
   ],
   lastPlay: { by: "农民", description: "对子K" },
   candidates: ["过牌(不出)", "对子 2", "炸弹 33334"]
@@ -145,6 +145,19 @@ describe("LlmMoveChooser", () => {
       deepseekControls: { thinking: { type: "disabled" } },
       finalBodyControls: { thinking: { type: "disabled" } }
     });
+  });
+
+  it("prompt 结构化展示对手剩牌与公开明牌", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "1" }], text: "1" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose(context);
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("其他两家:农民剩 8 张,农民剩 9 张,明牌:7×2 K。")
+      })
+    );
   });
 
   it("流中出现 error part → 抛错捕获进 trace.error(不静默降级),index 为 null", async () => {

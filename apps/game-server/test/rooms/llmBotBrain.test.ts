@@ -62,6 +62,7 @@ function traceFixture(overrides: Partial<ChooserTrace> = {}): ChooserTrace {
     reasoningText: null,
     finishReason: "stop",
     usage: null,
+    requestSummary: { providerOptions: null, deepseekControls: null, finalBodyControls: null },
     error: null,
     errorStack: null,
     ...overrides
@@ -217,8 +218,8 @@ describe("LlmBotBrain", () => {
     expect(captured!.role).toBe("farmer");
     // p1 是地主、p2 是另一农民(队友);按座位顺序给出,带身份标签
     expect(captured!.opponents).toEqual([
-      { label: "地主", handCount: 8 },
-      { label: "队友", handCount: 9 }
+      { label: "地主", handCount: 8, revealedCards: [] },
+      { label: "队友", handCount: 9, revealedCards: [] }
     ]);
     // 完整手牌按从小到大分组计数下发,供模型规划
     expect(captured!.hand).toEqual(["3×2", "5"]);
@@ -241,7 +242,7 @@ describe("LlmBotBrain", () => {
 
     // 出过的牌是桌面公开信息,按从小到大分组计数下发(与手牌同口径),并原样进 trace 供离线分析
     expect(captured!.playedCards).toEqual(["5×2", "9", "大王"]);
-    expect(traces[0]!.playedCards).toEqual(["5×2", "9", "大王"]);
+    expect(traces[0]!.context.playedCards).toEqual(["5×2", "9", "大王"]);
   });
 
   it("模型返回 null(超时/缺 key)时抛错暴露,不回退、不上报指标", async () => {
@@ -305,9 +306,9 @@ describe("LlmBotBrain", () => {
     expect(traces).toHaveLength(1);
     const trace = traces[0]!;
     expect(trace.selfHand).toEqual(["3-clubs", "4-clubs"]);
-    expect(trace.role).toBe("landlord");
-    expect(trace.playedCards).toEqual([]);
-    expect(trace.candidates).toEqual(["单张3", "单张4"]);
+    expect(trace.context.role).toBe("landlord");
+    expect(trace.context.playedCards).toEqual([]);
+    expect(trace.context.candidates).toEqual(["单张3", "单张4"]);
     expect(trace.modelId).toBe("gpt-5.5");
     expect(trace.reasoningText).toBe("对手只剩2张,我先出小的试探");
     expect(trace.usage).toEqual({ inputTokens: 200, outputTokens: 12 });

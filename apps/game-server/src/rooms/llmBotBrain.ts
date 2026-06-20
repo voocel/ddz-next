@@ -39,14 +39,10 @@ export type LlmDecisionOutcome =
  */
 export interface LlmDecisionTrace {
   readonly playerId: PlayerId;
-  readonly role: "landlord" | "farmer";
+  /** 本次真正喂给 LLM 的结构化局势上下文;prompt 由它渲染,trace 也按它复盘。 */
+  readonly context: MoveSelectionContext;
   readonly selfHand: readonly string[];
   readonly selfHandCount: number;
-  readonly opponentHandCounts: readonly number[];
-  readonly lastPlay: string | null;
-  /** 本局已出的牌(分组计数),与喂给模型的口径一致,供离线分析「信息量 ↔ 牌力」。 */
-  readonly playedCards: readonly string[];
-  readonly candidates: readonly string[];
   readonly modelId: string | null;
   readonly system: string | null;
   readonly prompt: string | null;
@@ -222,13 +218,9 @@ export class LlmBotBrain implements BotBrain {
     }
     this.options.onTrace({
       playerId,
-      role: context.role,
+      context,
       selfHand: hand.map((card) => card.id),
       selfHandCount: hand.length,
-      opponentHandCounts: context.opponents.map((opponent) => opponent.handCount),
-      lastPlay: context.lastPlay ? `${context.lastPlay.by}打出 ${context.lastPlay.description}` : null,
-      playedCards: context.playedCards,
-      candidates: context.candidates,
       modelId: trace?.modelId ?? null,
       system: trace?.system ?? null,
       prompt: trace?.prompt ?? null,
@@ -264,7 +256,11 @@ function buildContext(
     playedCards: groupCardsByRank(playedCards),
     opponents: snapshot.players
       .filter((player) => player.id !== playerId)
-      .map((player) => ({ label: seatRoleLabel(player.id, playerId, landlordId), handCount: player.handCount })),
+      .map((player) => ({
+        label: seatRoleLabel(player.id, playerId, landlordId),
+        handCount: player.handCount,
+        revealedCards: []
+      })),
     lastPlay:
       previous && lastPlayerId
         ? { by: seatRoleLabel(lastPlayerId, playerId, landlordId), description: describeCombination(previous) }
