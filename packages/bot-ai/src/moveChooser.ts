@@ -1,4 +1,10 @@
 import { streamText, type JSONValue, type LanguageModel } from "ai";
+import {
+  createLlmHttpTraceScope,
+  finishLlmHttpTraceScope,
+  runWithLlmHttpTraceScope,
+  type LlmHttpTrace
+} from "./httpTrace.js";
 
 /** 其他一家:相对自己的身份(地主/队友/农民)+ 剩牌数 + 当前公开可见的手牌。 */
 export interface OpponentInfo {
@@ -23,7 +29,8 @@ export interface LastPlayInfo {
  * 选牌所需的公开局势 + 候选走法(由调用方从快照映射,bot-ai 不依赖游戏内部类型)。
  * 刻意给足农民/地主决策所需的公开事实:自己的完整手牌、本局已出的牌、各家身份+剩牌+明牌、上一手由谁打出——
  * 但不灌输策略(出什么由模型自己定),以如实验证模型牌力。
- * candidates 是带编号的中文走法标签,索引即选择值;过牌等特殊选项也由调用方放进列表。
+ * candidates 是中文走法标签;对模型展示为 1..N 编号,内部仍按数组 0 基索引返回。
+ * 过牌等特殊选项也由调用方放进列表。
  */
 export interface MoveSelectionContext {
   readonly role: "landlord" | "farmer";
@@ -38,7 +45,7 @@ export interface MoveSelectionContext {
   readonly opponents: readonly OpponentInfo[];
   /** 上一手由谁打出的什么;轮到领出时为 null。 */
   readonly lastPlay: LastPlayInfo | null;
-  /** 候选走法标签,至少一项;模型只能在 [0, candidates.length) 中选索引。 */
+  /** 候选走法标签,至少一项;模型只能在提示词展示的 1..N 编号中选一项。 */
   readonly candidates: readonly string[];
 }
 
@@ -48,10 +55,18 @@ export interface TokenUsage {
 }
 
 export interface ProviderRequestSummary {
+  readonly provider: {
+    readonly key: string;
+    readonly type: string;
+    readonly baseHost: string | null;
+  } | null;
   readonly providerOptions: Record<string, Record<string, JSONValue>> | null;
   readonly requestControls: Record<string, JSONValue> | null;
   readonly finalBodyControls: Record<string, JSONValue> | null;
 }
+
+/** 本次 LLM 调用经过 provider fetch 看到的上游 HTTP 原始请求/响应。请求头会脱敏,响应体不截断。 */
+export type ProviderHttpTrace = LlmHttpTrace;
 
 /** LLM API/网络错误的结构化留证。只记录无密钥字段,便于定位 provider 路径、状态码与上游错误体。 */
 export interface LlmRequestErrorInfo {
@@ -78,6 +93,7 @@ export interface ChooserTrace {
   readonly finishReason: string | null;
   readonly usage: TokenUsage | null;
   readonly requestSummary: ProviderRequestSummary;
+  readonly httpTrace: ProviderHttpTrace | null;
   /** abort/API/网络错误的消息;成功为 null。错误已被捕获进 trace,但调用方仍应据此抛错暴露(不静默)。 */
   readonly error: string | null;
   readonly errorStack: string | null;
@@ -85,7 +101,7 @@ export interface ChooserTrace {
 }
 
 export interface MoveDecision {
-  /** 解析出的合法候选编号;模型有响应但解析不出/越界,或请求出错时为 null。 */
+  /** 解析出的合法候选内部索引(0 基);模型有响应但解析不出/越界,或请求出错时为 null。 */
   readonly index: number | null;
   readonly trace: ChooserTrace;
 }
@@ -119,6 +135,12 @@ export interface LlmMoveChooserOptions {
   /** 已由供应商注册表解析好的语言模型;为 null(缺密钥/未配置)时直接返回 null,不发起请求。 */
   readonly model: LanguageModel | null;
   readonly timeoutMs?: number;
+  /** 无密钥 provider 元信息,只用于 trace 排错。 */
+  readonly provider?: {
+    readonly key: string;
+    readonly type: string;
+    readonly baseURL?: string | undefined;
+  } | undefined;
   /**
    * 透传给 streamText 的 provider 专属选项(如思考强度);由 buildReasoningProviderOptions 产出。
    * 不设/undefined 表示不干预,跟随模型默认。
@@ -144,10 +166,11 @@ export class LlmMoveChooser implements MoveChooser {
     const system = buildSystem(ctx.role);
     const prompt = formatMoveSelectionPrompt(ctx);
     const modelId = typeof model === "string" ? model : (model.modelId ?? null);
-    const requestSummary = summarizeRequest(this.options.providerOptions);
+    const requestSummary = summarizeRequest(this.options.providerOptions, this.options.provider);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const httpTraceScope = createLlmHttpTraceScope();
     // 三条刻意的选择:
     // 1) 把 API/超时/网络错误捕获进 trace.error(而非直接抛),好连同 system/prompt 一起留证;
     //    异常本身仍由调用方据 trace.error 抛错暴露(见 LlmBotBrain),不静默。
@@ -156,6 +179,7 @@ export class LlmMoveChooser implements MoveChooser {
     // 3) 用 streamText 而非 generateText:遍历 fullStream 实时把 reasoning/text 增量回调给 streamHooks(牌桌 AI 输出流);
     //    error part 显式捕获 + allSettled 收尾(消费所有 promise 拒绝,既不静默错误也不留未处理拒绝)。
     try {
+      return await runWithLlmHttpTraceScope(httpTraceScope, async () => {
       const result = streamText({
         model,
         system,
@@ -199,6 +223,7 @@ export class LlmMoveChooser implements MoveChooser {
       const finalRequestSummary =
         requestR.status === "fulfilled" ? withFinalBodyControls(requestSummary, requestBodyOf(requestR.value)) : requestSummary;
 
+      const httpTrace = await finishLlmHttpTraceScope(httpTraceScope);
       return {
         index: parseMoveIndex(text, ctx.candidates.length),
         trace: {
@@ -210,13 +235,16 @@ export class LlmMoveChooser implements MoveChooser {
           finishReason: finishReason ?? null,
           usage: toUsage(usage),
           requestSummary: finalRequestSummary,
+          httpTrace,
           error: null,
           errorStack: null,
           errorInfo: null
         }
       };
+      });
     } catch (error) {
       const errorInfo = toRequestErrorInfo(error);
+      const httpTrace = await finishLlmHttpTraceScope(httpTraceScope);
       return {
         index: null,
         trace: {
@@ -228,6 +256,7 @@ export class LlmMoveChooser implements MoveChooser {
           finishReason: null,
           usage: null,
           requestSummary,
+          httpTrace,
           error: errorInfo.message,
           errorStack: error instanceof Error ? (error.stack ?? null) : null,
           errorInfo
@@ -240,33 +269,36 @@ export class LlmMoveChooser implements MoveChooser {
 }
 
 /**
- * 从模型回复中解析出落在 [0, count) 的整数编号。导出供单测。
- * - number:直接校验范围。
- * - string:纯数字直接用;夹带解释时取文本里第一个落在范围内的整数(prompt 已要求只回数字,这是兜底)。
+ * 从模型回复中解析出展示编号(1..count),再映射为内部 0 基索引。导出供单测。
+ * - number:按展示编号校验范围。
+ * - string:纯数字直接用;夹带解释时取文本里第一个落在展示范围内的整数(prompt 已要求只回数字,这是兜底)。
  * 解析不出有效编号返回 null(由调用方按「模型未给出有效选择」处理)。
  */
 export function parseMoveIndex(raw: unknown, count: number): number | null {
-  let value: number | null = null;
+  if (!Number.isInteger(count) || count <= 0) {
+    return null;
+  }
+  let displayNumber: number | null = null;
   if (typeof raw === "number") {
-    value = raw;
+    displayNumber = raw;
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (/^\d+$/.test(trimmed)) {
-      value = Number(trimmed);
+      displayNumber = Number(trimmed);
     } else {
-      for (const match of trimmed.match(/\d+/g) ?? []) {
+      for (const match of trimmed.match(/-?\d+(?:\.\d+)?/g) ?? []) {
         const candidate = Number(match);
-        if (Number.isInteger(candidate) && candidate >= 0 && candidate < count) {
-          value = candidate;
+        if (Number.isInteger(candidate) && candidate >= 1 && candidate <= count) {
+          displayNumber = candidate;
           break;
         }
       }
     }
   }
-  if (value === null || !Number.isInteger(value) || value < 0 || value >= count) {
+  if (displayNumber === null || !Number.isInteger(displayNumber) || displayNumber < 1 || displayNumber > count) {
     return null;
   }
-  return value;
+  return displayNumber - 1;
 }
 
 function toUsage(
@@ -306,9 +338,15 @@ function stringRecordOrNull(value: unknown): Record<string, string> | null {
   return Object.keys(result).length > 0 ? result : null;
 }
 
-function summarizeRequest(providerOptions: Record<string, Record<string, JSONValue>> | undefined): ProviderRequestSummary {
+function summarizeRequest(
+  providerOptions: Record<string, Record<string, JSONValue>> | undefined,
+  provider: LlmMoveChooserOptions["provider"]
+): ProviderRequestSummary {
   const providerControls = Object.values(providerOptions ?? {}).find((options) =>
-    Object.hasOwn(options, "thinking") || Object.hasOwn(options, "reasoning_effort")
+    Object.hasOwn(options, "thinking") ||
+    Object.hasOwn(options, "reasoning_effort") ||
+    Object.hasOwn(options, "effort") ||
+    Object.hasOwn(options, "output_config")
   );
   const controls: Record<string, JSONValue> = {};
   if (providerControls && Object.hasOwn(providerControls, "thinking")) {
@@ -323,11 +361,43 @@ function summarizeRequest(providerOptions: Record<string, Record<string, JSONVal
       controls.reasoning_effort = reasoningEffort;
     }
   }
+  if (providerControls && Object.hasOwn(providerControls, "effort")) {
+    const effort = providerControls.effort;
+    if (effort !== undefined) {
+      controls.effort = effort;
+    }
+  }
+  if (providerControls && Object.hasOwn(providerControls, "output_config")) {
+    const outputConfig = providerControls.output_config;
+    if (outputConfig !== undefined) {
+      controls.output_config = outputConfig;
+    }
+  }
   return {
+    provider: summarizeProvider(provider),
     providerOptions: providerOptions ?? null,
     requestControls: Object.keys(controls).length > 0 ? controls : null,
     finalBodyControls: null
   };
+}
+
+function summarizeProvider(provider: LlmMoveChooserOptions["provider"]): ProviderRequestSummary["provider"] {
+  if (!provider) {
+    return null;
+  }
+  return {
+    key: provider.key,
+    type: provider.type,
+    baseHost: provider.baseURL ? hostOf(provider.baseURL) : null
+  };
+}
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
 }
 
 function requestBodyOf(request: unknown): unknown {
@@ -342,6 +412,9 @@ function withFinalBodyControls(summary: ProviderRequestSummary, body: unknown): 
   }
   if (parsed && Object.hasOwn(parsed, "reasoning_effort") && isJsonValue(parsed.reasoning_effort)) {
     controls.reasoning_effort = parsed.reasoning_effort;
+  }
+  if (parsed && Object.hasOwn(parsed, "output_config") && isJsonValue(parsed.output_config)) {
+    controls.output_config = parsed.output_config;
   }
   return {
     ...summary,
@@ -383,15 +456,16 @@ function buildSystem(role: "landlord" | "farmer"): string {
   return [
     `你是斗地主高手,当前是${roleLabel}。`,
     `一局三人:地主 1 人 对 农民 2 人;两个农民是一队、目标一致,要合力让地主出不完牌。`,
-    `你会看到自己的完整手牌、各家身份/剩牌/公开明牌、上一手由谁打出,以及若干编号的合法出牌选项,只能从中选一个。`,
+    `你会看到自己的完整手牌、各家身份/剩牌/公开明牌、上一手由谁打出,以及若干从 1 开始编号的合法出牌选项,只能从中选一个。`,
     `目标:打赢这一局——地主要尽快出完牌,农民要和队友配合拦截地主。`,
-    `快速判断后立刻给答案。只回复你选择的那个选项的编号数字(例如 2),不要复述牌型、不要解释、不要输出分析、不要任何其它文字或标点。`
+    `所有可见文字都必须使用简体中文;如模型支持独立思考通道,思考通道也必须使用简体中文简短分析。`,
+    `快速判断后立刻给答案。最终回复只输出你选择的那个选项的编号数字(例如 2),不要复述牌型、不要解释、不要任何其它文字或标点。`
   ].join("");
 }
 
 export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
   const opponents = ctx.opponents.map(formatOpponentInfo).join(",");
-  const options = ctx.candidates.map((label, index) => `${index}: ${label}`).join("\n");
+  const options = ctx.candidates.map((label, index) => `${index + 1}: ${label}`).join("\n");
   // 手牌/已出都用分组计数(×N)如实呈现张数,不再额外报一个会和列表对不上的总数。
   const lines = [`你的手牌:${ctx.hand.join(" ")}`];
   // 本局已出是公开信息(桌上人人可见),供模型记牌、推断剩余;开局无人出牌时不赘述。
@@ -405,7 +479,7 @@ export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
       : `现在轮到你领出,可任意出牌。`,
     `可选出牌(编号: 描述):`,
     options,
-    `请选择最优的一手,最终只输出一个编号数字(0 到 ${ctx.candidates.length - 1}),不要任何其它文字。`
+    `请选择最优的一手。如有独立思考通道,先用简体中文简短分析;最终只输出一个编号数字(1 到 ${ctx.candidates.length}),不要任何其它文字。`
   );
   return lines.join("\n");
 }

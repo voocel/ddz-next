@@ -44,33 +44,37 @@ function fakeResult(opts: {
 }
 
 describe("parseMoveIndex", () => {
-  it("接受 [0, count) 内的整数", () => {
-    expect(parseMoveIndex(0, 3)).toBe(0);
-    expect(parseMoveIndex(2, 3)).toBe(2);
+  it("接受 1..count 展示编号,并映射为 0 基内部索引", () => {
+    expect(parseMoveIndex(1, 3)).toBe(0);
+    expect(parseMoveIndex(3, 3)).toBe(2);
   });
 
-  it("接受纯数字字符串(模型按要求只回数字)", () => {
-    expect(parseMoveIndex("1", 3)).toBe(1);
-    expect(parseMoveIndex("  2 ", 3)).toBe(2);
-    expect(parseMoveIndex("0", 3)).toBe(0);
+  it("接受纯数字字符串展示编号(模型按要求只回数字)", () => {
+    expect(parseMoveIndex("1", 3)).toBe(0);
+    expect(parseMoveIndex("  2 ", 3)).toBe(1);
+    expect(parseMoveIndex("3", 3)).toBe(2);
   });
 
   it("夹带解释时取首个落在范围内的整数(prompt 已要求只回数字,这是兜底)", () => {
-    expect(parseMoveIndex("我选 2 号", 3)).toBe(2);
-    expect(parseMoveIndex("编号:1", 3)).toBe(1);
+    expect(parseMoveIndex("我选 2 号", 3)).toBe(1);
+    expect(parseMoveIndex("编号:1", 3)).toBe(0);
     // 第一个数字越界时跳过,取下一个落在范围内的
-    expect(parseMoveIndex("99 太大,选 1", 3)).toBe(1);
+    expect(parseMoveIndex("99 太大,选 1", 3)).toBe(0);
   });
 
   it("越界/负数/非整数/解析不出数字返回 null", () => {
-    expect(parseMoveIndex(3, 3)).toBeNull();
+    expect(parseMoveIndex(0, 3)).toBeNull();
+    expect(parseMoveIndex(4, 3)).toBeNull();
     expect(parseMoveIndex(-1, 3)).toBeNull();
     expect(parseMoveIndex(1.5, 3)).toBeNull();
+    expect(parseMoveIndex("0", 3)).toBeNull();
     expect(parseMoveIndex("9", 3)).toBeNull();
+    expect(parseMoveIndex("我选 1.5", 3)).toBeNull();
     expect(parseMoveIndex("过牌", 3)).toBeNull();
     expect(parseMoveIndex("", 3)).toBeNull();
     expect(parseMoveIndex(undefined, 3)).toBeNull();
     expect(parseMoveIndex(Number.NaN, 3)).toBeNull();
+    expect(parseMoveIndex("1", 0)).toBeNull();
   });
 });
 
@@ -97,9 +101,9 @@ describe("LlmMoveChooser", () => {
           { type: "reasoning-delta", text: "对手剩两张," },
           { type: "reasoning-delta", text: "我压一手" },
           { type: "reasoning-end" },
-          { type: "text-delta", text: "1" }
+          { type: "text-delta", text: "2" }
         ],
-        text: "1",
+        text: "2",
         reasoningText: "对手剩两张,我压一手"
       })
     );
@@ -109,7 +113,7 @@ describe("LlmMoveChooser", () => {
     expect(deltas).toEqual([
       { channel: "reasoning", text: "对手剩两张," },
       { channel: "reasoning", text: "我压一手" },
-      { channel: "text", text: "1" }
+      { channel: "text", text: "2" }
     ]);
     expect(decision?.index).toBe(1);
     expect(decision?.trace.reasoningText).toBe("对手剩两张,我压一手");
@@ -118,7 +122,7 @@ describe("LlmMoveChooser", () => {
 
   it("不传 streamHooks 也正常返回(行为等价)", async () => {
     streamTextMock.mockReturnValue(
-      fakeResult({ parts: [{ type: "reasoning-delta", text: "略" }], text: "2" })
+      fakeResult({ parts: [{ type: "reasoning-delta", text: "略" }], text: "3" })
     );
     const chooser = new LlmMoveChooser({ model: fakeModel });
     const decision = await chooser.choose(context);
@@ -141,6 +145,7 @@ describe("LlmMoveChooser", () => {
 
     expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({ providerOptions }));
     expect(decision?.trace.requestSummary).toEqual({
+      provider: null,
       providerOptions,
       requestControls: { thinking: { type: "disabled" } },
       finalBodyControls: { thinking: { type: "disabled" } }
@@ -161,14 +166,59 @@ describe("LlmMoveChooser", () => {
     const decision = await chooser.choose(context);
 
     expect(decision?.trace.requestSummary).toEqual({
+      provider: null,
       providerOptions,
       requestControls: { thinking: { type: "disabled" } },
       finalBodyControls: { thinking: { type: "disabled" } }
     });
   });
 
+  it("Anthropic 的 thinking/effort 控制也进入通用请求摘要", async () => {
+    const providerOptions = { anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" } };
+    streamTextMock.mockReturnValue(
+      fakeResult({
+        parts: [{ type: "text-delta", text: "1" }],
+        text: "1",
+        requestBody: {
+          thinking: { type: "adaptive", display: "summarized" },
+          output_config: { effort: "high" }
+        }
+      })
+    );
+    const chooser = new LlmMoveChooser({ model: fakeModel, providerOptions });
+
+    const decision = await chooser.choose(context);
+
+    expect(decision?.trace.requestSummary).toEqual({
+      provider: null,
+      providerOptions,
+      requestControls: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+      finalBodyControls: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" }
+      }
+    });
+  });
+
+  it("trace 记录无密钥 provider 元信息,便于定位协议适配问题", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "2" }], text: "2" }));
+    const chooser = new LlmMoveChooser({
+      model: fakeModel,
+      provider: { key: "wool", type: "openai-compatible", baseURL: "https://wzw.pp.ua/v1" }
+    });
+
+    const decision = await chooser.choose(context);
+
+    expect(decision?.trace.requestSummary.provider).toEqual({
+      key: "wool",
+      type: "openai-compatible",
+      baseHost: "wzw.pp.ua"
+    });
+    expect(JSON.stringify(decision?.trace.requestSummary)).not.toContain("sk-");
+  });
+
   it("prompt 结构化展示对手剩牌与公开明牌", async () => {
-    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "1" }], text: "1" }));
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "1" }], text: "2" }));
     const chooser = new LlmMoveChooser({ model: fakeModel });
 
     await chooser.choose(context);
@@ -176,6 +226,42 @@ describe("LlmMoveChooser", () => {
     expect(streamTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("其他两家:农民剩 8 张,农民剩 9 张,明牌:7×2 K。")
+      })
+    );
+  });
+
+  it("prompt 使用 1 基展示编号,降低模型 0/1 基混淆", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "2" }], text: "2" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose(context);
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("1: 过牌(不出)\n2: 对子 2\n3: 炸弹 33334")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("最终只输出一个编号数字(1 到 3)")
+      })
+    );
+  });
+
+  it("prompt 要求可见输出与思考通道都使用简体中文", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "2" }], text: "2" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose(context);
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: expect.stringContaining("思考通道也必须使用简体中文")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("先用简体中文简短分析")
       })
     );
   });

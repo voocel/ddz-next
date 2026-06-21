@@ -28,6 +28,7 @@ model Room {
   events    RoomEvent[]
   mutations GameActionMutation[]
   liveState RoomLiveState?
+  claim     RoomClaim?
 }
 
 // 进行中牌局的完整状态（含手牌），仅供 game-server 崩溃恢复；
@@ -43,13 +44,16 @@ model RoomEvent {
   id         String   @id @default(cuid())
   roomId     String
   room       Room     @relation(fields: [roomId], references: [id])
+  seq        Int
   playerId   String?
   playerKind String?
   type       String
   payload    Json
   createdAt  DateTime @default(now())
 
+  @@unique([roomId, seq])
   @@index([roomId, createdAt])
+  @@index([roomId, seq])
 }
 
 // 注意：Round 上还有一个 Prisma 无法表达的部分唯一索引
@@ -85,13 +89,16 @@ model GameAction {
   id        String   @id @default(cuid())
   roundId   String
   round     Round    @relation(fields: [roundId], references: [id])
+  seq       Int
   playerId  String?
   playerKind String?
   type      String
   payload   Json
   createdAt DateTime @default(now())
 
+  @@unique([roundId, seq])
   @@index([roundId, createdAt])
+  @@index([roundId, seq])
 }
 
 model GameActionMutation {
@@ -123,4 +130,16 @@ model CoinLedger {
   // 同一局对同一用户只允许一条流水，防止重复结算入账
   @@unique([roundId, userId])
   @@index([userId, createdAt])
+}
+
+// game-server 对房间实例的显式租约。用于多进程部署时避免同一 roomCode 被多个实例同时恢复/运行。
+model RoomClaim {
+  roomId    String   @id
+  room      Room     @relation(fields: [roomId], references: [id])
+  ownerId   String
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([expiresAt])
 }

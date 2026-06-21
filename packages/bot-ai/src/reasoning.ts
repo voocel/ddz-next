@@ -57,7 +57,8 @@ export function buildMiMoRequestControls(effort: ReasoningEffort): ReasoningRequ
 /**
  * 把一个档位翻译成对应 provider 的 streamText.providerOptions;auto 返回 undefined(完全不干预)。
  *
- * - Anthropic(`@ai-sdk/anthropic`):强度走 `effort`(跨模型代际通用),关闭走 `thinking:{type:"disabled"}`。
+ * - Anthropic(`@ai-sdk/anthropic`):关闭走 `thinking:{type:"disabled"}`;
+ *   非 off 档位显式请求 `adaptive + summarized`,否则只传 effort 不会返回可见 reasoning 文本。
  *   刻意不用 `thinking:{type:"enabled",budgetTokens}`——它在 Opus 4.7+(含本项目 claude-opus-4-8)会 400。
  * - DeepSeek:V4 双模最终在 provider.transformRequestBody 注入顶层 `thinking` / `reasoning_effort`;
  *   这里仍保留 providerOptions 摘要,供 trace 证明本手档位,不依赖它作为唯一落点。
@@ -78,7 +79,7 @@ export function buildReasoningProviderOptions(
     if (effort === "off") {
       return { anthropic: { thinking: { type: "disabled" } } };
     }
-    return { anthropic: { effort } };
+    return { anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort } };
   }
   if (providerType === "deepseek") {
     const controls = buildDeepSeekRequestControls(effort);

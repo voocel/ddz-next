@@ -284,7 +284,7 @@ export const gameEventSchema = z.discriminatedUnion("type", [
     channel: z.enum(["reasoning", "text"]),
     text: z.string().max(600),
     done: z.boolean(),
-    /** 本手 LLM 最终选中的候选项;成功解析并映射后由服务端附带,便于前端把数字编号展示成具体动作。 */
+    /** 本手 LLM 最终选中的候选项;index 是内部 0 基索引,展示编号用 index + 1。 */
     choice: z
       .object({
         index: z.number().int().nonnegative(),
@@ -356,7 +356,13 @@ export const createRoomRequestSchema = z.object({
 });
 
 export const updateRoomStatusRequestSchema = z.object({
+  ownerId: z.string().min(1).max(160),
   status: roomStatusSchema
+});
+
+export const roomClaimRequestSchema = z.object({
+  ownerId: z.string().min(1).max(160),
+  ttlMs: z.number().int().min(5_000).max(30 * 60_000)
 });
 
 export const roomActionTypeSchema = z.enum([
@@ -436,8 +442,11 @@ export const roomLiveStateEnvelopeSchema = z.object({
 
 export const recordGameActionRequestSchema = z.object({
   roomCode: roomCodeSchema,
+  ownerId: z.string().min(1).max(160),
   mutationId: z.string().uuid(),
   actions: z.array(recordGameActionSchema).min(1),
+  /** 与动作同事务更新的目标房间状态；未提供时只记录动作/状态快照。 */
+  status: roomStatusSchema.optional(),
   // 同事务 upsert 到 RoomLiveState，供崩溃恢复
   state: roomLiveStateEnvelopeSchema.optional()
 });
@@ -478,6 +487,7 @@ export const matchmakingEventSchema = z.discriminatedUnion("type", [
 
 export const roundHistoryActionSchema = z.object({
   id: z.string().min(1),
+  seq: z.number().int().positive(),
   type: roundActionTypeSchema,
   playerId: z.string().min(1).nullable(),
   playerKind: z.enum(["human", "bot"]).nullable(),
@@ -541,6 +551,7 @@ export type LoginResponse = z.infer<typeof loginResponseSchema>;
 export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 export type CreateRoomRequest = z.infer<typeof createRoomRequestSchema>;
 export type UpdateRoomStatusRequest = z.infer<typeof updateRoomStatusRequestSchema>;
+export type RoomClaimRequest = z.infer<typeof roomClaimRequestSchema>;
 export type RoomActionType = z.infer<typeof roomActionTypeSchema>;
 export type RoundActionType = z.infer<typeof roundActionTypeSchema>;
 export type GameActionType = z.infer<typeof gameActionTypeSchema>;

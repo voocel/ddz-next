@@ -21,21 +21,34 @@ export class RoomPersistence {
     private readonly roomStatusClient: RoomStatusClient,
     private readonly gameActionClient: GameActionClient,
     /** 每次落库随动作携带的崩溃恢复信封；房间串行队列保证与 snapshot 同刻一致 */
-    private readonly dumpState: () => RoomLiveStateEnvelope
+    private readonly dumpState: () => RoomLiveStateEnvelope,
+    private readonly claimOwnerId: string,
+    private readonly claimTtlMs: number
   ) {}
+
+  async claimRoom(): Promise<void> {
+    await this.roomStatusClient.claimRoom(this.roomCode, this.claimOwnerId, this.claimTtlMs);
+  }
+
+  async releaseClaim(): Promise<void> {
+    await this.roomStatusClient.releaseRoomClaim(this.roomCode, this.claimOwnerId, this.claimTtlMs);
+  }
 
   async recordMutation(input: {
     readonly actions: readonly PendingRoomAction[];
     readonly snapshot: GameSnapshot;
   }): Promise<void> {
     try {
+      const status = mapSnapshotToRoomStatus(input.snapshot);
       await this.gameActionClient.recordGameActions({
         roomCode: this.roomCode,
+        ownerId: this.claimOwnerId,
         mutationId: this.nextMutationId(),
         actions: input.actions.map((action) => this.toRecordedAction(action, input.snapshot)),
+        status,
         state: this.dumpState()
       });
-      await this.syncStatusAfterSnapshot(input.snapshot);
+      this.syncedStatus = status;
     } catch (error) {
       throw new RoomPersistenceError("Failed to persist game state.", error);
     }
@@ -43,11 +56,14 @@ export class RoomPersistence {
 
   /** 周期心跳：重申当前状态以刷新 Room.updatedAt，活房免于被孤儿清扫误杀。 */
   async heartbeat(): Promise<void> {
-    if (this.syncedStatus === null || this.syncedStatus === "closed") {
+    if (this.syncedStatus === "closed") {
       return;
     }
 
-    await this.roomStatusClient.updateRoomStatus(this.roomCode, this.syncedStatus);
+    await this.roomStatusClient.refreshRoomClaim(this.roomCode, this.claimOwnerId, this.claimTtlMs);
+    if (this.syncedStatus !== null) {
+      await this.roomStatusClient.updateRoomStatus(this.roomCode, this.syncedStatus, this.claimOwnerId);
+    }
   }
 
   /** 房间销毁时把 DB 状态收尾为 closed，避免停留在 playing。 */
@@ -56,16 +72,16 @@ export class RoomPersistence {
       return;
     }
 
-    await this.roomStatusClient.updateRoomStatus(this.roomCode, "closed");
+    await this.roomStatusClient.updateRoomStatus(this.roomCode, "closed", this.claimOwnerId);
     this.syncedStatus = "closed";
   }
 
   async closeFailedRoom(reason: string, snapshot: GameSnapshot): Promise<void> {
-    await this.roomStatusClient.updateRoomStatus(this.roomCode, "closed");
-    this.syncedStatus = "closed";
     await this.gameActionClient.recordGameActions({
       roomCode: this.roomCode,
+      ownerId: this.claimOwnerId,
       mutationId: this.nextMutationId(),
+      status: "closed",
       actions: [
         {
           playerId: null,
@@ -78,16 +94,7 @@ export class RoomPersistence {
         }
       ]
     });
-  }
-
-  private async syncStatusAfterSnapshot(snapshot: GameSnapshot): Promise<void> {
-    const status = mapSnapshotToRoomStatus(snapshot);
-    if (status === this.syncedStatus) {
-      return;
-    }
-
-    await this.roomStatusClient.updateRoomStatus(this.roomCode, status);
-    this.syncedStatus = status;
+    this.syncedStatus = "closed";
   }
 
   private nextMutationId(): string {

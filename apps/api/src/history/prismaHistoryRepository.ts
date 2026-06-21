@@ -29,10 +29,11 @@ const roundReplaySelect = {
   ...roundHistorySelect,
   actions: {
     orderBy: {
-      createdAt: "asc"
+      seq: "asc"
     },
     select: {
       id: true,
+      seq: true,
       type: true,
       playerId: true,
       playerKind: true,

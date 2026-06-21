@@ -21,6 +21,12 @@ export interface ProviderConfig {
   readonly apiKey?: string | undefined;
   readonly baseURL?: string | undefined;
   readonly models: readonly string[];
+  /** 可选自定义 User-Agent,用于明确适配自有网关的客户端策略。 */
+  readonly userAgent?: string | undefined;
+  /** Anthropic beta header,可为字符串或字符串数组,仅 anthropic provider 使用。 */
+  readonly anthropicBeta?: string | readonly string[] | undefined;
+  /** 额外请求头;敏感值不要放在前端下发路径。 */
+  readonly headers?: Readonly<Record<string, string>> | undefined;
   /** 可选展示名,前端下拉分组用;缺省回退 provider key。 */
   readonly label?: string | undefined;
 }
@@ -44,6 +50,10 @@ const rawProviderSchema = z.object({
   type: z.string().min(1).optional(),
   api_key: z.string().min(1).optional(),
   base_url: z.string().url().optional(),
+  user_agent: z.string().min(1).optional(),
+  anthropic_beta: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  headers: z.record(z.string().min(1), z.string()).optional(),
+  extra_headers: z.record(z.string().min(1), z.string()).optional(),
   models: z.array(z.string().min(1)).min(1),
   label: z.string().min(1).optional()
 });
@@ -98,6 +108,9 @@ function normalize(parsed: RawRegistry): BotProviderRegistry {
       apiKey: raw.api_key,
       baseURL: raw.base_url,
       models: raw.models,
+      userAgent: raw.user_agent,
+      anthropicBeta: raw.anthropic_beta,
+      headers: normalizeHeaders(raw.headers, raw.extra_headers),
       label: raw.label
     };
   }
@@ -124,27 +137,50 @@ function normalizeProviderType(name: string, raw: RawProvider): ProviderType {
 
 function detectSpecializedProviderType(name: string, raw: RawProvider): "anthropic" | "deepseek" | "mimo" | null {
   const providerName = name.toLowerCase();
-  const baseURL = raw.base_url?.toLowerCase() ?? "";
+  const baseHost = raw.base_url ? hostOf(raw.base_url) : "";
 
-  if (providerName === "anthropic" || baseURL.includes("anthropic.com")) {
+  if (providerName === "anthropic" || baseHost === "api.anthropic.com" || baseHost.endsWith(".anthropic.com")) {
     return "anthropic";
   }
 
   if (
     providerName === "mimo" ||
-    baseURL.includes("xiaomimimo.com")
+    baseHost === "xiaomimimo.com" ||
+    baseHost.endsWith(".xiaomimimo.com")
   ) {
     return "mimo";
   }
 
   if (
     providerName === "deepseek" ||
-    baseURL.includes("deepseek.com")
+    baseHost === "deepseek.com" ||
+    baseHost.endsWith(".deepseek.com")
   ) {
     return "deepseek";
   }
 
   return null;
+}
+
+function hostOf(url: string): string {
+  return new URL(url).host.toLowerCase();
+}
+
+function normalizeHeaders(
+  headers: Record<string, string> | undefined,
+  extraHeaders: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  const result: Record<string, string> = {};
+  for (const source of [headers, extraHeaders]) {
+    for (const [rawKey, rawValue] of Object.entries(source ?? {})) {
+      const key = rawKey.trim();
+      const value = rawValue.trim();
+      if (key && value) {
+        result[key] = value;
+      }
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function firstModelRef(providers: Readonly<Record<string, ProviderConfig>>): ModelRef | null {

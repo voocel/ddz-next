@@ -11,6 +11,7 @@ import { HistoryError } from "./errors.js";
 
 export interface RoundHistoryActionRecord {
   readonly id: string;
+  readonly seq: number;
   readonly type: RoundActionType;
   readonly playerId: string | null;
   readonly playerKind: "human" | "bot" | null;
@@ -119,6 +120,7 @@ function toRoundReplayDto(round: RoundReplayRecord, userId: string): RoundReplay
     viewerInitialHand: readViewerInitialHand(round, userId),
     actions: round.actions.map((action) => ({
       id: action.id,
+      seq: action.seq,
       type: action.type,
       playerId: action.playerId,
       playerKind: action.playerKind,

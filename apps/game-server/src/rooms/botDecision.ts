@@ -43,7 +43,7 @@ export interface BotBrainHooks {
   readonly onStreamStart?: (playerId: PlayerId) => void;
   /** 出牌决策中模型输出增量(playerId + channel + 片段),供牌桌「AI 输出流」实时广播;与 onTrace 落盘正交。 */
   readonly onStreamDelta?: (playerId: PlayerId, delta: MoveStreamDelta) => void;
-  /** 出牌决策成功后模型编号对应的具体候选动作,供牌桌把原始数字显示成可理解结果。 */
+  /** 出牌决策成功后内部索引对应的具体候选动作,供牌桌把原始数字显示成可理解结果。 */
   readonly onChoice?: (playerId: PlayerId, choice: LlmDecisionChoice) => void;
 }
 
@@ -99,10 +99,20 @@ export function createBotBrain(
     );
   }
   // resolveModel 非 null 已保证 provider 存在;据其类型把思考强度档位翻成对应 provider 的 providerOptions。
-  const providerType = registry.providers[config.model.provider]!.type;
+  const providerConfig = registry.providers[config.model.provider]!;
+  const providerType = providerConfig.type;
   const providerOptions = buildReasoningProviderOptions(providerType, config.model.provider, config.reasoningEffort);
   return new LlmBotBrain({
-    chooser: new LlmMoveChooser({ model, timeoutMs: config.timeoutMs, providerOptions }),
+    chooser: new LlmMoveChooser({
+      model,
+      timeoutMs: config.timeoutMs,
+      providerOptions,
+      provider: {
+        key: config.model.provider,
+        type: providerType,
+        baseURL: providerConfig.baseURL
+      }
+    }),
     onTrace: hooks?.onTrace,
     onDecision: hooks?.onDecision,
     onStreamStart: hooks?.onStreamStart,

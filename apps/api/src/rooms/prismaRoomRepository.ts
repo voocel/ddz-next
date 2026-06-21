@@ -1,6 +1,9 @@
 import type { PrismaClient } from "@prisma/client";
 import type { RoomStatus } from "@ddz/protocol";
 import type { CreateRoomInput, RoomRecord, RoomRepository } from "./service.js";
+import { assertRoomStatusTransition } from "./status.js";
+
+type PrismaTransaction = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
 
 const roomSelect = {
   id: true,
@@ -42,43 +45,100 @@ export class PrismaRoomRepository implements RoomRepository {
     }) as Promise<RoomRecord>;
   }
 
-  async updateRoomStatusByCode(code: string, status: RoomStatus): Promise<RoomRecord | null> {
-    const room = await this.prisma.room.findUnique({
+  async updateRoomStatusByCode(code: string, status: RoomStatus, ownerId: string): Promise<RoomRecord | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const room = await lockRoomByCode(tx, code);
+      if (!room) {
+        return null;
+      }
+
+      const claim = await tx.roomClaim.findUnique({
+        where: { roomId: room.id },
+        select: { ownerId: true }
+      });
+      if (claim?.ownerId !== ownerId) {
+        return null;
+      }
+      assertRoomStatusTransition(room.status, status);
+
+      const updated = await tx.room.update({
+        where: { id: room.id },
+        data: { status },
+        select: roomSelect
+      });
+      if (status === "closed") {
+        // 关房与删恢复状态同事务：状态行存在 ⇔ 崩溃可恢复 的不变量由此保证
+        await tx.roomLiveState.deleteMany({
+          where: { roomId: room.id }
+        });
+        await tx.roomClaim.deleteMany({
+          where: { roomId: room.id }
+        });
+      }
+      return updated as RoomRecord;
+    });
+  }
+
+  async claimRoom(code: string, ownerId: string, expiresAt: Date, now: Date): Promise<RoomRecord | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const room = await lockRoomByCode(tx, code);
+      if (!room || room.status === "closed") {
+        return null;
+      }
+
+      const claim = await tx.roomClaim.findUnique({
+        where: { roomId: room.id },
+        select: {
+          ownerId: true,
+          expiresAt: true
+        }
+      });
+      if (claim && claim.ownerId !== ownerId && claim.expiresAt > now) {
+        return null;
+      }
+
+      if (claim) {
+        await tx.roomClaim.update({
+          where: { roomId: room.id },
+          data: { ownerId, expiresAt }
+        });
+      } else {
+        await tx.roomClaim.create({
+          data: { roomId: room.id, ownerId, expiresAt }
+        });
+      }
+
+      return toRoomRecord(room);
+    });
+  }
+
+  async refreshRoomClaim(code: string, ownerId: string, expiresAt: Date): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const room = await lockRoomByCode(tx, code);
+      if (!room || room.status === "closed") {
+        return false;
+      }
+
+      const updated = await tx.roomClaim.updateMany({
+        where: {
+          roomId: room.id,
+          ownerId
+        },
+        data: {
+          expiresAt
+        }
+      });
+      return updated.count === 1;
+    });
+  }
+
+  async releaseRoomClaim(code: string, ownerId: string): Promise<void> {
+    await this.prisma.roomClaim.deleteMany({
       where: {
-        code
-      },
-      select: {
-        id: true
+        room: { code },
+        ownerId
       }
     });
-    if (!room) {
-      return null;
-    }
-
-    // 关房与删恢复状态同事务：状态行存在 ⇔ 崩溃可恢复 的不变量由此保证
-    if (status === "closed") {
-      const [updated] = await this.prisma.$transaction([
-        this.prisma.room.update({
-          where: { code },
-          data: { status },
-          select: roomSelect
-        }),
-        this.prisma.roomLiveState.deleteMany({
-          where: { roomId: room.id }
-        })
-      ]);
-      return updated as RoomRecord;
-    }
-
-    return this.prisma.room.update({
-      where: {
-        code
-      },
-      data: {
-        status
-      },
-      select: roomSelect
-    }) as Promise<RoomRecord>;
   }
 
   async closeStaleOpenRooms(cutoff: Date): Promise<number> {
@@ -130,13 +190,35 @@ export class PrismaRoomRepository implements RoomRepository {
 
       if (orphans.length > 0) {
         const ids = orphans.map((room) => room.id);
-        await tx.roomLiveState.deleteMany({ where: { roomId: { in: ids } } });
         await tx.room.updateMany({ where: { id: { in: ids } }, data: { status: "closed" } });
+        await tx.roomLiveState.deleteMany({ where: { roomId: { in: ids } } });
+        await tx.roomClaim.deleteMany({ where: { roomId: { in: ids } } });
       }
 
       // 兜底：清掉 closed 房的残留状态行（关房删行竞态的最后防线）
       await tx.roomLiveState.deleteMany({ where: { room: { status: "closed" } } });
+      await tx.roomClaim.deleteMany({ where: { room: { status: "closed" } } });
       return orphans.length;
     });
   }
+}
+
+async function lockRoomByCode(tx: PrismaTransaction, code: string): Promise<RoomRecord | null> {
+  const rows = await tx.$queryRaw<RoomRecord[]>`
+    SELECT "id", "code", "status", "createdAt", "updatedAt"
+    FROM "Room"
+    WHERE "code" = ${code}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+function toRoomRecord(room: {
+  readonly id: string;
+  readonly code: string;
+  readonly status: string;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}): RoomRecord {
+  return room as RoomRecord;
 }

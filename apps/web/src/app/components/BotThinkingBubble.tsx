@@ -173,7 +173,7 @@ function BotThinkingBody({
         <section className="bot-think-section">
           <div className="bot-think-label">选择</div>
           <div>
-            {choice.index}: {choice.label}
+            {choice.index + 1}: {choice.label}
           </div>
         </section>
       ) : null}

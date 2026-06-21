@@ -9,6 +9,7 @@ import type {
   MoveStreamHooks,
   LlmRequestErrorInfo,
   ProviderRequestSummary,
+  ProviderHttpTrace,
   TokenUsage
 } from "@ddz/bot-ai";
 import type { BotAction, BotBrain } from "./botBrain.js";
@@ -21,7 +22,7 @@ export interface LlmDecisionMetric {
   readonly usage: TokenUsage | null;
 }
 
-/** LLM 成功解析出的候选选择:编号来自模型输出,label 是当手候选列表中该编号对应的具体动作。 */
+/** LLM 成功解析出的候选选择:index 为内部 0 基索引,label 是当手候选列表中该编号对应的具体动作。 */
 export interface LlmDecisionChoice {
   readonly index: number;
   readonly label: string;
@@ -30,6 +31,7 @@ export interface LlmDecisionChoice {
 /** 一次 LLM 出牌决策的结局(四选一);ok 才有动作。 */
 export type LlmDecisionOutcome =
   | { readonly kind: "ok"; readonly index: number; readonly action: BotAction }
+  | { readonly kind: "empty_response"; readonly finishReason: string | null }
   | { readonly kind: "no_choice" }
   | { readonly kind: "invalid_index"; readonly index: number }
   | { readonly kind: "error"; readonly message: string };
@@ -52,6 +54,7 @@ export interface LlmDecisionTrace {
   readonly finishReason: string | null;
   readonly usage: TokenUsage | null;
   readonly requestSummary: ProviderRequestSummary | null;
+  readonly httpTrace: ProviderHttpTrace | null;
   readonly errorInfo: LlmRequestErrorInfo | null;
   readonly latencyMs: number;
   readonly outcome: LlmDecisionOutcome;
@@ -63,9 +66,10 @@ export interface LlmDecisionTrace {
  */
 export class LlmDecisionError extends Error {
   constructor(
-    readonly reason: "no_choice" | "invalid_index" | "request_error",
+    readonly reason: "empty_response" | "no_choice" | "invalid_index" | "request_error",
     message: string,
-    readonly latencyMs: number
+    readonly latencyMs: number,
+    readonly detail: Record<string, string | number | boolean | null> | null = null
   ) {
     super(message);
     this.name = "LlmDecisionError";
@@ -87,7 +91,7 @@ export interface LlmBotBrainOptions {
   readonly onStreamStart?: ((playerId: PlayerId) => void) | undefined;
   /** 出牌决策过程中实时回调模型输出增量(playerId + channel + 片段),供上层做牌桌「AI 输出流」;不设则不回调。 */
   readonly onStreamDelta?: ((playerId: PlayerId, delta: MoveStreamDelta) => void) | undefined;
-  /** 模型最终编号合法后回调其对应候选动作,供上层把「1」展示成「单张4」等具体结果。 */
+  /** 模型最终编号合法后回调其对应候选动作,供上层把内部索引展示成「单张4」等具体结果。 */
   readonly onChoice?: ((playerId: PlayerId, choice: LlmDecisionChoice) => void) | undefined;
   /** 可注入时钟,便于测试测延迟;默认 Date.now。 */
   readonly now?: () => number;
@@ -169,10 +173,28 @@ export class LlmBotBrain implements BotBrain {
     // 1) 请求出错(abort/超时/API/网络):chooser 已捕获进 trace.error,记证后抛错暴露(不静默)。
     if (trace.error !== null) {
       this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "error", message: trace.error });
-      throw new LlmDecisionError("request_error", `LLM 请求失败: ${trace.error}(候选 ${labels.length} 项)`, latencyMs);
+      const detail = summarizeLlmRequestFailure(trace);
+      throw new LlmDecisionError(
+        "request_error",
+        `LLM 请求失败: ${trace.error}${formatLlmRequestFailure(detail)}(候选 ${labels.length} 项)`,
+        latencyMs,
+        detail
+      );
     }
-    // 2) 模型有响应但解析不出有效编号。
+    // 2) 上游/SDK 返回了“成功但正文为空”的结果:不是牌力问题,直接显式暴露为上游空响应。
     if (decision.index === null) {
+      if (isEmptyLlmResponse(trace)) {
+        this.emitTrace(context, hand, playerId, trace, latencyMs, {
+          kind: "empty_response",
+          finishReason: trace.finishReason
+        });
+        throw new LlmDecisionError(
+          "empty_response",
+          `LLM 上游返回空响应(rawText 为空,finishReason=${trace.finishReason ?? "null"});候选 ${labels.length} 项`,
+          latencyMs
+        );
+      }
+      // 3) 模型有正文但解析不出有效编号。
       this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "no_choice" });
       throw new LlmDecisionError(
         "no_choice",
@@ -180,7 +202,7 @@ export class LlmBotBrain implements BotBrain {
         latencyMs
       );
     }
-    // 3) 编号越界。
+    // 4) 编号越界。
     const action = toAction(decision.index, canPass, legal);
     if (!action) {
       this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "invalid_index", index: decision.index });
@@ -199,7 +221,7 @@ export class LlmBotBrain implements BotBrain {
         latencyMs
       );
     }
-    // 4) 成功。
+    // 5) 成功。
     this.options.onChoice?.(playerId, { index: decision.index, label });
     this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "ok", index: decision.index, action });
     this.options.onDecision?.({ latencyMs, usage: trace.usage });
@@ -231,6 +253,7 @@ export class LlmBotBrain implements BotBrain {
       finishReason: trace?.finishReason ?? null,
       usage: trace?.usage ?? null,
       requestSummary: trace?.requestSummary ?? null,
+      httpTrace: trace?.httpTrace ?? null,
       errorInfo: trace?.errorInfo ?? null,
       latencyMs,
       outcome
@@ -241,6 +264,73 @@ export class LlmBotBrain implements BotBrain {
 function buildLabels(legal: readonly LegalMove[], canPass: boolean): string[] {
   const moves = legal.map((move) => describeCombination(move.combination));
   return canPass ? ["过牌(不出)", ...moves] : moves;
+}
+
+function isEmptyLlmResponse(trace: ChooserTrace): boolean {
+  return trace.rawText !== null && trace.rawText.trim().length === 0;
+}
+
+function summarizeLlmRequestFailure(trace: ChooserTrace): Record<string, string | number | boolean | null> | null {
+  const error = trace.errorInfo;
+  const provider = trace.requestSummary.provider;
+  const code = errorCodeOf(error?.data);
+  const requestId = requestIdOf(error?.responseHeaders, error?.responseBody);
+  const detail: Record<string, string | number | boolean | null> = {};
+  if (provider) {
+    detail.provider = `${provider.key}/${provider.type}`;
+    detail.baseHost = provider.baseHost;
+  }
+  if (error?.statusCode !== null && error?.statusCode !== undefined) {
+    detail.statusCode = error.statusCode;
+  }
+  if (code) {
+    detail.code = code;
+  }
+  if (error?.url) {
+    detail.url = error.url;
+  }
+  if (requestId) {
+    detail.requestId = requestId;
+  }
+  if (typeof error?.isRetryable === "boolean") {
+    detail.isRetryable = error.isRetryable;
+  }
+  return Object.keys(detail).length > 0 ? detail : null;
+}
+
+function formatLlmRequestFailure(detail: Record<string, string | number | boolean | null> | null): string {
+  if (!detail) {
+    return "";
+  }
+  const text = Object.entries(detail)
+    .filter(([, value]) => value !== null)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+  return text ? ` [${text}]` : "";
+}
+
+function errorCodeOf(data: unknown): string | null {
+  if (!isRecord(data)) {
+    return null;
+  }
+  const error = data.error;
+  if (!isRecord(error)) {
+    return null;
+  }
+  return typeof error.code === "string" && error.code.trim() ? error.code : null;
+}
+
+function requestIdOf(headers: Record<string, string> | null | undefined, body: string | null | undefined): string | null {
+  const headerRequestId = headers?.["x-oneapi-request-id"] ?? headers?.["x-request-id"] ?? headers?.["request-id"];
+  if (headerRequestId?.trim()) {
+    return headerRequestId;
+  }
+  const match = body?.match(/\(request id:\s*([^)]+)\)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function buildContext(

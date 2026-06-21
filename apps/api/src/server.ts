@@ -5,6 +5,7 @@ import {
   loginRequestSchema,
   recordGameActionRequestSchema,
   registerRequestSchema,
+  roomClaimRequestSchema,
   updateRoomStatusRequestSchema
 } from "@ddz/protocol";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
@@ -140,6 +141,56 @@ export function buildServer(dependencies: ServerDependencies) {
     return dependencies.roomService.getRoomState(code);
   });
 
+  app.post("/internal/rooms/:code/claim", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
+
+    const code = (request.params as { code?: string }).code;
+    if (!code) {
+      throw new ApiError("Room code is required.", 400);
+    }
+
+    const parsed = roomClaimRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw new ApiError("Invalid room claim request.", 400, parsed.error.issues);
+    }
+
+    return dependencies.roomService.claimRoom(code, parsed.data.ownerId, parsed.data.ttlMs);
+  });
+
+  app.patch("/internal/rooms/:code/claim", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
+
+    const code = (request.params as { code?: string }).code;
+    if (!code) {
+      throw new ApiError("Room code is required.", 400);
+    }
+
+    const parsed = roomClaimRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw new ApiError("Invalid room claim request.", 400, parsed.error.issues);
+    }
+
+    await dependencies.roomService.refreshRoomClaim(code, parsed.data.ownerId, parsed.data.ttlMs);
+    return { ok: true };
+  });
+
+  app.delete("/internal/rooms/:code/claim", async (request) => {
+    requireInternal(request.headers, dependencies.internalConfig.token);
+
+    const code = (request.params as { code?: string }).code;
+    if (!code) {
+      throw new ApiError("Room code is required.", 400);
+    }
+
+    const parsed = roomClaimRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw new ApiError("Invalid room claim request.", 400, parsed.error.issues);
+    }
+
+    await dependencies.roomService.releaseRoomClaim(code, parsed.data.ownerId);
+    return { ok: true };
+  });
+
   app.get("/me/rounds", async (request) => {
     const claims = requireAuth(request.headers, dependencies.tokenConfig);
     return dependencies.historyService.listRounds(claims.sub);
@@ -174,7 +225,7 @@ export function buildServer(dependencies: ServerDependencies) {
       throw new ApiError("Invalid room status request.", 400, parsed.error.issues);
     }
 
-    return dependencies.roomService.updateRoomStatus(code, parsed.data.status);
+    return dependencies.roomService.updateRoomStatus(code, parsed.data.status, parsed.data.ownerId);
   });
 
   app.post("/internal/game-actions", async (request) => {

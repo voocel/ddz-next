@@ -20,7 +20,9 @@ describe("HttpGameActionClient", () => {
     await expect(
       new HttpGameActionClient(config).recordGameActions({
         roomCode: "100001",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000001",
+        status: "playing",
         actions: [
           {
             playerId: "p0",
@@ -40,7 +42,9 @@ describe("HttpGameActionClient", () => {
       },
       body: JSON.stringify({
         roomCode: "100001",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000001",
+        status: "playing",
         actions: [
           {
             playerId: "p0",
@@ -64,6 +68,7 @@ describe("HttpGameActionClient", () => {
     await expect(
       new HttpGameActionClient(config).recordGameActions({
         roomCode: "100001",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000002",
         actions: []
       })
@@ -80,6 +85,7 @@ describe("HttpGameActionClient", () => {
     await expect(
       new HttpGameActionClient(config).recordGameActions({
         roomCode: "100001",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000003",
         actions: [
           {

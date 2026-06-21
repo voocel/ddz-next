@@ -221,6 +221,7 @@ interface ResolvedSelfPlayModel {
   readonly model: NonNullable<ReturnType<typeof resolveModel>>;
   readonly providerType: ProviderType;
   readonly providerKey: string;
+  readonly baseURL: string | undefined;
 }
 
 /**
@@ -247,7 +248,8 @@ function buildModel(options: CliOptions): ResolvedSelfPlayModel | null {
   if (!model) {
     return null;
   }
-  return { model, providerType: registry.providers[ref.provider]!.type, providerKey: ref.provider };
+  const provider = registry.providers[ref.provider]!;
+  return { model, providerType: provider.type, providerKey: ref.provider, baseURL: provider.baseURL };
 }
 
 async function main(): Promise<void> {
@@ -284,7 +286,15 @@ async function main(): Promise<void> {
   // BOT_DECISION_TRACE=true 时把每手 LLM 决策逐条留证落 JSONL,供离线复盘(同生产用一套 sink)。
   const traceSink = createLlmTraceSink(process.env, `selfplay-${options.provider}-${options.model}`);
   const llmBrain = new LlmBotBrain({
-    chooser: new LlmMoveChooser({ model: resolved.model, providerOptions }),
+    chooser: new LlmMoveChooser({
+      model: resolved.model,
+      providerOptions,
+      provider: {
+        key: resolved.providerKey,
+        type: resolved.providerType,
+        baseURL: resolved.baseURL
+      }
+    }),
     onDecision: (m) => metrics.push(m),
     onTrace: traceSink ? (trace) => traceSink.record(trace) : undefined
   });

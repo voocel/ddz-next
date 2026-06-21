@@ -211,11 +211,38 @@ describe("API auth routes", () => {
         "x-ddz-internal-token": "internal-test-token"
       },
       payload: {
+        ownerId: "owner-1",
         status: "playing"
       }
     });
-    expect(updated.statusCode).toBe(200);
-    expect(updated.json().room.status).toBe("playing");
+    expect(updated.statusCode).toBe(409);
+
+    const claimed = await app.inject({
+      method: "POST",
+      url: "/internal/rooms/100002/claim",
+      headers: {
+        "x-ddz-internal-token": "internal-test-token"
+      },
+      payload: {
+        ownerId: "owner-1",
+        ttlMs: 60_000
+      }
+    });
+    expect(claimed.statusCode).toBe(200);
+
+    const updatedAfterClaim = await app.inject({
+      method: "PATCH",
+      url: "/internal/rooms/100002/status",
+      headers: {
+        "x-ddz-internal-token": "internal-test-token"
+      },
+      payload: {
+        ownerId: "owner-1",
+        status: "playing"
+      }
+    });
+    expect(updatedAfterClaim.statusCode).toBe(200);
+    expect(updatedAfterClaim.json().room.status).toBe("playing");
 
     // 崩溃恢复查询：无 token 拒绝；有 token 返回房间与状态（无状态行时为 null）
     const anonymousState = await app.inject({
@@ -240,7 +267,7 @@ describe("API auth routes", () => {
 
   it("protects internal game action writes", async () => {
     const actionRepository = new InMemoryGameActionRepository();
-    actionRepository.rooms.set("100003", "room-3");
+    actionRepository.seedRoom("100003", "room-3");
     const app = buildServer({
       authService: new AuthService(new InMemoryUserRepository(), tokenConfig),
       roomService: new RoomService(new InMemoryRoomRepository()),
@@ -257,6 +284,7 @@ describe("API auth routes", () => {
       url: "/internal/game-actions",
       payload: {
         roomCode: "100003",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000101",
         actions: [
           {
@@ -278,6 +306,7 @@ describe("API auth routes", () => {
       },
       payload: {
         roomCode: "100003",
+        ownerId: "owner-1",
         mutationId: "00000000-0000-4000-8000-000000000102",
         actions: [
           {
@@ -359,6 +388,7 @@ describe("API auth routes", () => {
       actions: [
         {
           id: "action-0",
+          seq: 1,
           type: "round_started",
           playerId: null,
           playerKind: null,
@@ -374,6 +404,7 @@ describe("API auth routes", () => {
         },
         {
           id: "action-1",
+          seq: 2,
           type: "round_settled",
           playerId: userId,
           playerKind: "human",
@@ -457,10 +488,12 @@ describe("API auth routes", () => {
     expect(replay.json().round.actions).toEqual([
       expect.objectContaining({
         id: "action-0",
+        seq: 1,
         type: "round_started"
       }),
       expect.objectContaining({
         id: "action-1",
+        seq: 2,
         type: "round_settled",
         playerId: userId,
         playerKind: "human",

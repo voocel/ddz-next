@@ -61,9 +61,8 @@ interface RoomCreateOptions extends JoinOptions {
 const DEFAULT_TURN_TIMEOUT_MS = 20_000;
 // 大模型机器人展示倒计时默认值:比真人(20s)长,留出推理时间;到点不兜底,可停在 0 继续等模型。
 const DEFAULT_LLM_BOT_TURN_TIMER_MS = 30_000;
+const DEFAULT_ROOM_CLAIM_TTL_MS = 60_000;
 const QUICK_START_BOT_COUNT = 2;
-// 活跃房间刷新 DB updatedAt 的心跳间隔，须远小于 API 侧 30min 的孤儿清扫时限
-const HEARTBEAT_INTERVAL_MS = 10 * 60_000;
 // 大模型「AI 输出流」节流阈值:增量累积到约一短句(16 字)才广播一条,避免逐 token 的消息风暴。
 const THINKING_MIN_CHARS = 16;
 let activeAiBattleRooms = 0;
@@ -78,7 +77,7 @@ type RevealedHands = NonNullable<Extract<GameEvent, { type: "round_settled" }>["
  * 单进程内 roomCode → roomId 注册表。
  * Colyseus 并发 joinOrCreate 的串行锁有 0.5s 超时逃逸：恢复路径含 API 往返，
  * 超时后第二个请求会为同一 roomCode 再建实例（双实例脑裂），这里同步兜底拒绝。
- * 多进程部署需换成共享存储 claim，本期单进程足够。
+ * 跨进程互斥由 API RoomClaim 租约保证。
  */
 const liveRoomsByCode = new Map<string, string>();
 
@@ -116,6 +115,8 @@ export class DdzRoom extends Room {
   private readonly nicknames = new Map<PlayerId, string>();
   private turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS;
   private llmBotTurnTimerMs = DEFAULT_LLM_BOT_TURN_TIMER_MS;
+  private claimOwnerId = "";
+  private roomClaimed = false;
   private failed = false;
   /** onCreate 是否完整成功：失败实例随后仍会被 autoDispose 收割，onDispose 据此跳过 DB 收尾 */
   private created = false;
@@ -139,6 +140,7 @@ export class DdzRoom extends Room {
     this.turnTimeoutMs = readTurnTimeoutMs(options.turnTimeoutMs);
     this.llmBotTurnTimerMs = readLlmBotTurnTimerMs(options.llmBotTurnTimerMs);
     this.roomCode = readRoomCode(options);
+    this.claimOwnerId = `${process.pid}:${this.roomId}`;
 
     try {
       this.reserveAiBattleSlotIfNeeded(options);
@@ -154,6 +156,7 @@ export class DdzRoom extends Room {
       // onCreate 抛错后 MatchMaker 不清理实例，构造器注册的 dispose 监听与
       // __init 武装的 autoDispose 定时器（约 15s）仍会触发 onDispose——
       // 注册项在此先行自清，onDispose 再以 created 标志跳过 DB 收尾
+      await this.releaseRoomClaimIfHeld();
       this.releaseLiveRegistration();
       this.releaseAiBattleSlot();
       throw error;
@@ -167,6 +170,9 @@ export class DdzRoom extends Room {
     this.botSettingsUpdatesEnabled = usesLlmBotDecision(options);
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
+    if (this.traceSink) {
+      console.info(`[DdzRoom ${this.roomCode}] LLM decision trace enabled: ${this.traceSink.file}`);
+    }
     // onStreamDelta 无条件接上(AI 输出流给玩家看的实时流,与 BOT_DECISION_TRACE 落盘正交);规则 bot 永不触发它。
     const hooks: BotBrainHooks = {
       ...(this.traceSink ? { onTrace: (trace: LlmDecisionTrace) => this.traceSink?.record(trace) } : {}),
@@ -183,9 +189,17 @@ export class DdzRoom extends Room {
         maxChars: this.commentary.maxChars
       });
     }
-    this.persistence = new RoomPersistence(this.roomCode, options.roomStatusClient, options.gameActionClient, () =>
-      this.dumpLiveState()
+    const claimTtlMs = readRoomClaimTtlMs();
+    this.persistence = new RoomPersistence(
+      this.roomCode,
+      options.roomStatusClient,
+      options.gameActionClient,
+      () => this.dumpLiveState(),
+      this.claimOwnerId,
+      claimTtlMs
     );
+    await this.persistence.claimRoom();
+    this.roomClaimed = true;
 
     // 一次调用同时拿到房间状态与恢复信封：有信封 ⇒ 旧进程崩溃残留，走恢复
     const { room, state } = await options.roomStatusClient.getRoomState(this.roomCode);
@@ -248,7 +262,7 @@ export class DdzRoom extends Room {
     // 空房生命周期则交给 Colyseus autoDispose（预留座位感知，过期即处置）
     this.clock.setInterval(() => {
       void this.heartbeat();
-    }, HEARTBEAT_INTERVAL_MS);
+    }, roomClaimHeartbeatIntervalMs(claimTtlMs));
 
     if (state) {
       // scheduler 就绪后才能恢复牌局推进
@@ -272,9 +286,11 @@ export class DdzRoom extends Room {
       // onCreate 失败的僵尸实例不拥有该房间码，绝不能动 DB（否则会把
       // 别的实例或可恢复牌局标记 closed 并删掉状态行）；failRoom 已自行上报 closed
       if (!this.created || this.failed) {
+        await this.releaseRoomClaimIfHeld();
         return;
       }
       await this.persistence.closeRoom();
+      this.roomClaimed = false;
     } catch (error) {
       console.error(`[DdzRoom ${this.roomCode}] Failed to close room on dispose.`, error);
     } finally {
@@ -305,6 +321,16 @@ export class DdzRoom extends Room {
     }
     this.aiBattleSlotReserved = false;
     releaseAiBattleSlot();
+  }
+
+  private async releaseRoomClaimIfHeld(): Promise<void> {
+    if (!this.roomClaimed) {
+      return;
+    }
+    this.roomClaimed = false;
+    await this.persistence?.releaseClaim().catch((error) => {
+      console.error(`[DdzRoom ${this.roomCode}] Failed to release room claim.`, error);
+    });
   }
 
   /** 每次落库随动作携带的崩溃恢复信封 */
@@ -375,9 +401,9 @@ export class DdzRoom extends Room {
     return released;
   }
 
-  /** 周期心跳：有人在房则刷新 DB updatedAt，失败不致命（孤儿清扫有 30min 余量） */
+  /** 周期心跳：续租房间 claim；已有同步状态时刷新 DB updatedAt，失败不致命（孤儿清扫有 30min 余量） */
   private async heartbeat(): Promise<void> {
-    if (this.failed || this.clients.length === 0) {
+    if (this.failed) {
       return;
     }
 
@@ -1140,7 +1166,7 @@ export class DdzRoom extends Room {
     }
   }
 
-  private revealedHandsEventPart(snapshot: GameSnapshot): { readonly revealedHands: RevealedHands } | {} {
+  private revealedHandsEventPart(snapshot: GameSnapshot): { readonly revealedHands?: RevealedHands } {
     return snapshot.phase === "settled" ? { revealedHands: this.revealedHandsDto(snapshot) } : {};
   }
 
@@ -1172,7 +1198,8 @@ export class DdzRoom extends Room {
     this.turnScheduler.cancelAll();
     // 详细错误只进服务端日志，客户端收到通用文案
     const detail = error instanceof Error ? error.message : defaultReason;
-    console.error(`[DdzRoom ${this.roomCode}] ${defaultReason} ${detail}`, error);
+    const traceFile = this.traceSink ? ` trace=${this.traceSink.file}` : "";
+    console.error(`[DdzRoom ${this.roomCode}] ${defaultReason} ${detail}${traceFile}`, error);
 
     try {
       this.broadcast("event", {
@@ -1185,6 +1212,7 @@ export class DdzRoom extends Room {
 
     try {
       await this.persistence.closeFailedRoom(detail, this.table.snapshot());
+      this.roomClaimed = false;
     } catch (closeError) {
       console.error(`[DdzRoom ${this.roomCode}] Failed to close room in API.`, closeError);
     }
@@ -1219,6 +1247,23 @@ function readLlmBotTurnTimerMs(value: unknown): number {
     throw new Error("LLM bot turn timer must be a positive integer in milliseconds.");
   }
   return value;
+}
+
+function readRoomClaimTtlMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.ROOM_CLAIM_TTL_MS?.trim();
+  if (!raw) {
+    return DEFAULT_ROOM_CLAIM_TTL_MS;
+  }
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 5_000 || value > 30 * 60_000) {
+    throw new Error("ROOM_CLAIM_TTL_MS must be an integer between 5000 and 1800000 milliseconds.");
+  }
+  return value;
+}
+
+function roomClaimHeartbeatIntervalMs(claimTtlMs: number): number {
+  return Math.floor(claimTtlMs / 2);
 }
 
 function usesLlmBotDecision(

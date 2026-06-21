@@ -14,6 +14,15 @@ const SAMPLE = JSON.stringify({
     anthropic: {
       type: "anthropic",
       api_key: "sk-ant-xxx",
+      base_url: "https://wzw.pp.ua",
+      user_agent: "claude-code/2.1.183",
+      anthropic_beta: ["claude-code-20250219"],
+      headers: {
+        "X-Stainless-Lang": "js"
+      },
+      extra_headers: {
+        "X-Stainless-Runtime": "node"
+      },
       models: ["claude-haiku-4-5"],
       label: "Anthropic"
     },
@@ -44,6 +53,15 @@ describe("parseBotProviderRegistry（多 provider 注册表解析）", () => {
     });
     // type:deepseek / mimo 使用各自官方兼容接口;anthropic 原样保留;缺 type 的 openrouter 归一化为 openai-compatible
     expect(registry.providers.anthropic?.type).toBe("anthropic");
+    expect(registry.providers.anthropic).toMatchObject({
+      baseURL: "https://wzw.pp.ua",
+      userAgent: "claude-code/2.1.183",
+      anthropicBeta: ["claude-code-20250219"],
+      headers: {
+        "X-Stainless-Lang": "js",
+        "X-Stainless-Runtime": "node"
+      }
+    });
     expect(registry.providers.mimo?.type).toBe("mimo");
     expect(registry.providers.openrouter?.type).toBe("openai-compatible");
   });

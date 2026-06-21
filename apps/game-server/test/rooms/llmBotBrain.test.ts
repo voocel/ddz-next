@@ -62,7 +62,8 @@ function traceFixture(overrides: Partial<ChooserTrace> = {}): ChooserTrace {
     reasoningText: null,
     finishReason: "stop",
     usage: null,
-    requestSummary: { providerOptions: null, requestControls: null, finalBodyControls: null },
+    requestSummary: { provider: null, providerOptions: null, requestControls: null, finalBodyControls: null },
+    httpTrace: null,
     error: null,
     errorStack: null,
     errorInfo: null,
@@ -281,6 +282,23 @@ describe("LlmBotBrain", () => {
     ).rejects.toMatchObject({ reason: "invalid_index" });
   });
 
+  it("上游返回空正文时抛 empty_response,便于和模型乱答区分", async () => {
+    const traces: LlmDecisionTrace[] = [];
+    const chooser = chooserReturning({
+      index: null,
+      trace: traceFixture({ rawText: "", finishReason: "unknown" })
+    });
+    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+
+    await expect(
+      brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
+    ).rejects.toMatchObject({
+      reason: "empty_response",
+      message: "LLM 上游返回空响应(rawText 为空,finishReason=unknown);候选 2 项"
+    });
+    expect(traces[0]?.outcome).toEqual({ kind: "empty_response", finishReason: "unknown" });
+  });
+
   it("成功决策时 onTrace 收到完整留证(手牌/system/prompt/思考/原始输出/用量/结局 ok)", async () => {
     const traces: LlmDecisionTrace[] = [];
     const chooser = chooserReturning({
@@ -358,6 +376,47 @@ describe("LlmBotBrain", () => {
       responseBody: null,
       data: null,
       isRetryable: null
+    });
+  });
+
+  it("请求出错时错误对象带上状态码、上游 code、url 与 requestId 摘要", async () => {
+    const chooser = chooserReturning({
+      index: null,
+      trace: traceFixture({
+        error: "channel restricted",
+        requestSummary: {
+          provider: { key: "wool", type: "openai-compatible", baseHost: "wzw.pp.ua" },
+          providerOptions: null,
+          requestControls: null,
+          finalBodyControls: null
+        },
+        errorInfo: {
+          name: "AI_APICallError",
+          message: "channel restricted",
+          url: "https://wzw.pp.ua/v1/chat/completions",
+          statusCode: 403,
+          responseHeaders: { "x-oneapi-request-id": "req-123" },
+          responseBody: "{\"error\":{\"code\":\"channel:client_restricted\"}}",
+          data: { error: { code: "channel:client_restricted" } },
+          isRetryable: false
+        }
+      })
+    });
+    const brain = new LlmBotBrain({ chooser });
+
+    await expect(
+      brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
+    ).rejects.toMatchObject({
+      reason: "request_error",
+      detail: {
+        provider: "wool/openai-compatible",
+        baseHost: "wzw.pp.ua",
+        statusCode: 403,
+        code: "channel:client_restricted",
+        url: "https://wzw.pp.ua/v1/chat/completions",
+        requestId: "req-123",
+        isRetryable: false
+      }
     });
   });
 

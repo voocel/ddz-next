@@ -217,7 +217,8 @@ describe("DdzRoom crash recovery", () => {
 
     releaseClose();
     await disposing;
-    expect(first.statusUpdates).toEqual(["closed"]);
+    expect(first.statusUpdates).toHaveLength(1);
+    expect(first.statusUpdates[0]).toMatch(/^closed:\d+:colyseus-\d+$/);
 
     const third = createRoomFixture(code, stateResponse(code, "playing", envelope(table)));
     await expect(third.room.onCreate(third.options)).resolves.toBeUndefined();
@@ -304,6 +305,7 @@ interface RoomFixture {
   readonly gameActions: RecordGameActionsInput[];
   /** 房间上报过的状态序列（updateRoomStatus 调用记录） */
   readonly statusUpdates: string[];
+  readonly claims: string[];
   /** 让下一次 updateRoomStatus 挂起到给定 promise 解决，用于验证 dispose 期间的竞态 */
   gateNextStatusUpdate(gate: Promise<void>): void;
   internals(): Record<string, never> & {
@@ -336,6 +338,7 @@ function createRoomFixture(
   };
   const gameActions: RecordGameActionsInput[] = [];
   const statusUpdates: string[] = [];
+  const claims: string[] = [];
   let statusGate: Promise<void> | null = null;
 
   fixtureSequence += 1;
@@ -357,13 +360,22 @@ function createRoomFixture(
       async getRoomState(): Promise<InternalRoomStateResponse> {
         return response;
       },
-      async updateRoomStatus(_code: string, status: string): Promise<void> {
+      async claimRoom(_code: string, ownerId: string): Promise<void> {
+        claims.push(`claim:${ownerId}`);
+      },
+      async refreshRoomClaim(_code: string, ownerId: string): Promise<void> {
+        claims.push(`refresh:${ownerId}`);
+      },
+      async releaseRoomClaim(_code: string, ownerId: string): Promise<void> {
+        claims.push(`release:${ownerId}`);
+      },
+      async updateRoomStatus(_code: string, status: string, ownerId: string): Promise<void> {
         if (statusGate) {
           const gate = statusGate;
           statusGate = null;
           await gate;
         }
-        statusUpdates.push(status);
+        statusUpdates.push(`${status}:${ownerId}`);
       }
     },
     gameActionClient: {
@@ -380,6 +392,7 @@ function createRoomFixture(
     clock,
     gameActions,
     statusUpdates,
+    claims,
     gateNextStatusUpdate: (gate: Promise<void>) => {
       statusGate = gate;
     },

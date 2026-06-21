@@ -1,9 +1,10 @@
-import type { GameActionType, RoomLiveStateEnvelope } from "@ddz/protocol";
+import type { GameActionType, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import type { ApiSyncConfig } from "./config.js";
 import { fetchWithRetry } from "./httpRetry.js";
 
 export interface RecordGameActionsInput {
   roomCode: string;
+  ownerId: string;
   mutationId: string;
   actions: readonly {
     playerId: string | null;
@@ -11,6 +12,8 @@ export interface RecordGameActionsInput {
     type: GameActionType;
     payload: Record<string, unknown>;
   }[];
+  /** 与动作同事务更新的目标房间状态。 */
+  status?: RoomStatus;
   /** 崩溃恢复状态，与动作同事务落库 */
   state?: RoomLiveStateEnvelope;
 }

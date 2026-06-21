@@ -24,15 +24,19 @@ describe("buildReasoningProviderOptions", () => {
     expect(buildReasoningProviderOptions("openai-compatible", "openai", "auto")).toBeUndefined();
   });
 
-  it("anthropic:关闭走 thinking.disabled,强度走 effort(不碰 budgetTokens)", () => {
+  it("anthropic:关闭走 thinking.disabled,强度档显式请求可见 summarized thinking", () => {
     expect(buildReasoningProviderOptions("anthropic", "anthropic", "off")).toEqual({
       anthropic: { thinking: { type: "disabled" } }
     });
-    expect(buildReasoningProviderOptions("anthropic", "anthropic", "low")).toEqual({ anthropic: { effort: "low" } });
-    expect(buildReasoningProviderOptions("anthropic", "anthropic", "medium")).toEqual({
-      anthropic: { effort: "medium" }
+    expect(buildReasoningProviderOptions("anthropic", "anthropic", "low")).toEqual({
+      anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort: "low" }
     });
-    expect(buildReasoningProviderOptions("anthropic", "anthropic", "high")).toEqual({ anthropic: { effort: "high" } });
+    expect(buildReasoningProviderOptions("anthropic", "anthropic", "medium")).toEqual({
+      anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort: "medium" }
+    });
+    expect(buildReasoningProviderOptions("anthropic", "anthropic", "high")).toEqual({
+      anthropic: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" }
+    });
   });
 
   it("deepseek:关闭走 thinking.disabled,强度走官方 reasoning_effort,键固定为 deepseek", () => {

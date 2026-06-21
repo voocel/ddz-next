@@ -161,6 +161,7 @@ pnpm smoke:full-stack
 - `API_ENDPOINT`：Game Server 同步房间状态时访问的 API 地址。
 - `API_SYNC_TIMEOUT_MS`：Game Server 调用 API 内部接口的 HTTP 超时时间，默认 `5000`。
 - `API_SYNC_RETRY_ATTEMPTS` / `API_SYNC_RETRY_DELAY_MS`：Game Server 对内部接口的有限重试配置，默认 `3` / `150`；对局动作写入通过 `mutationId` 做幂等保护后再重试。
+- `ROOM_CLAIM_TTL_MS`：Game Server 持有房间实例租约的 TTL，默认 `60000`。同一房间恢复/运行前必须先在 API 侧 claim，过期后其它实例才可接管，避免多进程同时运行同一房间。
 - `BOT_COUNT`：每个牌桌预置机器人数量，默认 `0`；单人调试可设为 `2`。
 - `BOT_MOVE_DELAY_MS`：机器人出牌延迟。默认不设置，按相位模拟真人思考节奏（自由领出想得久、跟牌/过牌更快、叫抢一个短停顿，均带随机抖动）。设置后变为固定延迟并关闭拟真，供冒烟测试等压成极小值。
 - `TURN_TIMEOUT_MS`：服务端权威回合超时时间，默认 `20000`。
@@ -173,7 +174,7 @@ pnpm smoke:full-stack
 - `BOT_REASONING_EFFORT`：大模型「思考强度」服务端默认，`off`（默认，关闭思考，最快）/ `auto`（跟随模型）/ `low` / `medium` / `high`。出牌决策只需要选合法候选编号，默认关闭可避免推理模型把输出 token 全耗在 reasoning 里而不给最终编号；客户端「设置」里的选择会覆盖它。各 provider 行为：**Anthropic** 各档均生效（`effort` / 关闭走 `thinking.disabled`）；**DeepSeek V4** 双模可真正关闭思考（`thinking.disabled`），但官方 `reasoning_effort` 的 low/medium 会被其服务端归到 high（强度降不下来，只有「关闭」与「高」两档真正不同）；**MiMo** 官方只支持 `thinking.type=enabled|disabled`，不支持 low/medium/high 强度档，因此 `off` 会真正关闭，low/medium/high 都等价于开启，`auto` 跟随模型默认（`mimo-v2.5-pro` / `mimo-v2.5` 默认开启）；**其它 openai-compatible** 无统一关闭语义，关闭会退化为最低档 `low`。
 - `BOT_LLM_TURN_TIMER_MS`：大模型机器人回合在牌桌上展示的倒计时（ms），默认 `30000`。**纯视觉**——和真人一样有个闹钟在转，但到点不触发任何兜底动作（不替模型抢牌），真超时由上面的 `BOT_DECISION_TIMEOUT_MS` 收口。规则机器人则沿用 `TURN_TIMEOUT_MS`。
 - `AI_BATTLE_ENABLED`：是否允许创建使用大模型出牌的房间，默认 `false`。这是成本开关：配置了 provider key 不等于允许用户开大模型对战，演示或测试时再显式设为 `true`。
-- `AI_BATTLE_MAX_ACTIVE`：同一 game-server 进程内允许同时活跃的大模型房间数，默认 `1`。当前部署是单 game-server 实例，足够控制早期成本；多实例横向扩容时应改成共享存储计数。
+- `AI_BATTLE_MAX_ACTIVE`：同一 game-server 进程内允许同时活跃的大模型房间数，默认 `1`。房间唯一性已由 API 侧租约保护；该值仍是单进程成本开关，多实例横向扩容时如需全局成本上限，应改成共享存储计数。
 - `BOT_DECISION_TRACE`：设为 `true` 时把每一手大模型决策落 JSONL 留证（含 prompt / reasoning / 用量 / 延迟 / 已出牌 / 结局），供逐手排错与牌力分析；默认关闭。
 - `BOT_TRACE_DIR`：留证 JSONL 的输出目录（相对仓库根或绝对路径），默认 `logs/llm-traces`，每房一文件 `<房间号>-<起始时间>.jsonl`。
 - `BOT_PROVIDERS_FILE`：供应商注册表 JSON 路径（相对仓库根或绝对路径），默认仓库根 `bot-providers.json`。
@@ -249,8 +250,8 @@ pnpm --filter @ddz/game-server selfplay -- --games 30 --provider deepseek --mode
 - `@ddz/domain`：牌、发牌、牌型识别、比较、提示出牌、准备、叫地主、抢地主、出牌、结算状态机；准备动作会显式返回是否触发新一局，且对局开始后拒绝重复准备；等待/准备阶段支持真人离座并重新压紧座位。
 - `@ddz/protocol`：客户端命令、服务端事件、登录 DTO，覆盖准备、叫地主、抢地主、出牌、过牌、结算、战绩、单局回放和金币流水；结算 payload 校验 3 人结果和零和分数。
 - `@ddz/auth`：HMAC-SHA256 JWT 签发与验签。
-- `@ddz/game-server`：Colyseus 房间，支持 JWT 入房、按房间号隔离牌桌、房间状态同步、服务端权威回合倒计时、超时自动不叫/不抢/过牌/出牌、可配置机器人补位、基于手牌牌力的机器人叫地主/抢地主、机器人出牌基于手牌分解规划领出并按角色配合(不压队友、保留炸弹拦截即将走完的对手)、记牌识别绝对大牌避免浪费在小牌上、可选由**大模型接管出牌决策**(候选编号选择制杜绝非法出牌、给足公开记牌信息、不静默降级、逐手 JSONL 留证)、带公开快照的对局事件写入、断线重连、开局前离房释放座位、准备、叫地主、抢地主、出牌、过牌、结算和显式拒绝非法命令。
-- `@ddz/api`：健康检查、Prisma 数据模型、注册、登录、scrypt 密码哈希、JWT 签发、房间创建、房间列表、快速匹配、受内部 token 保护的房间状态更新和对局事件写入；对局动作批次使用 `mutationId` 幂等写入，`round_settled` 会在同一数据库事务中关闭 Round、写入 RoundPlayer、更新真人用户金币并创建 CoinLedger；机器人参与对局历史但不写 User/CoinLedger；已提供受 JWT 保护的个人战绩、单局回放和金币流水查询。
+- `@ddz/game-server`：Colyseus 房间，支持 JWT 入房、按房间号隔离牌桌、房间租约 claim、房间状态同步、服务端权威回合倒计时、超时自动不叫/不抢/过牌/出牌、可配置机器人补位、基于手牌牌力的机器人叫地主/抢地主、机器人出牌基于手牌分解规划领出并按角色配合(不压队友、保留炸弹拦截即将走完的对手)、记牌识别绝对大牌避免浪费在小牌上、可选由**大模型接管出牌决策**(候选编号选择制杜绝非法出牌、给足公开记牌信息、不静默降级、逐手 JSONL 留证)、带公开快照的对局事件写入、断线重连、开局前离房释放座位、准备、叫地主、抢地主、出牌、过牌、结算和显式拒绝非法命令。
+- `@ddz/api`：健康检查、Prisma 数据模型、注册、登录、scrypt 密码哈希、JWT 签发、房间创建、房间列表、快速匹配、受内部 token 保护的房间状态更新、房间租约和对局事件写入；对局动作批次使用 `mutationId` 幂等写入，动作、公开事件、恢复状态和目标房间状态在同一数据库事务中提交；`round_settled` 会在同一数据库事务中关闭 Round、写入 RoundPlayer、更新真人用户金币并创建 CoinLedger；机器人参与对局历史但不写 User/CoinLedger；回放动作使用每局递增 `seq` 确定排序；已提供受 JWT 保护的个人战绩、单局回放和金币流水查询。
 - `@ddz/web`：React 应用壳 + 登录/注册 + 大厅房间列表 + 选择房间后连接 Phaser 牌桌场景，已接入准备、叫地主、抢地主、提示、出牌、过牌命令和服务端倒计时展示，并在侧栏展示个人战绩、回放事件时间线和金币流水；回放步骤会优先使用历史动作里的公开快照恢复座位、当前玩家、地主、上一手牌和结算摘要，支持手动步进、自动播放和返回实时牌桌；Phaser 已拆成独立懒加载 chunk，避免进入首屏主包；牌桌已经接入迁移后的桌面、桌台、按钮、金币、牌背和基础音效资源。
 
 下一步建议：

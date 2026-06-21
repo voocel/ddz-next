@@ -2,6 +2,7 @@ import type {
   GameActionType,
   RecordGameAction,
   RecordGameActionRequest,
+  RoomStatus,
   RoomActionType,
   RoomLiveStateEnvelope,
   RoundActionType
@@ -20,6 +21,7 @@ export interface RoundRecord {
 export interface GameActionRecord {
   readonly id: string;
   readonly roundId: string;
+  readonly seq: number;
   readonly playerId: string | null;
   readonly playerKind: "human" | "bot" | null;
   readonly type: RoundActionType;
@@ -30,6 +32,7 @@ export interface GameActionRecord {
 export interface RoomEventRecord {
   readonly id: string;
   readonly roomId: string;
+  readonly seq: number;
   readonly playerId: string | null;
   readonly playerKind: "human" | "bot" | null;
   readonly type: RoomActionType;
@@ -64,10 +67,13 @@ export interface GameActionRepository {
   findMutation(roomId: string, mutationId: string): Promise<GameActionMutationRecord | null>;
   recordBatch(input: {
     roomId: string;
+    ownerId: string;
     mutationId: string;
     actionFingerprint: string;
     roomEvents: readonly RoomEventInput[];
     roundActions: readonly RoundActionInput[];
+    /** 与动作同事务更新房间状态；null 表示仅写动作/恢复状态。 */
+    status: RoomStatus | null;
     /** 崩溃恢复状态，与动作同事务 upsert；幂等命中时无需补写（首次提交已含） */
     state: RoomLiveStateEnvelope | null;
   }): Promise<GameActionMutationRecord>;
@@ -86,7 +92,10 @@ export class GameActionService {
       throw new GameActionError("Room not found.", 404);
     }
 
-    const actionFingerprint = createActionFingerprint(input.actions);
+    const actionFingerprint = createActionFingerprint({
+      actions: input.actions,
+      ...(input.status === undefined ? {} : { status: input.status })
+    });
     const existingMutation = await this.actions.findMutation(roomId, input.mutationId);
     if (existingMutation) {
       assertSameMutation(existingMutation, actionFingerprint);
@@ -97,10 +106,12 @@ export class GameActionService {
     const planned = planActions(input.actions, openRound);
     const result = await this.actions.recordBatch({
       roomId,
+      ownerId: input.ownerId,
       mutationId: input.mutationId,
       actionFingerprint,
       roomEvents: planned.roomEvents,
       roundActions: planned.roundActions,
+      status: input.status ?? null,
       state: input.state ?? null
     });
 

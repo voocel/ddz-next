@@ -4,6 +4,8 @@ import { resolveRootPath } from "@ddz/env";
 import type { LlmDecisionTrace } from "./llmBotBrain.js";
 
 export interface LlmTraceSink {
+  /** 当前房间 trace 文件路径,用于失败日志指路。 */
+  readonly file: string;
   /** 记一次出牌决策(fire-and-forget,内部串行写,失败只告警)。 */
   record(trace: LlmDecisionTrace): void;
   /** 等所有挂起的写入落盘(房间 dispose 时调)。 */
@@ -31,6 +33,7 @@ export function createLlmTraceSink(env: NodeJS.ProcessEnv, roomCode: string): Ll
   let tail: Promise<void> = mkdir(dir, { recursive: true }).then(() => undefined);
 
   return {
+    file,
     record(trace) {
       const line = `${JSON.stringify({ ts: new Date().toISOString(), roomCode, turn: turn++, ...trace })}\n`;
       tail = tail

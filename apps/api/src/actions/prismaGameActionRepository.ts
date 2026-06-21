@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import type { RoomLiveStateEnvelope } from "@ddz/protocol";
+import type { RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import { GameActionError } from "./errors.js";
+import { assertRoomStatusTransition } from "../rooms/status.js";
 import type {
   GameActionMutationRecord,
   GameActionRecord,
@@ -21,6 +22,7 @@ const roundSelect = {
 const roomEventSelect = {
   id: true,
   roomId: true,
+  seq: true,
   playerId: true,
   playerKind: true,
   type: true,
@@ -31,6 +33,7 @@ const roomEventSelect = {
 const gameActionSelect = {
   id: true,
   roundId: true,
+  seq: true,
   playerId: true,
   playerKind: true,
   type: true,
@@ -93,103 +96,120 @@ export class PrismaGameActionRepository implements GameActionRepository {
 
   async recordBatch(input: {
     roomId: string;
+    ownerId: string;
     mutationId: string;
     actionFingerprint: string;
     roomEvents: readonly RoomEventInput[];
     roundActions: readonly RoundActionInput[];
+    status: RoomStatus | null;
     state: RoomLiveStateEnvelope | null;
   }): Promise<GameActionMutationRecord> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-      const existingMutation = await tx.gameActionMutation.findUnique({
-        where: {
-          roomId_mutationId: {
-            roomId: input.roomId,
-            mutationId: input.mutationId
-          }
-        },
-        select: mutationSelect
-      });
-      if (existingMutation) {
-        return toMutationRecord(assertSameMutation(existingMutation, input.actionFingerprint));
-      }
-
-      const roomEvents: RoomEventRecord[] = [];
-      const actions: GameActionRecord[] = [];
-      let round = await findOpenRound(tx, input.roomId);
-
-      for (const event of input.roomEvents) {
-        roomEvents.push(await createRoomEvent(tx, input.roomId, event));
-      }
-
-      for (const action of input.roundActions) {
-        if (action.type === "round_started") {
-          // 事务内重查，确保同一房间不存在未结束的局（DB 部分唯一索引兜底）
-          const openRound = await findOpenRound(tx, input.roomId);
-          if (openRound) {
-            throw new GameActionError("Cannot start a round while another round is open.", 409);
-          }
-          round = await tx.round.create({
-            data: {
-              roomId: input.roomId
-            },
-            select: roundSelect
-          });
-        }
-
-        if (!round) {
-          throw new GameActionError(`Cannot record ${action.type} without an open round.`, 409);
-        }
-
-        const created = await tx.gameAction.create({
-          data: {
-            roundId: round.id,
-            playerId: action.playerId,
-            playerKind: action.playerKind,
-            type: action.type,
-            payload: action.payload as Prisma.InputJsonValue
+        await lockRoom(tx, input.roomId);
+        const existingMutation = await tx.gameActionMutation.findUnique({
+          where: {
+            roomId_mutationId: {
+              roomId: input.roomId,
+              mutationId: input.mutationId
+            }
           },
-          select: gameActionSelect
+          select: mutationSelect
         });
-        actions.push(created as GameActionRecord);
-
-        if (action.settlement) {
-          await applySettlement(tx, round.id, action.settlement);
-          round = {
-            ...round,
-            endedAt: new Date()
-          };
+        if (existingMutation) {
+          return toMutationRecord(assertSameMutation(existingMutation, input.actionFingerprint));
         }
-      }
+        await assertRoomClaimOwner(tx, input.roomId, input.ownerId);
 
-      const mutation = await tx.gameActionMutation.create({
-        data: {
-          roomId: input.roomId,
-          mutationId: input.mutationId,
-          actionFingerprint: input.actionFingerprint,
-          roomEventIds: roomEvents.map((event) => event.id),
-          actionIds: actions.map((action) => action.id),
-          roundId: round?.id ?? null
-        },
-        select: mutationSelect
-      });
+        const roomEvents: RoomEventRecord[] = [];
+        const actions: GameActionRecord[] = [];
+        let round = await findOpenRound(tx, input.roomId);
+        let nextRoomEventSeq = await nextRoomEventSequence(tx, input.roomId);
+        const roundSeqs = new Map<string, number>();
 
-      if (input.state) {
-        // dispose 竞态守卫：房间已 closed 时不再写恢复状态（关房流程已删行）
-        const room = await tx.room.findUnique({
-          where: { id: input.roomId },
-          select: { status: true }
-        });
-        if (room && room.status !== "closed") {
-          await tx.roomLiveState.upsert({
-            where: { roomId: input.roomId },
-            update: { state: input.state as unknown as Prisma.InputJsonValue },
-            create: { roomId: input.roomId, state: input.state as unknown as Prisma.InputJsonValue }
+        for (const event of input.roomEvents) {
+          roomEvents.push(await createRoomEvent(tx, input.roomId, nextRoomEventSeq, event));
+          nextRoomEventSeq += 1;
+        }
+
+        for (const action of input.roundActions) {
+          if (action.type === "round_started") {
+            // 事务内重查，确保同一房间不存在未结束的局（DB 部分唯一索引兜底）
+            const openRound = await findOpenRound(tx, input.roomId);
+            if (openRound) {
+              throw new GameActionError("Cannot start a round while another round is open.", 409);
+            }
+            round = await tx.round.create({
+              data: {
+                roomId: input.roomId
+              },
+              select: roundSelect
+            });
+          }
+
+          if (!round) {
+            throw new GameActionError(`Cannot record ${action.type} without an open round.`, 409);
+          }
+
+          let nextActionSeq = roundSeqs.get(round.id);
+          if (nextActionSeq === undefined) {
+            nextActionSeq = await nextGameActionSequence(tx, round.id);
+          }
+          const created = await tx.gameAction.create({
+            data: {
+              roundId: round.id,
+              seq: nextActionSeq,
+              playerId: action.playerId,
+              playerKind: action.playerKind,
+              type: action.type,
+              payload: action.payload as Prisma.InputJsonValue
+            },
+            select: gameActionSelect
           });
-        }
-      }
+          actions.push(created as GameActionRecord);
+          roundSeqs.set(round.id, nextActionSeq + 1);
 
-      return toMutationRecord(mutation);
+          if (action.settlement) {
+            await applySettlement(tx, round.id, action.settlement);
+            round = {
+              ...round,
+              endedAt: new Date()
+            };
+          }
+        }
+
+        const mutation = await tx.gameActionMutation.create({
+          data: {
+            roomId: input.roomId,
+            mutationId: input.mutationId,
+            actionFingerprint: input.actionFingerprint,
+            roomEventIds: roomEvents.map((event) => event.id),
+            actionIds: actions.map((action) => action.id),
+            roundId: round?.id ?? null
+          },
+          select: mutationSelect
+        });
+
+        if (input.state && input.status !== "closed") {
+          // dispose 竞态守卫：房间已 closed 时不再写恢复状态（关房流程已删行）
+          const room = await tx.room.findUnique({
+            where: { id: input.roomId },
+            select: { status: true }
+          });
+          if (room && room.status !== "closed") {
+            await tx.roomLiveState.upsert({
+              where: { roomId: input.roomId },
+              update: { state: input.state as unknown as Prisma.InputJsonValue },
+              create: { roomId: input.roomId, state: input.state as unknown as Prisma.InputJsonValue }
+            });
+          }
+        }
+
+        if (input.status) {
+          await updateRoomStatus(tx, input.roomId, input.status);
+        }
+
+        return toMutationRecord(mutation);
       });
     } catch (error) {
       if (!isUniqueConstraintError(error)) {
@@ -232,6 +252,25 @@ function isUniqueConstraintError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
 }
 
+async function lockRoom(tx: PrismaTransaction, roomId: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT "id"
+    FROM "Room"
+    WHERE "id" = ${roomId}
+    FOR UPDATE
+  `;
+}
+
+async function assertRoomClaimOwner(tx: PrismaTransaction, roomId: string, ownerId: string): Promise<void> {
+  const claim = await tx.roomClaim.findUnique({
+    where: { roomId },
+    select: { ownerId: true }
+  });
+  if (claim?.ownerId !== ownerId) {
+    throw new GameActionError("Room claim is not held by this game server.", 409);
+  }
+}
+
 async function findOpenRound(tx: PrismaTransaction, roomId: string): Promise<RoundRecord | null> {
   return tx.round.findFirst({
     where: {
@@ -245,10 +284,34 @@ async function findOpenRound(tx: PrismaTransaction, roomId: string): Promise<Rou
   });
 }
 
-async function createRoomEvent(tx: PrismaTransaction, roomId: string, event: RoomEventInput): Promise<RoomEventRecord> {
+async function nextRoomEventSequence(tx: PrismaTransaction, roomId: string): Promise<number> {
+  const last = await tx.roomEvent.findFirst({
+    where: { roomId },
+    orderBy: { seq: "desc" },
+    select: { seq: true }
+  });
+  return (last?.seq ?? 0) + 1;
+}
+
+async function nextGameActionSequence(tx: PrismaTransaction, roundId: string): Promise<number> {
+  const last = await tx.gameAction.findFirst({
+    where: { roundId },
+    orderBy: { seq: "desc" },
+    select: { seq: true }
+  });
+  return (last?.seq ?? 0) + 1;
+}
+
+async function createRoomEvent(
+  tx: PrismaTransaction,
+  roomId: string,
+  seq: number,
+  event: RoomEventInput
+): Promise<RoomEventRecord> {
   const created = await tx.roomEvent.create({
     data: {
       roomId,
+      seq,
       playerId: event.playerId,
       playerKind: event.playerKind,
       type: event.type,
@@ -257,6 +320,26 @@ async function createRoomEvent(tx: PrismaTransaction, roomId: string, event: Roo
     select: roomEventSelect
   });
   return created as RoomEventRecord;
+}
+
+async function updateRoomStatus(tx: PrismaTransaction, roomId: string, status: RoomStatus): Promise<void> {
+  const current = await tx.room.findUnique({
+    where: { id: roomId },
+    select: { status: true }
+  });
+  if (!current) {
+    throw new GameActionError("Room not found.", 404);
+  }
+  assertRoomStatusTransition(current.status as RoomStatus, status);
+
+  await tx.room.update({
+    where: { id: roomId },
+    data: { status }
+  });
+  if (status === "closed") {
+    await tx.roomLiveState.deleteMany({ where: { roomId } });
+    await tx.roomClaim.deleteMany({ where: { roomId } });
+  }
 }
 
 async function applySettlement(tx: PrismaTransaction, roundId: string, settlement: RoundSettlementInput): Promise<void> {

@@ -1,13 +1,7 @@
 import type { CreateRoomRequest, RoomDto, RoomListResponse, RoomResponse, RoomStatus } from "@ddz/protocol";
 import { RoomError } from "./errors.js";
 import { createRoomCode, normalizeRoomCode } from "./roomCode.js";
-
-// 房间状态合法转移表：closed 为终态
-const ROOM_STATUS_TRANSITIONS: Record<RoomStatus, readonly RoomStatus[]> = {
-  open: ["playing", "closed"],
-  playing: ["open", "closed"],
-  closed: []
-};
+import { assertRoomStatusTransition } from "./status.js";
 
 export interface RoomRecord {
   readonly id: string;
@@ -26,7 +20,10 @@ export interface RoomRepository {
   listOpenRooms(limit: number): Promise<readonly RoomRecord[]>;
   findRoomByCode(code: string): Promise<RoomRecord | null>;
   createRoom(input: CreateRoomInput): Promise<RoomRecord>;
-  updateRoomStatusByCode(code: string, status: RoomStatus): Promise<RoomRecord | null>;
+  updateRoomStatusByCode(code: string, status: RoomStatus, ownerId: string): Promise<RoomRecord | null>;
+  claimRoom(code: string, ownerId: string, expiresAt: Date, now: Date): Promise<RoomRecord | null>;
+  refreshRoomClaim(code: string, ownerId: string, expiresAt: Date): Promise<boolean>;
+  releaseRoomClaim(code: string, ownerId: string): Promise<void>;
   /** 关闭 updatedAt 早于 cutoff 且从未被使用过（无事件无对局）的 open 房，返回关闭数量 */
   closeStaleOpenRooms(cutoff: Date): Promise<number>;
   /** 读取崩溃恢复状态（信封原样返回，无行则 null） */
@@ -86,7 +83,7 @@ export class RoomService {
     };
   }
 
-  async updateRoomStatus(code: string, status: RoomStatus): Promise<RoomResponse> {
+  async updateRoomStatus(code: string, status: RoomStatus, ownerId: string): Promise<RoomResponse> {
     const normalized = requireRoomCode(code);
     const current = await this.rooms.findRoomByCode(normalized);
     if (!current) {
@@ -94,18 +91,39 @@ export class RoomService {
     }
 
     // 同状态更新仍写库以刷新 updatedAt：game-server 以此作活跃心跳，免于孤儿清扫；非法转移拒绝
-    if (current.status !== status && !ROOM_STATUS_TRANSITIONS[current.status].includes(status)) {
-      throw new RoomError(`Cannot change room status from ${current.status} to ${status}.`, 409);
-    }
+    assertRoomStatusTransition(current.status, status);
 
-    const room = await this.rooms.updateRoomStatusByCode(normalized, status);
+    const room = await this.rooms.updateRoomStatusByCode(normalized, status, requireOwnerId(ownerId));
     if (!room) {
-      throw new RoomError("Room not found.", 404);
+      throw new RoomError("Room claim is not held by this game server.", 409);
     }
 
     return {
       room: toRoomDto(room)
     };
+  }
+
+  async claimRoom(code: string, ownerId: string, ttlMs: number): Promise<RoomResponse> {
+    const normalized = requireRoomCode(code);
+    const room = await this.rooms.claimRoom(normalized, requireOwnerId(ownerId), new Date(Date.now() + ttlMs), new Date());
+    if (!room) {
+      throw new RoomError("Room is already claimed by another game server.", 409);
+    }
+
+    return {
+      room: toRoomDto(room)
+    };
+  }
+
+  async refreshRoomClaim(code: string, ownerId: string, ttlMs: number): Promise<void> {
+    const updated = await this.rooms.refreshRoomClaim(requireRoomCode(code), requireOwnerId(ownerId), new Date(Date.now() + ttlMs));
+    if (!updated) {
+      throw new RoomError("Room claim is not held by this game server.", 409);
+    }
+  }
+
+  async releaseRoomClaim(code: string, ownerId: string): Promise<void> {
+    await this.rooms.releaseRoomClaim(requireRoomCode(code), requireOwnerId(ownerId));
   }
 
   private async generateUniqueCode(): Promise<string> {
@@ -137,4 +155,12 @@ function requireRoomCode(raw: string): string {
     throw new RoomError("Invalid room code.", 400);
   }
   return code;
+}
+
+function requireOwnerId(raw: string): string {
+  const ownerId = raw.trim();
+  if (!ownerId) {
+    throw new RoomError("Claim owner id is required.", 400);
+  }
+  return ownerId;
 }

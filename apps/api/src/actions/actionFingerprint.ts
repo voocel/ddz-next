@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
-import type { RecordGameAction } from "@ddz/protocol";
+import type { RecordGameAction, RoomStatus } from "@ddz/protocol";
 
-export function createActionFingerprint(actions: readonly RecordGameAction[]): string {
-  return createHash("sha256").update(canonicalJson(actions)).digest("hex");
+export function createActionFingerprint(input: {
+  readonly actions: readonly RecordGameAction[];
+  readonly status?: RoomStatus | undefined;
+}): string {
+  return createHash("sha256").update(canonicalJson(input)).digest("hex");
 }
 
 function canonicalJson(value: unknown): string {

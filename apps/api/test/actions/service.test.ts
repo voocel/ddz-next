@@ -5,11 +5,12 @@ import { InMemoryGameActionRepository } from "../helpers";
 describe("GameActionService", () => {
   it("records room events without creating a round", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100001", "room-1");
+    repository.seedRoom("100001", "room-1");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
       roomCode: "100001",
+      ownerId: "owner-1",
       mutationId: mutationId(1),
       actions: [
         {
@@ -38,11 +39,12 @@ describe("GameActionService", () => {
 
   it("creates a round only when round_started is recorded", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100005", "room-5");
+    repository.seedRoom("100005", "room-5");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
       roomCode: "100005",
+      ownerId: "owner-1",
       mutationId: mutationId(2),
       actions: [
         {
@@ -63,11 +65,12 @@ describe("GameActionService", () => {
 
   it("preserves initial hands on round_started replay payloads", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100012", "room-12");
+    repository.seedRoom("100012", "room-12");
     const service = new GameActionService(repository);
 
     await service.record({
       roomCode: "100012",
+      ownerId: "owner-1",
       mutationId: mutationId(12),
       actions: [
         {
@@ -102,6 +105,7 @@ describe("GameActionService", () => {
     await expect(
       service.record({
         roomCode: "100001",
+        ownerId: "owner-1",
         mutationId: mutationId(3),
         actions: [
           {
@@ -119,12 +123,13 @@ describe("GameActionService", () => {
 
   it("applies coin settlement from round_settled actions", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100002", "room-2");
+    repository.seedRoom("100002", "room-2");
     await repository.seedRound("room-2");
     const service = new GameActionService(repository);
 
     const recorded = await service.record({
       roomCode: "100002",
+      ownerId: "owner-1",
       mutationId: mutationId(4),
       actions: [
         {
@@ -166,11 +171,12 @@ describe("GameActionService", () => {
 
   it("returns recorded mutation results without replaying settlement side effects", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100006", "room-6");
+    repository.seedRoom("100006", "room-6");
     await repository.seedRound("room-6");
     const service = new GameActionService(repository);
     const input = {
       roomCode: "100006",
+      ownerId: "owner-1",
       mutationId: mutationId(5),
       actions: [
         {
@@ -193,12 +199,13 @@ describe("GameActionService", () => {
 
   it("rejects reused mutation ids with different actions", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100007", "room-7");
+    repository.seedRoom("100007", "room-7");
     const service = new GameActionService(repository);
     const reusedMutationId = mutationId(6);
 
     await service.record({
       roomCode: "100007",
+      ownerId: "owner-1",
       mutationId: reusedMutationId,
       actions: [
         {
@@ -215,6 +222,7 @@ describe("GameActionService", () => {
     await expect(
       service.record({
         roomCode: "100007",
+        ownerId: "owner-1",
         mutationId: reusedMutationId,
         actions: [
           {
@@ -235,12 +243,13 @@ describe("GameActionService", () => {
 
   it("keeps bot settlement players out of human coin ledgers", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100004", "room-4");
+    repository.seedRoom("100004", "room-4");
     await repository.seedRound("room-4");
     const service = new GameActionService(repository);
 
     await service.record({
       roomCode: "100004",
+      ownerId: "owner-1",
       mutationId: mutationId(7),
       actions: [
         {
@@ -274,12 +283,13 @@ describe("GameActionService", () => {
 
   it("rejects a duplicate settlement carried by a different mutation id", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100008", "room-8");
+    repository.seedRoom("100008", "room-8");
     await repository.seedRound("room-8");
     const service = new GameActionService(repository);
 
     await service.record({
       roomCode: "100008",
+      ownerId: "owner-1",
       mutationId: mutationId(10),
       actions: [
         {
@@ -295,6 +305,7 @@ describe("GameActionService", () => {
     await expect(
       service.record({
         roomCode: "100008",
+        ownerId: "owner-1",
         mutationId: mutationId(11),
         actions: [
           {
@@ -315,12 +326,13 @@ describe("GameActionService", () => {
 
   it("rejects round actions without an open round", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100003", "room-3");
+    repository.seedRoom("100003", "room-3");
     const service = new GameActionService(repository);
 
     await expect(
       service.record({
         roomCode: "100003",
+        ownerId: "owner-1",
         mutationId: mutationId(8),
         actions: [
           {
@@ -353,11 +365,12 @@ describe("GameActionService", () => {
 
   it("stores the live state envelope alongside actions and stays idempotent on retry", async () => {
     const repository = new InMemoryGameActionRepository();
-    repository.rooms.set("100009", "room-9");
+    repository.seedRoom("100009", "room-9");
     const service = new GameActionService(repository);
 
     const request = {
       roomCode: "100009",
+      ownerId: "owner-1",
       mutationId: mutationId(9),
       actions: [
         {
@@ -378,6 +391,89 @@ describe("GameActionService", () => {
     await service.record(request);
     expect(repository.mutations.size).toBe(1);
     expect(repository.roomEvents).toHaveLength(1);
+  });
+
+  it("includes room status in the mutation fingerprint and closes live state explicitly", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.seedRoom("100010", "room-10");
+    const service = new GameActionService(repository);
+    const mutationIdValue = mutationId(13);
+
+    await service.record({
+      roomCode: "100010",
+      ownerId: "owner-1",
+      mutationId: mutationIdValue,
+      status: "playing",
+      actions: [
+        {
+          playerId: "user-1",
+          playerKind: "human",
+          type: "player_joined",
+          payload: { seat: 0 }
+        }
+      ],
+      state: liveStateEnvelope()
+    });
+    expect(repository.liveStates.get("room-10")).toEqual(liveStateEnvelope());
+
+    await expect(
+      service.record({
+        roomCode: "100010",
+        ownerId: "owner-1",
+        mutationId: mutationIdValue,
+        status: "open",
+        actions: [
+          {
+            playerId: "user-1",
+            playerKind: "human",
+            type: "player_joined",
+            payload: { seat: 0 }
+          }
+        ],
+        state: liveStateEnvelope()
+      })
+    ).rejects.toMatchObject({
+      statusCode: 409
+    });
+
+    await service.record({
+      roomCode: "100010",
+      ownerId: "owner-1",
+      mutationId: mutationId(14),
+      status: "closed",
+      actions: [
+        {
+          playerId: null,
+          playerKind: null,
+          type: "room_failed",
+          payload: { reason: "test" }
+        }
+      ],
+      state: liveStateEnvelope()
+    });
+    expect(repository.liveStates.has("room-10")).toBe(false);
+    expect(repository.skippedClosedStateWrites).toBe(1);
+
+    repository.roomClaims.delete("room-10");
+    await expect(
+      service.record({
+        roomCode: "100010",
+        ownerId: "owner-1",
+        mutationId: mutationId(14),
+        status: "closed",
+        actions: [
+          {
+            playerId: null,
+            playerKind: null,
+            type: "room_failed",
+            payload: { reason: "test" }
+          }
+        ],
+        state: liveStateEnvelope()
+      })
+    ).resolves.toMatchObject({
+      roomEventIds: ["room-event-2"]
+    });
   });
 });
 

@@ -43,7 +43,7 @@ describe("HttpRoomStatusClient", () => {
   it("syncs room status with a timeout signal", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "playing")).resolves.toBeUndefined();
+    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "playing", "owner-1")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledWith(new URL("/internal/rooms/100001/status", config.endpoint), {
       method: "PATCH",
       headers: {
@@ -51,8 +51,60 @@ describe("HttpRoomStatusClient", () => {
         "x-ddz-internal-token": "internal-test-token"
       },
       body: JSON.stringify({
+        ownerId: "owner-1",
         status: "playing"
       }),
+      signal: expect.any(AbortSignal)
+    });
+  });
+
+  it("claims, refreshes, and releases room claims with timeout signals", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          room: {
+            id: "room-1",
+            code: "100001",
+            status: "open",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z"
+          }
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+
+    const client = new HttpRoomStatusClient(config);
+    await expect(client.claimRoom("100001", "owner-1", 60_000)).resolves.toBeUndefined();
+    await expect(client.refreshRoomClaim("100001", "owner-1", 60_000)).resolves.toBeUndefined();
+    await expect(client.releaseRoomClaim("100001", "owner-1", 60_000)).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenNthCalledWith(1, new URL("/internal/rooms/100001/claim", config.endpoint), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-ddz-internal-token": "internal-test-token"
+      },
+      body: JSON.stringify({ ownerId: "owner-1", ttlMs: 60_000 }),
+      signal: expect.any(AbortSignal)
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, new URL("/internal/rooms/100001/claim", config.endpoint), {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-ddz-internal-token": "internal-test-token"
+      },
+      body: JSON.stringify({ ownerId: "owner-1", ttlMs: 60_000 }),
+      signal: expect.any(AbortSignal)
+    });
+    expect(fetch).toHaveBeenNthCalledWith(3, new URL("/internal/rooms/100001/claim", config.endpoint), {
+      method: "DELETE",
+      headers: {
+        "content-type": "application/json",
+        "x-ddz-internal-token": "internal-test-token"
+      },
+      body: JSON.stringify({ ownerId: "owner-1", ttlMs: 60_000 }),
       signal: expect.any(AbortSignal)
     });
   });
@@ -93,7 +145,7 @@ describe("HttpRoomStatusClient", () => {
       .mockRejectedValueOnce(new Error("socket reset"))
       .mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "closed")).resolves.toBeUndefined();
+    await expect(new HttpRoomStatusClient(config).updateRoomStatus("100001", "closed", "owner-1")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 

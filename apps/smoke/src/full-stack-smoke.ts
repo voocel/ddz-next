@@ -74,6 +74,10 @@ async function main(): Promise<void> {
   if (!replay.round.actions.some((action) => action.type === "round_settled")) {
     throw new Error("Smoke replay does not contain round_settled.");
   }
+  const actionSeqs = replay.round.actions.map((action) => action.seq);
+  if (!actionSeqs.every((seq, index) => seq === index + 1)) {
+    throw new Error(`Smoke replay action sequence is not contiguous: ${actionSeqs.join(",")}`);
+  }
 
   const ledgers = await getAuthed("/me/coin-ledgers", session.accessToken, coinLedgerResponseSchema);
   if (!ledgers.ledgers.some((ledger) => ledger.roundId === completedRound.id)) {
@@ -211,7 +215,11 @@ async function joinGame(session: LoginResponse, room: RoomDto): Promise<Room> {
   const client = new Client(gameEndpoint);
   return client.joinOrCreate("ddz", {
     accessToken: session.accessToken,
-    roomCode: room.code
+    roomCode: room.code,
+    quickStart: true,
+    botDecisionMode: "rule",
+    botMoveDelayMs: 50,
+    turnTimeoutMs: 3_000
   });
 }
 
