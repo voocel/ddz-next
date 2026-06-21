@@ -9,6 +9,10 @@ describe("demo user seeding", () => {
     expect(readDemoUserConfig({ DEMO_USER_ENABLED: "true" }).enabled).toBe(true);
   });
 
+  it("allows an empty password when disabled", () => {
+    expect(readDemoUserConfig({ DEMO_USER_ENABLED: "false", DEMO_USER_PASSWORD: "" }).enabled).toBe(false);
+  });
+
   it("does nothing when disabled", async () => {
     const prisma = createPrismaMock(null);
 

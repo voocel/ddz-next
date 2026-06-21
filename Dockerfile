@@ -1,6 +1,7 @@
-# syntax=docker/dockerfile:1.7
+ARG NODE_IMAGE=node:22-alpine
+ARG NGINX_IMAGE=nginx:1.27-alpine
 
-FROM node:22-alpine AS base
+FROM ${NODE_IMAGE} AS base
 WORKDIR /app
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -21,6 +22,6 @@ FROM base AS app
 ENV NODE_ENV=production
 COPY --from=build /app /app
 
-FROM nginx:1.27-alpine AS web
+FROM ${NGINX_IMAGE} AS web
 COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html

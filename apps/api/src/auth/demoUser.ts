@@ -22,12 +22,14 @@ const DEFAULT_DEMO_NICKNAME = "Alice";
 const DEFAULT_DEMO_PASSWORD = "secret123";
 
 export function readDemoUserConfig(env: NodeJS.ProcessEnv = process.env): DemoUserConfig {
+  const enabled = readBooleanEnv("DEMO_USER_ENABLED", env.DEMO_USER_ENABLED, false);
+
   return {
     // 默认关闭，必须显式设置 DEMO_USER_ENABLED=true 才会创建演示账号
-    enabled: readBooleanEnv("DEMO_USER_ENABLED", env.DEMO_USER_ENABLED, false),
+    enabled,
     username: readUsername(env.DEMO_USER_USERNAME ?? DEFAULT_DEMO_USERNAME),
     nickname: readNickname(env.DEMO_USER_NICKNAME ?? DEFAULT_DEMO_NICKNAME),
-    password: readPassword(env.DEMO_USER_PASSWORD ?? DEFAULT_DEMO_PASSWORD)
+    password: enabled ? readPassword(env.DEMO_USER_PASSWORD ?? DEFAULT_DEMO_PASSWORD) : DEFAULT_DEMO_PASSWORD
   };
 }
 
