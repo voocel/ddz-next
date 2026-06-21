@@ -1,11 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
+import process from "node:process";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseBotProviderRegistry } from "@ddz/bot-ai";
 import { GameTable } from "@ddz/domain";
 import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import type { RecordGameActionsInput } from "../../src/api/gameActionClient";
 import { DdzRoom } from "../../src/rooms/DdzRoom";
 import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 
+const originalAiBattleEnabled = process.env.AI_BATTLE_ENABLED;
+const originalAiBattleMaxActive = process.env.AI_BATTLE_MAX_ACTIVE;
+const originalBotDecision = process.env.BOT_DECISION;
+
+const llmRegistry = parseBotProviderRegistry(
+  JSON.stringify({
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    providers: {
+      anthropic: { type: "anthropic", api_key: "test-key", models: ["claude-haiku-4-5"] }
+    }
+  })
+);
+
+type RoomCreateOptions = Parameters<DdzRoom["onCreate"]>[0];
+type RoomCreateOptionOverrides = Partial<Omit<RoomCreateOptions, "roomStatusClient" | "gameActionClient" | "roomCode">>;
+type InternalRoomLiveState = NonNullable<InternalRoomStateResponse["state"]>;
+
 describe("DdzRoom crash recovery", () => {
+  afterEach(() => {
+    restoreEnv("AI_BATTLE_ENABLED", originalAiBattleEnabled);
+    restoreEnv("AI_BATTLE_MAX_ACTIVE", originalAiBattleMaxActive);
+    restoreEnv("BOT_DECISION", originalBotDecision);
+  });
+
   it("restores a playing room and resumes scheduling", async () => {
     const code = "100011";
     const table = playingTable(code);
@@ -20,7 +46,7 @@ describe("DdzRoom crash recovery", () => {
     expect(fixture.internals().botIds).toEqual([`bot:${code}:1`, `bot:${code}:2`]);
     expect(fixture.room.maxClients).toBe(1);
     expect(fixture.internals().nicknames.get("human-1")).toBe("Alice");
-    expect(snapshot.players.find((player: { id: string }) => player.id === "human-1")?.connected).toBe(false);
+    expect(snapshot.players.find((player) => player.id === "human-1")?.connected).toBe(false);
     // 回合计时已重新调度（turn_timer 广播 + 计时器挂上）
     expect(fixture.broadcast).toHaveBeenCalledWith(
       "event",
@@ -55,7 +81,7 @@ describe("DdzRoom crash recovery", () => {
     await fixture.room.onCreate(fixture.options);
     await fixture.flushTasks();
 
-    const players = fixture.internals().table.snapshot().players as { id: string; kind: string; ready: boolean }[];
+    const players = fixture.internals().table.snapshot().players;
     expect(players.filter((player) => player.kind === "bot").every((player) => player.ready)).toBe(true);
     // 局间相位的离线真人直接让座（永远等不到其 ready），重连走正常入房路径
     expect(players.find((player) => player.id === "human-1")).toBeUndefined();
@@ -101,6 +127,67 @@ describe("DdzRoom crash recovery", () => {
     const retry = createRoomFixture(code, stateResponse(code, "open", null));
     await expect(retry.room.onCreate(retry.options)).resolves.toBeUndefined();
     await retry.room.onDispose();
+  });
+
+  it("rejects LLM rooms unless AI battle creation is explicitly enabled", async () => {
+    const code = "100022";
+    process.env.AI_BATTLE_ENABLED = "false";
+    const fixture = createRoomFixture(code, stateResponse(code, "open", null), {
+      botDecisionMode: "llm",
+      botRegistry: llmRegistry
+    });
+
+    await expect(fixture.room.onCreate(fixture.options)).rejects.toThrow("AI 对战当前未开启");
+  });
+
+  it("limits active LLM rooms and releases the slot on dispose", async () => {
+    process.env.AI_BATTLE_ENABLED = "true";
+    process.env.AI_BATTLE_MAX_ACTIVE = "1";
+
+    const first = createRoomFixture("100023", stateResponse("100023", "open", null), {
+      botDecisionMode: "llm",
+      botRegistry: llmRegistry
+    });
+    await first.room.onCreate(first.options);
+
+    const second = createRoomFixture("100024", stateResponse("100024", "open", null), {
+      botDecisionMode: "llm",
+      botRegistry: llmRegistry
+    });
+    await expect(second.room.onCreate(second.options)).rejects.toThrow("AI 对战房间已达上限");
+
+    await first.room.onDispose();
+    const third = createRoomFixture("100025", stateResponse("100025", "open", null), {
+      botDecisionMode: "llm",
+      botRegistry: llmRegistry
+    });
+    await expect(third.room.onCreate(third.options)).resolves.toBeUndefined();
+    await third.room.onDispose();
+  });
+
+  it("treats BOT_DECISION=llm rooms as AI rooms and allows bot settings updates", async () => {
+    process.env.AI_BATTLE_ENABLED = "true";
+    process.env.AI_BATTLE_MAX_ACTIVE = "1";
+    process.env.BOT_DECISION = "llm";
+
+    const code = "100026";
+    const fixture = createRoomFixture(code, stateResponse(code, "open", null), { botRegistry: llmRegistry });
+    await fixture.room.onCreate(fixture.options);
+    const client = fixture.bindHumanClient("human-1");
+
+    await fixture.handleCommand(client, {
+      type: "update_bot_settings",
+      provider: "",
+      model: "",
+      reasoningEffort: "off"
+    });
+
+    expect(client.send).toHaveBeenCalledWith("event", expect.objectContaining({ type: "bot_settings_updated" }));
+
+    const second = createRoomFixture("100027", stateResponse("100027", "open", null), { botRegistry: llmRegistry });
+    await expect(second.room.onCreate(second.options)).rejects.toThrow("AI 对战房间已达上限");
+
+    await fixture.room.onDispose();
   });
 
   it("never touches the DB when a failed-create zombie gets auto-disposed", async () => {
@@ -188,15 +275,16 @@ function sweepToSettlement(table: GameTable): void {
   }
 }
 
-function envelope(table: GameTable): RoomLiveStateEnvelope {
-  return {
+function envelope(table: GameTable): InternalRoomLiveState {
+  const state: RoomLiveStateEnvelope = {
     version: 1,
     table: table.dump(),
     nicknames: { "human-1": "Alice" }
   };
+  return state as unknown as InternalRoomLiveState;
 }
 
-function stateResponse(code: string, status: RoomStatus, state: RoomLiveStateEnvelope | null): InternalRoomStateResponse {
+function stateResponse(code: string, status: RoomStatus, state: InternalRoomLiveState | null): InternalRoomStateResponse {
   return {
     room: {
       id: `room-${code}`,
@@ -211,7 +299,7 @@ function stateResponse(code: string, status: RoomStatus, state: RoomLiveStateEnv
 
 interface RoomFixture {
   readonly room: DdzRoom;
-  readonly options: Record<string, unknown>;
+  readonly options: RoomCreateOptions;
   readonly broadcast: ReturnType<typeof vi.fn>;
   readonly clock: { setTimeout: ReturnType<typeof vi.fn>; setInterval: ReturnType<typeof vi.fn> };
   readonly gameActions: RecordGameActionsInput[];
@@ -235,7 +323,11 @@ interface RoomFixture {
 let fixtureSequence = 0;
 
 /** 裸实例 + 最小 Colyseus 桩，避免拉起完整运行时（与 ddzRoomFailRoom.test.ts 同风格） */
-function createRoomFixture(code: string, response: InternalRoomStateResponse): RoomFixture {
+function createRoomFixture(
+  code: string,
+  response: InternalRoomStateResponse,
+  optionOverrides: RoomCreateOptionOverrides = {}
+): RoomFixture {
   const room = new DdzRoom();
   const internals = room as unknown as Record<string, unknown>;
   const broadcast = vi.fn();
@@ -256,8 +348,9 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
   internals.setPrivate = vi.fn();
   internals.onMessage = vi.fn();
 
-  const options = {
+  const options: RoomCreateOptions = {
     roomCode: code,
+    ...optionOverrides,
     roomStatusClient: {
       async createRoom(): Promise<RoomDto> {
         throw new Error("Not used.");
@@ -304,4 +397,12 @@ function createRoomFixture(code: string, response: InternalRoomStateResponse): R
       await (internals.tasks as { enqueue(task: () => Promise<void>): Promise<void> }).enqueue(async () => {});
     }
   };
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }

@@ -3,6 +3,7 @@ import { Room } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
 import {
   commentaryConfigFromEnv,
+  decisionConfigFromEnv,
   LlmCommentator,
   NullCommentator,
   parseBotProviderRegistry,
@@ -65,6 +66,7 @@ const QUICK_START_BOT_COUNT = 2;
 const HEARTBEAT_INTERVAL_MS = 10 * 60_000;
 // 大模型「AI 输出流」节流阈值:增量累积到约一短句(16 字)才广播一条,避免逐 token 的消息风暴。
 const THINKING_MIN_CHARS = 16;
+let activeAiBattleRooms = 0;
 type BotStreamChannel = "reasoning" | "text";
 type BotStreamBuffers = Partial<Record<BotStreamChannel, string>> & {
   readonly choice?: LlmDecisionChoice;
@@ -93,6 +95,7 @@ export class DdzRoom extends Room {
   private botRegistry: BotProviderRegistry | null = null;
   private botBrainHooks: BotBrainHooks = {};
   private botSettingsUpdatesEnabled = false;
+  private aiBattleSlotReserved = false;
   // 机器人人格解说:默认关闭(BOT_CHAT_ENABLED=true 才启用);纯装饰,不参与决策、不持有串行锁。
   // 解说用注册表默认模型,需在 setupRoom 拿到注册表后重建;此处先给空解说兜底。
   private readonly commentary = commentaryConfigFromEnv();
@@ -137,13 +140,14 @@ export class DdzRoom extends Room {
     this.llmBotTurnTimerMs = readLlmBotTurnTimerMs(options.llmBotTurnTimerMs);
     this.roomCode = readRoomCode(options);
 
-    // 同步注册必须在首个 await 之前，并发建房才能被立即拒绝
-    if (liveRoomsByCode.has(this.roomCode)) {
-      throw new Error(`Room ${this.roomCode} is already live in this process.`);
-    }
-    liveRoomsByCode.set(this.roomCode, this.roomId);
-
     try {
+      this.reserveAiBattleSlotIfNeeded(options);
+
+      // 同步注册必须在首个 await 之前，并发建房才能被立即拒绝
+      if (liveRoomsByCode.has(this.roomCode)) {
+        throw new Error(`Room ${this.roomCode} is already live in this process.`);
+      }
+      liveRoomsByCode.set(this.roomCode, this.roomId);
       await this.setupRoom(options);
       this.created = true;
     } catch (error) {
@@ -151,6 +155,7 @@ export class DdzRoom extends Room {
       // __init 武装的 autoDispose 定时器（约 15s）仍会触发 onDispose——
       // 注册项在此先行自清，onDispose 再以 created 标志跳过 DB 收尾
       this.releaseLiveRegistration();
+      this.releaseAiBattleSlot();
       throw error;
     }
   }
@@ -159,7 +164,7 @@ export class DdzRoom extends Room {
     // 注册表持有各 provider 的密钥(仅服务端);未注入时按 env 合成默认 anthropic 注册表。
     const registry = options.botRegistry ?? parseBotProviderRegistry(null);
     this.botRegistry = registry;
-    this.botSettingsUpdatesEnabled = options.botDecisionMode === "llm";
+    this.botSettingsUpdatesEnabled = usesLlmBotDecision(options);
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
     // onStreamDelta 无条件接上(AI 输出流给玩家看的实时流,与 BOT_DECISION_TRACE 落盘正交);规则 bot 永不触发它。
@@ -276,6 +281,7 @@ export class DdzRoom extends Room {
       // 必须等 closed 落库后才释放注册：先释放会让并发建房在状态行删除前
       // 恢复出第二个实例，随后旧实例的 PATCH closed 又会删掉新实例的状态行
       this.releaseLiveRegistration();
+      this.releaseAiBattleSlot();
     }
   }
 
@@ -283,6 +289,22 @@ export class DdzRoom extends Room {
     if (this.roomCode && liveRoomsByCode.get(this.roomCode) === this.roomId) {
       liveRoomsByCode.delete(this.roomCode);
     }
+  }
+
+  private reserveAiBattleSlotIfNeeded(options: RoomCreateOptions): void {
+    if (!usesLlmBotDecision(options)) {
+      return;
+    }
+    reserveAiBattleSlot();
+    this.aiBattleSlotReserved = true;
+  }
+
+  private releaseAiBattleSlot(): void {
+    if (!this.aiBattleSlotReserved) {
+      return;
+    }
+    this.aiBattleSlotReserved = false;
+    releaseAiBattleSlot();
   }
 
   /** 每次落库随动作携带的崩溃恢复信封 */
@@ -1197,6 +1219,51 @@ function readLlmBotTurnTimerMs(value: unknown): number {
     throw new Error("LLM bot turn timer must be a positive integer in milliseconds.");
   }
   return value;
+}
+
+function usesLlmBotDecision(
+  options: Pick<RoomCreateOptions, "botDecisionMode">,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (options.botDecisionMode === "llm") {
+    return true;
+  }
+  if (options.botDecisionMode === "rule") {
+    return false;
+  }
+  return decisionConfigFromEnv(env).useLlm;
+}
+
+function reserveAiBattleSlot(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.AI_BATTLE_ENABLED !== "true") {
+    throw new Error("AI 对战当前未开启。请设置 AI_BATTLE_ENABLED=true 后重试。");
+  }
+
+  const maxActive = readAiBattleMaxActive(env);
+  if (activeAiBattleRooms >= maxActive) {
+    throw new Error(`AI 对战房间已达上限(${maxActive})，请稍后再试。`);
+  }
+  activeAiBattleRooms += 1;
+}
+
+function releaseAiBattleSlot(): void {
+  if (activeAiBattleRooms <= 0) {
+    throw new Error("AI battle slot release underflow.");
+  }
+  activeAiBattleRooms -= 1;
+}
+
+function readAiBattleMaxActive(env: NodeJS.ProcessEnv): number {
+  const raw = env.AI_BATTLE_MAX_ACTIVE?.trim();
+  if (!raw) {
+    return 1;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error("AI_BATTLE_MAX_ACTIVE must be a positive integer.");
+  }
+  return parsed;
 }
 
 function readBotCount(value: unknown): number {
