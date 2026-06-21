@@ -7,6 +7,7 @@ import type {
   MoveSelectionContext,
   MoveStreamDelta,
   MoveStreamHooks,
+  LlmRequestErrorInfo,
   ProviderRequestSummary,
   TokenUsage
 } from "@ddz/bot-ai";
@@ -51,6 +52,7 @@ export interface LlmDecisionTrace {
   readonly finishReason: string | null;
   readonly usage: TokenUsage | null;
   readonly requestSummary: ProviderRequestSummary | null;
+  readonly errorInfo: LlmRequestErrorInfo | null;
   readonly latencyMs: number;
   readonly outcome: LlmDecisionOutcome;
 }
@@ -229,6 +231,7 @@ export class LlmBotBrain implements BotBrain {
       finishReason: trace?.finishReason ?? null,
       usage: trace?.usage ?? null,
       requestSummary: trace?.requestSummary ?? null,
+      errorInfo: trace?.errorInfo ?? null,
       latencyMs,
       outcome
     });

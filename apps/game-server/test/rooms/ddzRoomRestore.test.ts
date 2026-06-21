@@ -1,4 +1,3 @@
-import process from "node:process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseBotProviderRegistry } from "@ddz/bot-ai";
 import { GameTable } from "@ddz/domain";
@@ -7,9 +6,9 @@ import type { RecordGameActionsInput } from "../../src/api/gameActionClient";
 import { DdzRoom } from "../../src/rooms/DdzRoom";
 import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 
-const originalAiBattleEnabled = process.env.AI_BATTLE_ENABLED;
-const originalAiBattleMaxActive = process.env.AI_BATTLE_MAX_ACTIVE;
-const originalBotDecision = process.env.BOT_DECISION;
+const originalAiBattleEnabled = runtimeEnv().AI_BATTLE_ENABLED;
+const originalAiBattleMaxActive = runtimeEnv().AI_BATTLE_MAX_ACTIVE;
+const originalBotDecision = runtimeEnv().BOT_DECISION;
 
 const llmRegistry = parseBotProviderRegistry(
   JSON.stringify({
@@ -131,7 +130,7 @@ describe("DdzRoom crash recovery", () => {
 
   it("rejects LLM rooms unless AI battle creation is explicitly enabled", async () => {
     const code = "100022";
-    process.env.AI_BATTLE_ENABLED = "false";
+    setEnv("AI_BATTLE_ENABLED", "false");
     const fixture = createRoomFixture(code, stateResponse(code, "open", null), {
       botDecisionMode: "llm",
       botRegistry: llmRegistry
@@ -141,8 +140,8 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("limits active LLM rooms and releases the slot on dispose", async () => {
-    process.env.AI_BATTLE_ENABLED = "true";
-    process.env.AI_BATTLE_MAX_ACTIVE = "1";
+    setEnv("AI_BATTLE_ENABLED", "true");
+    setEnv("AI_BATTLE_MAX_ACTIVE", "1");
 
     const first = createRoomFixture("100023", stateResponse("100023", "open", null), {
       botDecisionMode: "llm",
@@ -166,9 +165,9 @@ describe("DdzRoom crash recovery", () => {
   });
 
   it("treats BOT_DECISION=llm rooms as AI rooms and allows bot settings updates", async () => {
-    process.env.AI_BATTLE_ENABLED = "true";
-    process.env.AI_BATTLE_MAX_ACTIVE = "1";
-    process.env.BOT_DECISION = "llm";
+    setEnv("AI_BATTLE_ENABLED", "true");
+    setEnv("AI_BATTLE_MAX_ACTIVE", "1");
+    setEnv("BOT_DECISION", "llm");
 
     const code = "100026";
     const fixture = createRoomFixture(code, stateResponse(code, "open", null), { botRegistry: llmRegistry });
@@ -399,10 +398,25 @@ function createRoomFixture(
   };
 }
 
+type RuntimeEnv = Record<string, string | undefined>;
+
+function runtimeEnv(): RuntimeEnv {
+  const runtime = globalThis as typeof globalThis & { process?: { env?: RuntimeEnv } };
+  if (!runtime.process?.env) {
+    throw new Error("process.env is required for DdzRoom env tests.");
+  }
+  return runtime.process.env;
+}
+
+function setEnv(name: string, value: string): void {
+  runtimeEnv()[name] = value;
+}
+
 function restoreEnv(name: string, value: string | undefined): void {
+  const env = runtimeEnv();
   if (value === undefined) {
-    delete process.env[name];
+    delete env[name];
     return;
   }
-  process.env[name] = value;
+  env[name] = value;
 }

@@ -62,9 +62,10 @@ function traceFixture(overrides: Partial<ChooserTrace> = {}): ChooserTrace {
     reasoningText: null,
     finishReason: "stop",
     usage: null,
-    requestSummary: { providerOptions: null, deepseekControls: null, finalBodyControls: null },
+    requestSummary: { providerOptions: null, requestControls: null, finalBodyControls: null },
     error: null,
     errorStack: null,
+    errorInfo: null,
     ...overrides
   };
 }
@@ -325,7 +326,17 @@ describe("LlmBotBrain", () => {
         rawText: null,
         finishReason: null,
         error: "This operation was aborted",
-        errorStack: "AbortError: ..."
+        errorStack: "AbortError: ...",
+        errorInfo: {
+          name: "AbortError",
+          message: "This operation was aborted",
+          url: null,
+          statusCode: null,
+          responseHeaders: null,
+          responseBody: null,
+          data: null,
+          isRetryable: null
+        }
       })
     });
     const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
@@ -338,6 +349,16 @@ describe("LlmBotBrain", () => {
     expect(trace.outcome).toEqual({ kind: "error", message: "This operation was aborted" });
     expect(trace.system).toBe("你是斗地主高手");
     expect(trace.prompt).toBe("可选出牌...");
+    expect(trace.errorInfo).toEqual({
+      name: "AbortError",
+      message: "This operation was aborted",
+      url: null,
+      statusCode: null,
+      responseHeaders: null,
+      responseBody: null,
+      data: null,
+      isRetryable: null
+    });
   });
 
   it("发起 LLM 出牌请求时先触发 onStreamStart,再透传 reasoning/text 增量", async () => {

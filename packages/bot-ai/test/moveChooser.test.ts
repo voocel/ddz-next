@@ -142,7 +142,27 @@ describe("LlmMoveChooser", () => {
     expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({ providerOptions }));
     expect(decision?.trace.requestSummary).toEqual({
       providerOptions,
-      deepseekControls: { thinking: { type: "disabled" } },
+      requestControls: { thinking: { type: "disabled" } },
+      finalBodyControls: { thinking: { type: "disabled" } }
+    });
+  });
+
+  it("MiMo 的 thinking 控制也进入通用请求摘要", async () => {
+    const providerOptions = { mimo: { thinking: { type: "disabled" } } };
+    streamTextMock.mockReturnValue(
+      fakeResult({
+        parts: [{ type: "text-delta", text: "1" }],
+        text: "1",
+        requestBody: { thinking: { type: "disabled" } }
+      })
+    );
+    const chooser = new LlmMoveChooser({ model: fakeModel, providerOptions });
+
+    const decision = await chooser.choose(context);
+
+    expect(decision?.trace.requestSummary).toEqual({
+      providerOptions,
+      requestControls: { thinking: { type: "disabled" } },
       finalBodyControls: { thinking: { type: "disabled" } }
     });
   });
@@ -161,11 +181,28 @@ describe("LlmMoveChooser", () => {
   });
 
   it("流中出现 error part → 抛错捕获进 trace.error(不静默降级),index 为 null", async () => {
+    const apiError = Object.assign(new Error("该渠道不允许当前客户端使用"), {
+      url: "https://muyuan.do/v1/chat/completions",
+      statusCode: 403,
+      responseHeaders: {
+        "x-oneapi-request-id": "req-1"
+      },
+      responseBody:
+        '{"error":{"code":"channel:client_restricted","message":"该渠道不允许当前客户端使用","type":"new_api_error"}}',
+      data: {
+        error: {
+          code: "channel:client_restricted",
+          message: "该渠道不允许当前客户端使用",
+          type: "new_api_error"
+        }
+      },
+      isRetryable: false
+    });
     streamTextMock.mockReturnValue(
       fakeResult({
         parts: [
           { type: "reasoning-delta", text: "想" },
-          { type: "error", error: new Error("上游 500") }
+          { type: "error", error: apiError }
         ],
         text: "1"
       })
@@ -175,6 +212,25 @@ describe("LlmMoveChooser", () => {
     const decision = await chooser.choose(context, { onDelta: (delta) => deltas.push(delta) });
     expect(deltas).toEqual([{ channel: "reasoning", text: "想" }]);
     expect(decision?.index).toBeNull();
-    expect(decision?.trace.error).toContain("上游 500");
+    expect(decision?.trace.error).toContain("该渠道不允许当前客户端使用");
+    expect(decision?.trace.errorInfo).toEqual({
+      name: "Error",
+      message: "该渠道不允许当前客户端使用",
+      url: "https://muyuan.do/v1/chat/completions",
+      statusCode: 403,
+      responseHeaders: {
+        "x-oneapi-request-id": "req-1"
+      },
+      responseBody:
+        '{"error":{"code":"channel:client_restricted","message":"该渠道不允许当前客户端使用","type":"new_api_error"}}',
+      data: {
+        error: {
+          code: "channel:client_restricted",
+          message: "该渠道不允许当前客户端使用",
+          type: "new_api_error"
+        }
+      },
+      isRetryable: false
+    });
   });
 });

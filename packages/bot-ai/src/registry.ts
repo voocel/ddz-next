@@ -4,9 +4,10 @@ import { z } from "zod";
  * 归一化后的供应商类型,决定走哪个 AI SDK 适配器:
  * - anthropic:原生 @ai-sdk/anthropic(effort / thinking 关闭)。
  * - deepseek:DeepSeek 官方 OpenAI-compatible 接口 + V4 thinking/reasoning_effort 注入。
+ * - mimo:MiMo 官方 OpenAI-compatible 接口 + thinking 开关注入。
  * - openai-compatible:其余一律走 @ai-sdk/openai-compatible(OpenAI / OpenRouter / 本地服务等)。
  */
-export type ProviderType = "anthropic" | "openai-compatible" | "deepseek";
+export type ProviderType = "anthropic" | "openai-compatible" | "deepseek" | "mimo";
 
 /** 一个 provider+model 选择(无密钥):前端下拉与房间决策都用它表达「选哪个模型」。 */
 export interface ModelRef {
@@ -38,7 +39,7 @@ export interface ModelOption {
   readonly providerLabel: string;
 }
 
-// 配置文件按用户习惯用 snake_case;type 缺省/非 anthropic 一律视为 openai-compatible。
+// 配置文件按用户习惯用 snake_case;已知 type 走专用适配分支,缺省/未知 type 视为 openai-compatible。
 const rawProviderSchema = z.object({
   type: z.string().min(1).optional(),
   api_key: z.string().min(1).optional(),
@@ -54,6 +55,7 @@ const rawRegistrySchema = z.object({
 });
 
 type RawRegistry = z.infer<typeof rawRegistrySchema>;
+type RawProvider = z.infer<typeof rawProviderSchema>;
 
 // 无配置文件时合成的默认 Anthropic 模型列表(向后兼容旧的 ANTHROPIC_API_KEY 用法)。
 const DEFAULT_ANTHROPIC_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"] as const;
@@ -92,7 +94,7 @@ function normalize(parsed: RawRegistry): BotProviderRegistry {
   const providers: Record<string, ProviderConfig> = {};
   for (const [name, raw] of Object.entries(parsed.providers)) {
     providers[name] = {
-      type: raw.type === "anthropic" ? "anthropic" : raw.type === "deepseek" ? "deepseek" : "openai-compatible",
+      type: normalizeProviderType(name, raw),
       apiKey: raw.api_key,
       baseURL: raw.base_url,
       models: raw.models,
@@ -104,6 +106,45 @@ function normalize(parsed: RawRegistry): BotProviderRegistry {
   // 声明的默认模型必须真实存在;否则回退到首个可用模型,保证 registry.default 永远可解析。
   const fallback = isAllowedModel(registry, declared) ? declared : firstModelRef(providers);
   return { default: fallback ?? declared, providers };
+}
+
+function normalizeProviderType(name: string, raw: RawProvider): ProviderType {
+  const specializedType = detectSpecializedProviderType(name, raw);
+  if (specializedType && raw.type !== specializedType) {
+    throw new Error(
+      `Provider "${name}" looks like ${specializedType}, but type is "${raw.type ?? "(missing)"}". ` +
+        `Set type to "${specializedType}" so provider-specific thinking controls are applied.`
+    );
+  }
+
+  return raw.type === "anthropic" || raw.type === "deepseek" || raw.type === "mimo"
+    ? raw.type
+    : "openai-compatible";
+}
+
+function detectSpecializedProviderType(name: string, raw: RawProvider): "anthropic" | "deepseek" | "mimo" | null {
+  const providerName = name.toLowerCase();
+  const baseURL = raw.base_url?.toLowerCase() ?? "";
+
+  if (providerName === "anthropic" || baseURL.includes("anthropic.com")) {
+    return "anthropic";
+  }
+
+  if (
+    providerName === "mimo" ||
+    baseURL.includes("xiaomimimo.com")
+  ) {
+    return "mimo";
+  }
+
+  if (
+    providerName === "deepseek" ||
+    baseURL.includes("deepseek.com")
+  ) {
+    return "deepseek";
+  }
+
+  return null;
 }
 
 function firstModelRef(providers: Readonly<Record<string, ProviderConfig>>): ModelRef | null {

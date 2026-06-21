@@ -13,7 +13,7 @@ packages/
   domain/       斗地主规则、发牌、牌型识别、局状态机
   protocol/     Zod 消息协议和 DTO
   auth/         JWT 签发与验签
-  bot-ai/       大模型机器人：多 provider 注册表（anthropic / deepseek / openai-compatible）、LLM 选牌与人格解说
+  bot-ai/       大模型机器人：多 provider 注册表（anthropic / deepseek / mimo / openai-compatible）、LLM 选牌与人格解说
   config/       共享 TypeScript 配置
 ```
 
@@ -35,8 +35,8 @@ packages/
 - **不静默降级**：超时 / 解析失败 / 越界 / 缺 key 一律抛错暴露，绝不偷偷回退规则机器人假装在跑 AI。
 - **全程留证**：`BOT_DECISION_TRACE` 开启后每手决策落一行 JSONL（prompt / reasoning / 用量 / 延迟 / 已出牌），逐手可复盘。
 - **慢决策不卡房间**：决策在串行锁外执行，牌桌上一样有倒计时闹钟（纯视觉、更长），到点不抢牌、继续等模型。
-- **思考强度可调 / 默认关闭**：出牌只需要选编号，默认关闭 DeepSeek thinking；需要观察模型原生推理时，可在「设置」里切到模型默认或高强度。
-- **provider 无关**：`@ddz/bot-ai` 零依赖游戏规则，支持 Anthropic、DeepSeek（V4 双模）以及任意 OpenAI 兼容服务（OpenRouter / 本地模型等），兼容推理类模型。
+- **思考强度可调 / 默认关闭**：出牌只需要选编号，默认关闭支持显式关闭的 thinking；需要观察模型原生推理时，可在「设置」里切到模型默认或高强度。
+- **provider 无关**：`@ddz/bot-ai` 零依赖游戏规则，支持 Anthropic、DeepSeek（V4 双模）、MiMo 以及任意 OpenAI 兼容服务（OpenRouter / 本地模型等），兼容推理类模型。
 
 > 当前只有出牌相位交给大模型，叫 / 抢地主仍走固定规则以隔离实验变量。配置见「多 provider 机器人配置」，牌力验证见「大模型机器人自博弈实验」。
 
@@ -170,7 +170,7 @@ pnpm smoke:full-stack
 - `BOT_CHAT_TIMEOUT_MS` / `BOT_CHAT_MAX_CHARS`：单次解说超时与台词字数上限，默认 `4000` / `40`。
 - `BOT_DECISION`：机器人出牌决策来源，`rule`（默认，规则引擎）或 `llm`（大模型）。设为 `llm` 时，**出牌相位**由模型在 `@ddz/domain` 枚举出的合法走法里选一手；叫/抢地主仍走固定规则（隔离实验变量，只验证 LLM 的出牌能力）。**出牌相位不再静默回退**：模型超时/限流/解析失败/越界一律抛错暴露（线上由房间故障关闭并记日志，selfPlay 里如实记为失败局）；缺 key 则建房直接报错。服务端权威不变（模型只能从合法候选里选）。具体模型由「大模型对战」入口所选或注册表默认决定，决策设计与可观测性详见上文「大模型机器人（项目亮点）」。
 - `BOT_DECISION_TIMEOUT_MS`：大模型单次出牌决策的真超时，默认 `60000`（推理 / thinking 模型单步思考动辄十几秒，给足头寸避免误判失败）。到点 abort 并**抛错暴露**（不回退规则）。注意机器人回合**不受面向真人的 `TURN_TIMEOUT_MS` 管辖**，这是机器人唯一的决策时钟。
-- `BOT_REASONING_EFFORT`：大模型「思考强度」服务端默认，`off`（默认，关闭思考，最快）/ `auto`（跟随模型）/ `low` / `medium` / `high`。出牌决策只需要选合法候选编号，默认关闭可避免 DeepSeek 把输出 token 全耗在 reasoning 里而不给最终编号；客户端「设置」里的选择会覆盖它。各 provider 行为：**Anthropic** 各档均生效（`effort` / 关闭走 `thinking.disabled`）；**DeepSeek V4** 双模可真正关闭思考（`thinking.disabled`），但官方 `reasoning_effort` 的 low/medium 会被其服务端归到 high（强度降不下来，只有「关闭」与「高」两档真正不同）；**其它 openai-compatible** 无统一关闭语义，关闭会退化为最低档 `low`。
+- `BOT_REASONING_EFFORT`：大模型「思考强度」服务端默认，`off`（默认，关闭思考，最快）/ `auto`（跟随模型）/ `low` / `medium` / `high`。出牌决策只需要选合法候选编号，默认关闭可避免推理模型把输出 token 全耗在 reasoning 里而不给最终编号；客户端「设置」里的选择会覆盖它。各 provider 行为：**Anthropic** 各档均生效（`effort` / 关闭走 `thinking.disabled`）；**DeepSeek V4** 双模可真正关闭思考（`thinking.disabled`），但官方 `reasoning_effort` 的 low/medium 会被其服务端归到 high（强度降不下来，只有「关闭」与「高」两档真正不同）；**MiMo** 官方只支持 `thinking.type=enabled|disabled`，不支持 low/medium/high 强度档，因此 `off` 会真正关闭，low/medium/high 都等价于开启，`auto` 跟随模型默认（`mimo-v2.5-pro` / `mimo-v2.5` 默认开启）；**其它 openai-compatible** 无统一关闭语义，关闭会退化为最低档 `low`。
 - `BOT_LLM_TURN_TIMER_MS`：大模型机器人回合在牌桌上展示的倒计时（ms），默认 `30000`。**纯视觉**——和真人一样有个闹钟在转，但到点不触发任何兜底动作（不替模型抢牌），真超时由上面的 `BOT_DECISION_TIMEOUT_MS` 收口。规则机器人则沿用 `TURN_TIMEOUT_MS`。
 - `AI_BATTLE_ENABLED`：是否允许创建使用大模型出牌的房间，默认 `false`。这是成本开关：配置了 provider key 不等于允许用户开大模型对战，演示或测试时再显式设为 `true`。
 - `AI_BATTLE_MAX_ACTIVE`：同一 game-server 进程内允许同时活跃的大模型房间数，默认 `1`。当前部署是单 game-server 实例，足够控制早期成本；多实例横向扩容时应改成共享存储计数。
@@ -188,7 +188,7 @@ cp bot-providers.example.json bot-providers.json   # 仓库根；或用 BOT_PROV
 # 编辑 bot-providers.json，填入各家 api_key / base_url / models
 ```
 
-文件结构（`type` 为 `anthropic` 走 Anthropic 原生适配器，`deepseek` 走 DeepSeek 官方 OpenAI-compatible 接口并注入 V4 `thinking` / `reasoning_effort`，其余/缺省一律走 OpenAI 兼容适配器，覆盖 OpenRouter、MiMo、本地服务等）：
+文件结构（`type` 为 `anthropic` 走 Anthropic 原生适配器，`deepseek` 走 DeepSeek 官方 OpenAI-compatible 接口并注入 V4 `thinking` / `reasoning_effort`，`mimo` 走 MiMo 官方 OpenAI-compatible 接口并注入 `thinking` 开关，其余/缺省一律走通用 OpenAI 兼容适配器，覆盖 OpenRouter、本地服务等）：
 
 ```jsonc
 {
@@ -202,10 +202,19 @@ cp bot-providers.example.json bot-providers.json   # 仓库根；或用 BOT_PROV
       "label": "DeepSeek",         // 可选，前端下拉分组标题
       "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
     },
-    "anthropic": { "type": "anthropic", "api_key": "sk-ant-xxx", "models": ["claude-haiku-4-5"] }
+    "anthropic": { "type": "anthropic", "api_key": "sk-ant-xxx", "models": ["claude-haiku-4-5"] },
+    "mimo": {
+      "type": "mimo",             // MiMo:off 会注入 thinking.disabled;low/medium/high 只能注入 enabled
+      "api_key": "tp-xxx",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "label": "MiMo",
+      "models": ["mimo-v2.5-pro", "mimo-v2.5"]
+    }
   }
 }
 ```
+
+MiMo 的 Token Plan key（`tp-xxxxx`）和普通按量 API key（`sk-xxxxx`）不能混用。`bot-providers.example.json` 按 Token Plan 写的是 `https://token-plan-cn.xiaomimimo.com/v1`；如果你用普通按量 key，则把 `base_url` 改成 MiMo 普通 OpenAI-compatible 地址 `https://api.xiaomimimo.com/v1`。
 
 游戏服务启动时读取该文件，构建注册表并把**无密钥**的模型清单通过 `GET /bot-models` 下发给前端「设置」里的下拉。`bot-providers.json` 缺失时，回退用 `ANTHROPIC_API_KEY` 合成单一 `anthropic` 供应商（向后兼容旧用法）。客户端所选 `{provider, model}` 由 game-server 按注册表校验，非法值自动回退默认。
 

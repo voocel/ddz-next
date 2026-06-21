@@ -49,8 +49,20 @@ export interface TokenUsage {
 
 export interface ProviderRequestSummary {
   readonly providerOptions: Record<string, Record<string, JSONValue>> | null;
-  readonly deepseekControls: Record<string, JSONValue> | null;
+  readonly requestControls: Record<string, JSONValue> | null;
   readonly finalBodyControls: Record<string, JSONValue> | null;
+}
+
+/** LLM API/网络错误的结构化留证。只记录无密钥字段,便于定位 provider 路径、状态码与上游错误体。 */
+export interface LlmRequestErrorInfo {
+  readonly name: string | null;
+  readonly message: string;
+  readonly url: string | null;
+  readonly statusCode: number | null;
+  readonly responseHeaders: Record<string, string> | null;
+  readonly responseBody: string | null;
+  readonly data: JSONValue | null;
+  readonly isRetryable: boolean | null;
 }
 
 /**
@@ -69,6 +81,7 @@ export interface ChooserTrace {
   /** abort/API/网络错误的消息;成功为 null。错误已被捕获进 trace,但调用方仍应据此抛错暴露(不静默)。 */
   readonly error: string | null;
   readonly errorStack: string | null;
+  readonly errorInfo: LlmRequestErrorInfo | null;
 }
 
 export interface MoveDecision {
@@ -198,10 +211,12 @@ export class LlmMoveChooser implements MoveChooser {
           usage: toUsage(usage),
           requestSummary: finalRequestSummary,
           error: null,
-          errorStack: null
+          errorStack: null,
+          errorInfo: null
         }
       };
     } catch (error) {
+      const errorInfo = toRequestErrorInfo(error);
       return {
         index: null,
         trace: {
@@ -213,8 +228,9 @@ export class LlmMoveChooser implements MoveChooser {
           finishReason: null,
           usage: null,
           requestSummary,
-          error: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? (error.stack ?? null) : null
+          error: errorInfo.message,
+          errorStack: error instanceof Error ? (error.stack ?? null) : null,
+          errorInfo
         }
       };
     } finally {
@@ -262,24 +278,54 @@ function toUsage(
   return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
 }
 
+function toRequestErrorInfo(error: unknown): LlmRequestErrorInfo {
+  const record = isPlainRecord(error) ? error : {};
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    name: error instanceof Error ? error.name : typeof record.name === "string" ? record.name : null,
+    message,
+    url: typeof record.url === "string" ? record.url : null,
+    statusCode: typeof record.statusCode === "number" ? record.statusCode : null,
+    responseHeaders: stringRecordOrNull(record.responseHeaders),
+    responseBody: typeof record.responseBody === "string" ? record.responseBody : null,
+    data: isJsonValue(record.data) ? record.data : null,
+    isRetryable: typeof record.isRetryable === "boolean" ? record.isRetryable : null
+  };
+}
+
+function stringRecordOrNull(value: unknown): Record<string, string> | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string") {
+      result[key] = entry;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 function summarizeRequest(providerOptions: Record<string, Record<string, JSONValue>> | undefined): ProviderRequestSummary {
-  const deepseek = providerOptions?.deepseek;
+  const providerControls = Object.values(providerOptions ?? {}).find((options) =>
+    Object.hasOwn(options, "thinking") || Object.hasOwn(options, "reasoning_effort")
+  );
   const controls: Record<string, JSONValue> = {};
-  if (deepseek && Object.hasOwn(deepseek, "thinking")) {
-    const thinking = deepseek.thinking;
+  if (providerControls && Object.hasOwn(providerControls, "thinking")) {
+    const thinking = providerControls.thinking;
     if (thinking !== undefined) {
       controls.thinking = thinking;
     }
   }
-  if (deepseek && Object.hasOwn(deepseek, "reasoning_effort")) {
-    const reasoningEffort = deepseek.reasoning_effort;
+  if (providerControls && Object.hasOwn(providerControls, "reasoning_effort")) {
+    const reasoningEffort = providerControls.reasoning_effort;
     if (reasoningEffort !== undefined) {
       controls.reasoning_effort = reasoningEffort;
     }
   }
   return {
     providerOptions: providerOptions ?? null,
-    deepseekControls: Object.keys(controls).length > 0 ? controls : null,
+    requestControls: Object.keys(controls).length > 0 ? controls : null,
     finalBodyControls: null
   };
 }

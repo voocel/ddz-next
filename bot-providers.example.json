@@ -16,7 +16,7 @@
       "models": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"]
     },
     "mimo": {
-      "type": "openai-compatible",
+      "type": "mimo",
       "api_key": "tp-xxx",
       "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
       "label": "MiMo",

@@ -20,6 +20,7 @@ describe("buildReasoningProviderOptions", () => {
   it("auto 完全不干预(返回 undefined)", () => {
     expect(buildReasoningProviderOptions("anthropic", "anthropic", "auto")).toBeUndefined();
     expect(buildReasoningProviderOptions("deepseek", "deepseek", "auto")).toBeUndefined();
+    expect(buildReasoningProviderOptions("mimo", "mimo", "auto")).toBeUndefined();
     expect(buildReasoningProviderOptions("openai-compatible", "openai", "auto")).toBeUndefined();
   });
 
@@ -44,6 +45,21 @@ describe("buildReasoningProviderOptions", () => {
     // 即使注册表里把它命名成别的(ds-alias),providerOptions 键仍是适配器固定的 "deepseek"
     expect(buildReasoningProviderOptions("deepseek", "ds-alias", "medium")).toEqual({
       deepseek: { thinking: { type: "enabled" }, reasoning_effort: "high" }
+    });
+  });
+
+  it("mimo:官方只支持 thinking 开关,off 关闭,其它强度开启", () => {
+    expect(buildReasoningProviderOptions("mimo", "mimo", "off")).toEqual({
+      mimo: { thinking: { type: "disabled" } }
+    });
+    expect(buildReasoningProviderOptions("mimo", "mimo", "low")).toEqual({
+      mimo: { thinking: { type: "enabled" } }
+    });
+    expect(buildReasoningProviderOptions("mimo", "mimo", "medium")).toEqual({
+      mimo: { thinking: { type: "enabled" } }
+    });
+    expect(buildReasoningProviderOptions("mimo", "mimo", "high")).toEqual({
+      mimo: { thinking: { type: "enabled" } }
     });
   });
 
