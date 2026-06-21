@@ -11,7 +11,11 @@ tmp
 # local env files
 .env
 .env.local
+.env.production
 .env.*.local
+
+# server-local compose override
+docker-compose.prod.blog-network.yml
 
 # 机器人供应商配置(含各家 API key,仅本地/服务端持有)
 bot-providers.json

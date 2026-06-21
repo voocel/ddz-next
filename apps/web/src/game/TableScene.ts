@@ -726,19 +726,22 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     }
 
     const tableX = panelX + 44;
-    const tableY = panelY + 205;
+    const tableY = panelY + 194;
     const tableWidth = panelWidth - 88;
-    const rowHeight = 34;
+    const headerHeight = 32;
+    const rowHeight = 30;
+    const tableHeight = headerHeight + rows.length * rowHeight + 8;
     const table = this.add.graphics();
     table.fillStyle(0xffedd3, 0.9);
-    table.fillRoundedRect(tableX, tableY, tableWidth, 132, 18);
+    table.fillRoundedRect(tableX, tableY, tableWidth, tableHeight, 18);
     table.lineStyle(2, 0xe4b46d, 0.95);
-    table.strokeRoundedRect(tableX, tableY, tableWidth, 132, 18);
+    table.strokeRoundedRect(tableX, tableY, tableWidth, tableHeight, 18);
     table.fillStyle(0xf2c77f, 0.55);
-    table.fillRoundedRect(tableX + 4, tableY + 4, tableWidth - 8, 32, 14);
-    for (let index = 1; index <= 3; index += 1) {
+    table.fillRoundedRect(tableX + 4, tableY + 4, tableWidth - 8, headerHeight, 14);
+    for (let index = 1; index < rows.length; index += 1) {
+      const lineY = tableY + headerHeight + 8 + index * rowHeight;
       table.lineStyle(1, 0xe5c08a, 0.8);
-      table.lineBetween(tableX + 14, tableY + 32 + index * rowHeight, tableX + tableWidth - 14, tableY + 32 + index * rowHeight);
+      table.lineBetween(tableX + 14, lineY, tableX + tableWidth - 14, lineY);
     }
     layer.add(table);
 
@@ -748,15 +751,16 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       fontStyle: "900",
       color: "#8a5c2d"
     } satisfies Phaser.Types.GameObjects.Text.TextStyle;
+    const headerY = tableY + 20;
     layer.add([
-      this.add.text(tableX + 24, tableY + 12, "玩家", headerStyle).setOrigin(0, 0.5),
-      this.add.text(tableX + 238, tableY + 12, "身份", headerStyle).setOrigin(0.5),
-      this.add.text(tableX + 352, tableY + 12, "本局", headerStyle).setOrigin(0.5),
-      this.add.text(tableX + 470, tableY + 12, "总分", headerStyle).setOrigin(0.5)
+      this.add.text(tableX + 24, headerY, "玩家", headerStyle).setOrigin(0, 0.5),
+      this.add.text(tableX + 238, headerY, "身份", headerStyle).setOrigin(0.5),
+      this.add.text(tableX + 352, headerY, "本局", headerStyle).setOrigin(0.5),
+      this.add.text(tableX + 470, headerY, "总分", headerStyle).setOrigin(0.5)
     ]);
 
     rows.forEach((player, index) => {
-      const rowY = tableY + 51 + index * rowHeight;
+      const rowY = tableY + headerHeight + 18 + index * rowHeight;
       const won = player.scoreDelta > 0;
       const name = this.settlementActorName(snapshot, player.playerId);
       const nameColor = player.playerId === settlement.winnerId ? "#9a3d09" : INK;

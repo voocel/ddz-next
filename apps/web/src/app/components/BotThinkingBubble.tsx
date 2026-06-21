@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { GameSnapshotDto } from "@ddz/protocol";
 import { hasBotAiStreamText, type BotThinkingState } from "../../botThinking";
 
@@ -17,7 +17,10 @@ export function BotThinkingBubble({
   localPlayerId: string;
 }) {
   const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
+  const [panelPositions, setPanelPositions] = useState<Record<string, PanelPosition>>({});
+  const layerRef = useRef<HTMLDivElement | null>(null);
   const expandedCardRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<PanelDrag | null>(null);
 
   useEffect(() => {
     if (!expandedPlayerId) {
@@ -71,13 +74,93 @@ export function BotThinkingBubble({
     return null;
   }
 
+  const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>, playerId: string) => {
+    if (event.button !== 0 || isInteractiveTarget(event.target)) {
+      return;
+    }
+    const layer = layerRef.current;
+    const card = expandedCardRef.current;
+    if (!layer || !card) {
+      return;
+    }
+
+    const layerRect = layer.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    dragRef.current = {
+      playerId,
+      pointerId: event.pointerId,
+      offsetX: event.clientX - cardRect.left,
+      offsetY: event.clientY - cardRect.top,
+      width: cardRect.width,
+      height: cardRect.height
+    };
+    setPanelPositions((current) => ({
+      ...current,
+      [playerId]: clampPanelPosition(
+        {
+          x: cardRect.left - layerRect.left,
+          y: cardRect.top - layerRect.top
+        },
+        layerRect,
+        cardRect.width,
+        cardRect.height
+      )
+    }));
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const movePanel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const layer = layerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !layer) {
+      return;
+    }
+
+    const layerRect = layer.getBoundingClientRect();
+    setPanelPositions((current) => ({
+      ...current,
+      [drag.playerId]: clampPanelPosition(
+        {
+          x: event.clientX - layerRect.left - drag.offsetX,
+          y: event.clientY - layerRect.top - drag.offsetY
+        },
+        layerRect,
+        drag.width,
+        drag.height
+      )
+    }));
+  };
+
+  const stopPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   return (
-    <div className="bot-think-layer" aria-live="polite">
-      {bubbles.map((bubble) =>
-        expandedPlayerId === bubble.playerId ? (
-          <div key={bubble.playerId} className={`bot-think bot-think--${bubble.side}`}>
+    <div ref={layerRef} className="bot-think-layer" aria-live="polite">
+      {bubbles.map((bubble) => {
+        const position = panelPositions[bubble.playerId];
+        return expandedPlayerId === bubble.playerId ? (
+          <div
+            key={bubble.playerId}
+            className={`bot-think bot-think--${bubble.side}${position ? " is-dragged" : ""}`}
+            style={panelStyle(position)}
+          >
             <div ref={expandedCardRef} className="bot-think-card">
-              <div className="bot-think-head">
+              <div
+                className="bot-think-head"
+                onPointerDown={(event) => startPanelDrag(event, bubble.playerId)}
+                onPointerMove={movePanel}
+                onPointerUp={stopPanelDrag}
+                onPointerCancel={stopPanelDrag}
+              >
                 <span className="bot-think-title">AI 输出 · {bubble.name}</span>
                 <button
                   type="button"
@@ -114,10 +197,50 @@ export function BotThinkingBubble({
               {bubble.active ? <AiGeneratingSignal variant="preview" /> : null}
             </button>
           </div>
-        )
-      )}
+        );
+      })}
     </div>
   );
+}
+
+interface PanelPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+interface PanelDrag {
+  readonly playerId: string;
+  readonly pointerId: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function panelStyle(position: PanelPosition | undefined): CSSProperties | undefined {
+  if (!position) {
+    return undefined;
+  }
+  return {
+    left: position.x,
+    top: position.y,
+    right: "auto"
+  };
+}
+
+function clampPanelPosition(position: PanelPosition, layerRect: DOMRect, width: number, height: number): PanelPosition {
+  return {
+    x: clamp(position.x, 0, Math.max(0, layerRect.width - width)),
+    y: clamp(position.y, 0, Math.max(0, layerRect.height - height))
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function isInteractiveTarget(target: EventTarget): boolean {
+  return target instanceof HTMLElement && target.closest("button, a, input, select, textarea") !== null;
 }
 
 function previewText(text: string, active: boolean): string {

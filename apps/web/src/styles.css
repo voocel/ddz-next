@@ -884,6 +884,10 @@ input {
   right: 6%;
 }
 
+.bot-think.is-dragged {
+  right: auto;
+}
+
 /* 折叠态:云朵气泡内展示单行流式预览，点击后展开完整面板 */
 .bot-think-preview {
   position: relative;
@@ -1120,6 +1124,13 @@ input {
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 2px solid rgba(92, 55, 26, 0.22);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.bot-think-head:active {
+  cursor: grabbing;
 }
 
 .bot-think-title {
