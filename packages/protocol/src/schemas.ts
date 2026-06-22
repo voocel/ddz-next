@@ -167,6 +167,10 @@ export const updateBotSettingsCommandSchema = z.object({
   reasoningEffort: z.enum(["auto", "off", "low", "medium", "high"])
 });
 
+export const retryBotTurnCommandSchema = z.object({
+  type: z.literal("retry_bot_turn")
+});
+
 export const clientCommandSchema = z.discriminatedUnion("type", [
   readyCommandSchema,
   bidLandlordCommandSchema,
@@ -174,7 +178,8 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   playCardsCommandSchema,
   passCommandSchema,
   leaveCommandSchema,
-  updateBotSettingsCommandSchema
+  updateBotSettingsCommandSchema,
+  retryBotTurnCommandSchema
 ]);
 
 const revealedHandSchema = z.object({
@@ -269,6 +274,13 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("room_failed"),
     reason: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal("bot_decision_failed"),
+    playerId: z.string().min(1),
+    message: z.string().min(1),
+    retryable: z.boolean(),
+    snapshot: gameSnapshotSchema
   }),
   z.object({
     type: z.literal("bot_chat"),

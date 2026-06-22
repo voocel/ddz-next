@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hasBotAiStreamText, reduceThinking, EMPTY_THINKING } from "./botThinking";
+import type { GameSnapshotDto } from "@ddz/protocol";
+import { hasBotAiStreamText, reduceBotDecisionFailed, reduceThinking, EMPTY_THINKING } from "./botThinking";
 
 /** 造一个 bot_ai_stream 事件(测试夹具)。 */
 function ev(
@@ -94,4 +95,83 @@ describe("reduceThinking", () => {
       active: false
     });
   });
+
+  it("LLM 决策失败写入同一个 AI 面板并保留已有输出", () => {
+    let state = reduceThinking(EMPTY_THINKING, ev("bot1", "reasoning", "我在分析", false));
+    state = reduceBotDecisionFailed(state, failed("bot1", "上游限流"));
+
+    expect(state.bot1).toEqual({
+      channels: { reasoning: "我在分析", text: "" },
+      error: { message: "上游限流", retryable: true },
+      active: false
+    });
+    expect(hasBotAiStreamText(state.bot1!)).toBe(true);
+  });
+
+  it("失败后的 done 收尾不覆盖错误,下一次新流再清掉错误", () => {
+    let state = reduceBotDecisionFailed(EMPTY_THINKING, failed("bot1", "上游限流"));
+    state = reduceThinking(state, ev("bot1", "text", "", true));
+
+    expect(state.bot1).toEqual({
+      channels: { reasoning: "", text: "" },
+      error: { message: "上游限流", retryable: true },
+      active: false
+    });
+
+    state = reduceThinking(state, ev("bot1", "text", "", false));
+    expect(state.bot1).toEqual({ channels: { reasoning: "", text: "" }, active: true });
+  });
 });
+
+function failed(playerId: string, message: string) {
+  return {
+    type: "bot_decision_failed",
+    playerId,
+    message,
+    retryable: true,
+    snapshot: snapshot(playerId)
+  } as const;
+}
+
+function snapshot(currentPlayerId: string): GameSnapshotDto {
+  return {
+    phase: "playing",
+    players: [
+      {
+        id: "human-1",
+        kind: "human",
+        seat: 0,
+        ready: true,
+        handCount: 17,
+        connected: true,
+        score: 0
+      },
+      {
+        id: "bot1",
+        kind: "bot",
+        seat: 1,
+        ready: true,
+        handCount: 17,
+        connected: true,
+        score: 0
+      },
+      {
+        id: "bot2",
+        kind: "bot",
+        seat: 2,
+        ready: true,
+        handCount: 17,
+        connected: true,
+        score: 0
+      }
+    ],
+    currentPlayerId,
+    landlordId: "human-1",
+    bidCandidateId: null,
+    landlordCards: [],
+    lastPlay: null,
+    passCount: 0,
+    multiplier: 1,
+    settlement: null
+  };
+}

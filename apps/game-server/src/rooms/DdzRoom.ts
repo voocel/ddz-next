@@ -24,7 +24,13 @@ import { RuleBotBrain } from "./ruleBotBrain.js";
 import { botTurnDelayMs } from "./botTiming.js";
 import { pickBotNicknames } from "./botNames.js";
 import { resolveBotBrain, resolveBotBrainUpdate, type BotBrainHooks } from "./botDecision.js";
-import { LlmBotBrain, takeThinkingChunk, type LlmDecisionChoice, type LlmDecisionTrace } from "./llmBotBrain.js";
+import {
+  LlmBotBrain,
+  LlmDecisionError,
+  takeThinkingChunk,
+  type LlmDecisionChoice,
+  type LlmDecisionTrace
+} from "./llmBotBrain.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
@@ -71,6 +77,10 @@ type BotStreamBuffers = Partial<Record<BotStreamChannel, string>> & {
   readonly choice?: LlmDecisionChoice;
   readonly emitted?: boolean;
 };
+interface PendingBotDecisionFailure {
+  readonly playerId: PlayerId;
+  readonly message: string;
+}
 type RevealedHands = NonNullable<Extract<GameEvent, { type: "round_settled" }>["revealedHands"]>;
 
 /**
@@ -107,6 +117,8 @@ export class DdzRoom extends Room {
   private traceSink: LlmTraceSink | null = null;
   // 大模型「AI 输出流」每个 bot 的待广播片段缓冲(按字数节流);有键即代表本手产生过输出(决定收尾是否发 done)。
   private readonly streamBuffers = new Map<PlayerId, BotStreamBuffers>();
+  private pendingBotDecisionFailure: PendingBotDecisionFailure | null = null;
+  private readonly botDecisionInFlight = new Set<PlayerId>();
   private roomCode!: string;
   // null = 走 botTiming 的拟真区间;非空 = 固定延迟(测试/CI 逃生阀)
   private fixedBotDelayMs: number | null = null;
@@ -479,6 +491,7 @@ export class DdzRoom extends Room {
 
     this.sendSnapshot(client);
     this.sendTurnTimer(client, snapshot);
+    this.sendPendingBotDecisionFailure(client);
     this.turnScheduler.scheduleBotTurn(snapshot);
   }
 
@@ -617,6 +630,9 @@ export class DdzRoom extends Room {
         case "update_bot_settings":
           this.handleBotSettingsUpdate(client, playerId, parsed.data);
           break;
+        case "retry_bot_turn":
+          this.handleRetryBotTurn(playerId);
+          break;
       }
     } catch (error) {
       if (error instanceof RoomPersistenceError) {
@@ -625,6 +641,31 @@ export class DdzRoom extends Room {
       }
       this.sendRejected(client, error instanceof Error ? error.message : "Unknown command error.");
     }
+  }
+
+  private handleRetryBotTurn(playerId: PlayerId): void {
+    const player = this.table.snapshot().players.find((item) => item.id === playerId);
+    if (!player || player.kind !== "human") {
+      throw new Error("只有房间内真人玩家可以重新请求 AI 出牌。");
+    }
+    const pending = this.pendingBotDecisionFailure;
+    if (!pending) {
+      throw new Error("当前没有可重试的 AI 出牌错误。");
+    }
+    const snapshot = this.table.snapshot();
+    if (snapshot.currentPlayerId !== pending.playerId) {
+      this.pendingBotDecisionFailure = null;
+      throw new Error("AI 回合已经变化，不能重试上一手错误。");
+    }
+    if (this.botDecisionInFlight.has(pending.playerId)) {
+      throw new Error("AI 正在重新请求中。");
+    }
+
+    this.pendingBotDecisionFailure = null;
+    this.turnScheduler.scheduleTurnTimer(snapshot);
+    void this.handleBotTurn(pending.playerId, () => this.table.snapshot().currentPlayerId === pending.playerId).catch((error) => {
+      void this.failRoom(error, "Bot retry failed.");
+    });
   }
 
   private handleBotSettingsUpdate(
@@ -881,11 +922,22 @@ export class DdzRoom extends Room {
     if (!isValid() || snapshot.currentPlayerId !== playerId) {
       return;
     }
+    if (this.pendingBotDecisionFailure?.playerId === playerId || this.botDecisionInFlight.has(playerId)) {
+      return;
+    }
 
     let action: BotAction;
+    this.botDecisionInFlight.add(playerId);
     try {
       action = await this.botBrain.decide(snapshot, playerId, this.table.getHand(playerId), this.table.playedCards());
+    } catch (error) {
+      if (error instanceof LlmDecisionError) {
+        this.handleBotDecisionFailure(playerId, error);
+        return;
+      }
+      throw error;
     } finally {
+      this.botDecisionInFlight.delete(playerId);
       // 无论决策成功/抛错(失败将关房),都收尾本手 AI 输出流:flush 剩余片段 + done,清缓冲。
       this.endAiStream(playerId);
     }
@@ -899,8 +951,32 @@ export class DdzRoom extends Room {
     });
   }
 
+  private handleBotDecisionFailure(playerId: PlayerId, error: LlmDecisionError): void {
+    if (this.failed) {
+      return;
+    }
+    const snapshot = this.table.snapshot();
+    if (snapshot.currentPlayerId !== playerId) {
+      return;
+    }
+
+    const message = error.message;
+    this.pendingBotDecisionFailure = { playerId, message };
+    console.error(`[DdzRoom ${this.roomCode}] Bot decision failed; waiting for manual retry.`, error);
+    this.broadcast("event", {
+      type: "bot_decision_failed",
+      playerId,
+      message,
+      retryable: true,
+      snapshot: this.snapshotDto(snapshot)
+    } satisfies GameEvent);
+  }
+
   private async applyBotAction(playerId: PlayerId, action: BotAction): Promise<void> {
     try {
+      if (this.pendingBotDecisionFailure?.playerId === playerId) {
+        this.pendingBotDecisionFailure = null;
+      }
       switch (action.type) {
         case "bid_landlord":
           await this.afterBid(this.table.bidLandlord(playerId, action.called));
@@ -1147,6 +1223,26 @@ export class DdzRoom extends Room {
       snapshot: this.snapshotDto(snapshot),
       hand: toCardsDto(this.table.getHand(playerId)),
       ...this.revealedHandsEventPart(snapshot)
+    } satisfies GameEvent);
+  }
+
+  private sendPendingBotDecisionFailure(client: Client): void {
+    const pending = this.pendingBotDecisionFailure;
+    if (!pending) {
+      return;
+    }
+    const snapshot = this.table.snapshot();
+    if (snapshot.currentPlayerId !== pending.playerId) {
+      this.pendingBotDecisionFailure = null;
+      return;
+    }
+
+    client.send("event", {
+      type: "bot_decision_failed",
+      playerId: pending.playerId,
+      message: pending.message,
+      retryable: true,
+      snapshot: this.snapshotDto(snapshot)
     } satisfies GameEvent);
   }
 

@@ -187,6 +187,11 @@ export function createGameClient(options: GameClientOptions) {
     },
     updateBotSettings(settings: { readonly provider: string; readonly model: string; readonly reasoningEffort: string }): boolean {
       return sendBotSettings(settings);
+    },
+    retryBotTurn() {
+      room?.send("command", {
+        type: "retry_bot_turn"
+      });
     }
   };
 }

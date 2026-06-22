@@ -10,11 +10,13 @@ import { hasBotAiStreamText, type BotThinkingState } from "../../botThinking";
 export function BotThinkingBubble({
   thinking,
   snapshot,
-  localPlayerId
+  localPlayerId,
+  onRetryBotTurn
 }: {
   thinking: BotThinkingState;
   snapshot: GameSnapshotDto | null;
   localPlayerId: string;
+  onRetryBotTurn: () => void;
 }) {
   const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
   const [panelPositions, setPanelPositions] = useState<Record<string, PanelPosition>>({});
@@ -61,9 +63,14 @@ export function BotThinkingBubble({
         playerId,
         name: player.nickname ?? "机器人",
         choice: entry.choice,
+        error: entry.error,
         reasoning: entry.channels.reasoning,
         output: entry.channels.text,
-        preview: previewText(entry.choice ? `选择: ${entry.choice.label}` : entry.channels.text || entry.channels.reasoning, entry.active),
+        preview: previewText(
+          entry.error?.message ?? (entry.choice ? `选择: ${entry.choice.label}` : entry.channels.text || entry.channels.reasoning),
+          entry.active,
+          Boolean(entry.error)
+        ),
         active: entry.active,
         side: relative === 1 ? ("right" as const) : ("left" as const)
       };
@@ -175,7 +182,9 @@ export function BotThinkingBubble({
                 reasoning={bubble.reasoning}
                 output={bubble.output}
                 choice={bubble.choice}
+                error={bubble.error}
                 active={bubble.active}
+                onRetryBotTurn={onRetryBotTurn}
               />
             </div>
           </div>
@@ -183,7 +192,7 @@ export function BotThinkingBubble({
           <div key={bubble.playerId} className={`bot-think bot-think--${bubble.side}`}>
             <button
               type="button"
-              className={`bot-think-preview${bubble.active ? " is-active" : ""}`}
+              className={`bot-think-preview${bubble.active ? " is-active" : ""}${bubble.error ? " has-error" : ""}`}
               onClick={() => setExpandedPlayerId(bubble.playerId)}
               aria-label={`展开 ${bubble.name} 的 AI 输出`}
             >
@@ -243,10 +252,10 @@ function isInteractiveTarget(target: EventTarget): boolean {
   return target instanceof HTMLElement && target.closest("button, a, input, select, textarea") !== null;
 }
 
-function previewText(text: string, active: boolean): string {
+function previewText(text: string, active: boolean, failed: boolean): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= 42) {
-    return normalized || (active ? "AI开始分析..." : "AI 输出");
+    return normalized || (failed ? "AI 出牌失败" : active ? "AI开始分析..." : "AI 输出");
   }
   return `…${normalized.slice(-42)}`;
 }
@@ -255,12 +264,16 @@ function BotThinkingBody({
   reasoning,
   output,
   choice,
-  active
+  error,
+  active,
+  onRetryBotTurn
 }: {
   readonly reasoning: string;
   readonly output: string;
   readonly choice: { readonly index: number; readonly label: string } | undefined;
+  readonly error: { readonly message: string; readonly retryable: boolean } | undefined;
   readonly active: boolean;
+  readonly onRetryBotTurn: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -270,7 +283,7 @@ function BotThinkingBody({
       return;
     }
     body.scrollTop = body.scrollHeight;
-  }, [reasoning, output, choice?.index, choice?.label, active]);
+  }, [reasoning, output, choice?.index, choice?.label, error?.message, active]);
 
   return (
     <div ref={bodyRef} className="bot-think-body">
@@ -298,6 +311,20 @@ function BotThinkingBody({
           <div>
             {choice.index + 1}: {choice.label}
           </div>
+        </section>
+      ) : null}
+      {error ? (
+        <section className="bot-think-section bot-think-error">
+          <div className="bot-think-label">错误</div>
+          <div className="bot-think-error-message">{error.message}</div>
+          <button
+            type="button"
+            className="bot-think-retry"
+            disabled={!error.retryable || active}
+            onClick={onRetryBotTurn}
+          >
+            重新请求
+          </button>
         </section>
       ) : null}
       {active ? <AiGeneratingSignal variant="panel" /> : null}

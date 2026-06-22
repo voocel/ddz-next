@@ -47,7 +47,12 @@ export function TableOverlay({ app, tableRef, onOpenSettings }: TableOverlayProp
     <>
       {showLiveOverlays ? (
         <>
-          <BotThinkingBubble thinking={thinking} snapshot={snapshot} localPlayerId={session.user.id} />
+          <BotThinkingBubble
+            thinking={thinking}
+            snapshot={snapshot}
+            localPlayerId={session.user.id}
+            onRetryBotTurn={() => client.retryBotTurn()}
+          />
           <SeatTurnClock snapshot={snapshot} turnTimer={turnTimer} localPlayerId={session.user.id} theme={theme} />
         </>
       ) : null}

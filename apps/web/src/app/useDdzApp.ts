@@ -8,7 +8,7 @@ import { createMatchmakingClient } from "../net/matchmakingClient";
 import { loadTheme, saveTheme, type ThemeId } from "../theme";
 import { loadAudioLevels, saveAudioLevels, type AudioLevels } from "../audio";
 import { loadBotPreferences, saveBotPreferences, type BotPreferences, type ReasoningEffort } from "../botPreferences";
-import { reduceThinking, EMPTY_THINKING, type BotThinkingState } from "../botThinking";
+import { reduceBotDecisionFailed, reduceThinking, EMPTY_THINKING, type BotThinkingState } from "../botThinking";
 import type { TurnTimerState } from "./types";
 import { useAuthSession } from "./useAuthSession";
 import { useHistoryReplay } from "./useHistoryReplay";
@@ -161,6 +161,10 @@ export function useDdzApp() {
           if (event.type === "bot_ai_stream") {
             setThinking((current) => reduceThinking(current, event));
             // AI 输出流不进 events 反馈行(它走座位气泡),避免刷屏挤掉真正的出牌/提示反馈。
+            return;
+          }
+          if (event.type === "bot_decision_failed") {
+            setThinking((current) => reduceBotDecisionFailed(current, event));
             return;
           }
           if (event.type === "bot_settings_updated") {

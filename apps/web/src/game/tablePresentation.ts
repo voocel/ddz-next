@@ -62,6 +62,7 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
     case "turn_timer":
     case "player_connection_changed":
     case "bot_ai_stream":
+    case "bot_decision_failed":
     case "bot_settings_updated":
       return null;
     case "player_joined":
