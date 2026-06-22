@@ -453,14 +453,18 @@ function isJsonValue(value: unknown): value is JSONValue {
 
 function buildSystem(role: "landlord" | "farmer"): string {
   const roleLabel = role === "landlord" ? "地主" : "农民";
-  return [
+  const lines = [
     `你是斗地主高手,当前是${roleLabel}。`,
     `一局三人:地主 1 人 对 农民 2 人;两个农民是一队、目标一致,要合力让地主出不完牌。`,
     `你会看到自己的完整手牌、各家身份/剩牌/公开明牌、上一手由谁打出,以及若干从 1 开始编号的合法出牌选项,只能从中选一个。`,
     `目标:打赢这一局——地主要尽快出完牌,农民要和队友配合拦截地主。`,
+    role === "farmer"
+      ? `农民策略倾向:跟地主牌时不要因牌小就默认过牌;若用低代价小牌可阻断地主连续清牌,要认真考虑接管牌权。若必须消耗2、王、炸弹或严重拆坏关键牌型,可以过牌。跟队友牌时通常不抢队友牌权,除非接手后收益明显更高。`
+      : `地主策略倾向:优先减少手牌和保持出牌权;小牌可用于清理牌型,但要警惕农民用低代价接管牌权。`,
     `所有可见文字都必须使用简体中文;如模型支持独立思考通道,思考通道也必须使用简体中文简短分析。`,
     `快速判断后立刻给答案。最终回复只输出你选择的那个选项的编号数字(例如 2),不要复述牌型、不要解释、不要任何其它文字或标点。`
-  ].join("");
+  ];
+  return lines.join("");
 }
 
 export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
@@ -472,16 +476,34 @@ export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
   if (ctx.playedCards.length > 0) {
     lines.push(`本局已出:${ctx.playedCards.join(" ")}。`);
   }
+  const focus = decisionFocus(ctx);
   lines.push(
     `其他两家:${opponents}。`,
     ctx.lastPlay
       ? `上一手:${ctx.lastPlay.by}打出 ${ctx.lastPlay.description},现在轮到你跟牌(压得过可压、也可过牌)。`
       : `现在轮到你领出,可任意出牌。`,
+    ...(focus ? [`本手重点:${focus}`] : []),
     `可选出牌(编号: 描述):`,
     options,
     `请选择最优的一手。如有独立思考通道,先用简体中文简短分析;最终只输出一个编号数字(1 到 ${ctx.candidates.length}),不要任何其它文字。`
   );
   return lines.join("\n");
+}
+
+function decisionFocus(ctx: MoveSelectionContext): string | null {
+  if (!ctx.lastPlay) {
+    return "你在领出。请优先比较一次能走掉多少张、剩余牌型是否顺畅、以及是否需要保留关键控制牌。";
+  }
+  if (ctx.role === "farmer" && ctx.lastPlay.by === "地主") {
+    return "上一手来自地主。过牌会增加地主连续清牌和保持牌权的机会;请比较最小可压代价与放地主继续出牌的风险,不要只因为牌小就默认过。";
+  }
+  if (ctx.role === "farmer" && ctx.lastPlay.by === "队友") {
+    return "上一手来自队友。农民之间以配合为先,通常不要无意义抢队友牌权;只有接手后能明显压制地主或更快走牌时再压。";
+  }
+  if (ctx.role === "landlord") {
+    return "你在跟农民牌。请比较抢回牌权的收益、消耗控制牌的代价、以及过牌后农民继续配合走牌的风险。";
+  }
+  return null;
 }
 
 function formatOpponentInfo(opponent: OpponentInfo): string {

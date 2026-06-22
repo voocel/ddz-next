@@ -1506,15 +1506,234 @@ input {
   }
 }
 
-.table-settled-dock {
+.settlement-overlay {
   position: absolute;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  place-items: center;
+  padding: clamp(72px, 10vh, 92px) 18px clamp(72px, 10vh, 96px);
+  pointer-events: none;
+}
+
+.settlement-panel {
+  position: relative;
+  width: min(760px, 88vw);
+  max-height: min(560px, 76vh);
+  padding: 58px 24px 24px;
+  color: var(--ink);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 238, 198, 0.98));
+  border: 5px solid var(--wood-2);
+  border-radius: var(--r-l);
+  box-shadow:
+    0 10px 0 rgba(140, 83, 24, 0.6),
+    0 28px 42px rgba(50, 28, 4, 0.34),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.62);
+  pointer-events: auto;
+  animation: modal-pop 180ms var(--pop);
+}
+
+.settlement-panel-body {
+  display: grid;
+  gap: 12px;
+  max-height: calc(min(560px, 76vh) - 92px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px;
+}
+
+.settlement-ribbon {
+  position: absolute;
+  top: -38px;
   left: 50%;
-  bottom: clamp(118px, 17vh, 150px);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 18px;
+  display: grid;
+  width: 330px;
+  height: 82px;
+  padding-bottom: 10px;
+  place-items: center;
+  color: #fff;
+  font-size: 29px;
+  font-weight: 900;
+  text-shadow: 0 3px 0 rgba(80, 40, 0, 0.45);
+  background: var(--asset-ribbon) center / 100% 100% no-repeat;
+  filter: drop-shadow(0 6px 12px rgba(50, 28, 4, 0.38));
   transform: translateX(-50%);
+}
+
+.settlement-result {
+  justify-self: center;
+  min-width: 118px;
+  padding: 8px 26px 10px;
+  color: #fff8de;
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  border: 3px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.22),
+    0 4px 0 rgba(76, 42, 12, 0.28);
+  text-shadow: 0 2px 0 rgba(70, 30, 0, 0.42);
+}
+
+.settlement-result.is-win {
+  background: #9a3d09;
+}
+
+.settlement-result.is-lose {
+  background: #31506e;
+}
+
+.settlement-panel h2 {
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.settlement-metrics {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settlement-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  text-align: center;
+  background: rgba(140, 83, 24, 0.12);
+  border: 2px solid rgba(232, 189, 119, 0.75);
+  border-radius: var(--r-m);
+}
+
+.settlement-metric span {
+  color: #9b6a35;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.settlement-metric strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 900;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settlement-spring {
+  position: absolute;
+  top: -52px;
+  right: 0;
+  padding: 8px 18px 9px;
+  color: #fff8de;
+  font-weight: 900;
+  background: #bd4a0b;
+  border: 2px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  box-shadow: 0 4px 0 rgba(76, 42, 12, 0.24);
+}
+
+.settlement-scoreboard {
+  overflow: hidden;
+  background: rgba(255, 237, 211, 0.9);
+  border: 2px solid rgba(228, 180, 109, 0.95);
+  border-radius: var(--r-m);
+}
+
+.settlement-scoreboard-head,
+.settlement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) 92px 92px 92px;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 38px;
+  padding: 0 18px;
+}
+
+.settlement-scoreboard-head {
+  min-height: 40px;
+  color: #8a5c2d;
+  font-size: 15px;
+  font-weight: 900;
+  background: rgba(242, 199, 127, 0.56);
+}
+
+.settlement-row {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.settlement-row + .settlement-row {
+  border-top: 1px solid rgba(229, 192, 138, 0.82);
+}
+
+.settlement-row.is-winner .settlement-player {
+  color: #9a3d09;
+}
+
+.settlement-player {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settlement-winner-mark {
+  margin-right: 8px;
+  color: #d64b1f;
+  font-size: 14px;
+}
+
+.settlement-role {
+  justify-self: center;
+  min-width: 58px;
+  padding: 3px 12px 5px;
+  color: #fff8de;
+  text-align: center;
+  border: 2px solid rgba(255, 255, 255, 0.52);
+  border-radius: 999px;
+  box-shadow: 0 2px 0 rgba(76, 42, 12, 0.26);
+}
+
+.settlement-role--landlord {
+  background: #bd4a0b;
+}
+
+.settlement-role--farmer {
+  background: #33705a;
+}
+
+.settlement-delta {
+  justify-self: center;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settlement-delta.is-positive {
+  color: #c23f1d;
+}
+
+.settlement-delta.is-negative {
+  color: #2f6f9d;
+}
+
+.settlement-row > span:last-child {
+  justify-self: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.settlement-actions {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 6px;
 }
 
 .table-replay-dock {
@@ -1810,6 +2029,70 @@ h2 {
 
   .bot-think-card {
     width: min(460px, 92vw);
+  }
+
+  .settlement-overlay {
+    padding: 70px 10px 58px;
+  }
+
+  .settlement-panel {
+    width: min(520px, 94vw);
+    padding: 52px 12px 18px;
+  }
+
+  .settlement-panel-body {
+    max-height: calc(76vh - 76px);
+    padding: 0 6px;
+  }
+
+  .settlement-ribbon {
+    width: 284px;
+    height: 70px;
+    font-size: 24px;
+  }
+
+  .settlement-panel h2 {
+    font-size: 20px;
+  }
+
+  .settlement-metrics {
+    gap: 8px;
+  }
+
+  .settlement-metric {
+    padding: 9px 8px;
+  }
+
+  .settlement-metric strong {
+    font-size: 17px;
+  }
+
+  .settlement-scoreboard-head,
+  .settlement-row {
+    grid-template-columns: minmax(0, 1fr) 62px 70px 62px;
+    column-gap: 6px;
+    padding: 0 10px;
+  }
+
+  .settlement-scoreboard-head {
+    font-size: 12px;
+  }
+
+  .settlement-row {
+    font-size: 14px;
+  }
+
+  .settlement-role {
+    min-width: 0;
+    padding: 3px 8px 5px;
+  }
+
+  .settlement-delta {
+    font-size: 17px;
+  }
+
+  .settlement-actions {
+    gap: 10px;
   }
 
   /* 窄屏允许 hud 换行，配合匹配条独占一行（match-bar 媒体覆写见下，须置于其基础规则之后才生效） */

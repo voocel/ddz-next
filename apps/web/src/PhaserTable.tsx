@@ -15,6 +15,10 @@ export interface PhaserTableHandle {
   alertTimeout(): void;
 }
 
+/**
+ * Phaser 只承载牌桌舞台：牌、座位、选牌、动画、音效。
+ * 业务面板和按钮放在 TableOverlay，避免 DOM UI 与 canvas 坐标布局互相牵扯。
+ */
 interface PhaserTableProps {
   readonly events: readonly GameEvent[];
   readonly localPlayerId: string;

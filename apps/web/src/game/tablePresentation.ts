@@ -90,27 +90,6 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
   }
 }
 
-export function describeSettlement(snapshot: GameSnapshotDto, localPlayerId: string): readonly string[] {
-  if (!snapshot.settlement) {
-    return [];
-  }
-
-  const actor = (playerId: string): string => formatActor(playerId, localPlayerId, snapshotNickname(snapshot, playerId));
-
-  return [
-    `赢家 ${actor(snapshot.settlement.winnerId)}`,
-    `地主 ${actor(snapshot.settlement.landlordId)}`,
-    `倍数 x${snapshot.settlement.multiplier}${snapshot.settlement.spring ? "（春天）" : ""}`,
-    ...snapshot.settlement.players
-      .slice()
-      .sort((a, b) => a.seat - b.seat)
-      .map((player) => {
-        const role = player.role === "landlord" ? "地主" : "农民";
-        return `${actor(player.playerId)}  ${role}  ${formatScore(player.scoreDelta)}  总分 ${player.totalScore}`;
-      })
-  ];
-}
-
 export function formatActor(playerId: string, localPlayerId: string, nickname?: string): string {
   if (playerId === localPlayerId) {
     return "你";

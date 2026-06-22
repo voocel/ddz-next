@@ -52,6 +52,13 @@ packages/
 - 身份可信：API 签发 JWT，Game Server 只信 token claims。
 - Debug-first：真实失败必须暴露，避免 mock 成功、静默 fallback 和吞错。
 
+牌桌前端边界：
+
+- React 负责业务 UI：大厅/牌桌 HUD、按钮、设置、AI 输出流、回放控制、结算弹窗、错误与连接状态。
+- Phaser 负责舞台表现：牌、座位、选牌命中、发牌/出牌/道具/炸弹/金币等动画、音效。
+- 数据流保持单向：服务端事件进入 React 状态，再同步给 `PhaserTable` 更新舞台；Phaser 不请求网络，不承接业务弹窗。
+- 新功能判断规则：需要 DOM 表单、滚动文本、可访问按钮或弹窗，放 React；需要连续动画、物理坐标、牌对象命中或音效，放 Phaser。
+
 ## 本地开发
 
 ```bash

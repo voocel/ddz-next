@@ -266,6 +266,69 @@ describe("LlmMoveChooser", () => {
     );
   });
 
+  it("农民 prompt 给出拦截地主的软策略,但不强制必须压牌", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "1" }], text: "1" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+    const farmerContext: MoveSelectionContext = {
+      ...context,
+      role: "farmer",
+      opponents: [
+        { label: "队友", handCount: 17, revealedCards: [] },
+        { label: "地主", handCount: 19, revealedCards: [] }
+      ],
+      lastPlay: { by: "地主", description: "单张3" },
+      candidates: ["过牌(不出)", "单张4", "单张A"]
+    };
+
+    await chooser.choose(farmerContext);
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: expect.stringContaining("若用低代价小牌可阻断地主连续清牌,要认真考虑接管牌权")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: expect.stringContaining("若必须消耗2、王、炸弹或严重拆坏关键牌型,可以过牌")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("上一手来自地主。过牌会增加地主连续清牌和保持牌权的机会")
+      })
+    );
+  });
+
+  it("农民跟队友牌时提示以配合为先,避免无意义抢队友牌权", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "1" }], text: "1" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose({
+      ...context,
+      role: "farmer",
+      lastPlay: { by: "队友", description: "单张7" }
+    });
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("上一手来自队友。农民之间以配合为先")
+      })
+    );
+  });
+
+  it("领出时提示比较走牌效率、剩余牌型和控制牌保留", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "2" }], text: "2" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose({ ...context, lastPlay: null, candidates: ["单张3", "顺子至A(7张)"] });
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("你在领出。请优先比较一次能走掉多少张")
+      })
+    );
+  });
+
   it("流中出现 error part → 抛错捕获进 trace.error(不静默降级),index 为 null", async () => {
     const apiError = Object.assign(new Error("该渠道不允许当前客户端使用"), {
       url: "https://muyuan.do/v1/chat/completions",

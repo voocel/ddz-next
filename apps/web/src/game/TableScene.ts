@@ -3,22 +3,21 @@ import { identifyCombination, suggestPlay, type CardId } from "@ddz/domain";
 import { gameSnapshotSchema } from "@ddz/protocol";
 import type { CardDto, GameEvent, GameSnapshotDto, RoundReplayDto } from "@ddz/protocol";
 import { describeSelectedCards, toDomainCard, validateSelectedPlay } from "./playValidation";
-import { createCardFace, formatCard, isRed } from "./cardFace";
-import { HandSelection, type HandDragResult, type RenderedHandCard } from "./handSelection";
+import { HandSelection, type HandDragResult } from "./handSelection";
 import { cardsSoundKey, SOUND_FILES, type SoundKey } from "./sounds";
 import type { AudioLevels } from "../audio";
 import {
   describeEventFeedback,
   describePhasePrompt,
   formatActor,
-  formatCardId,
   formatReplayAction,
-  formatScore,
-  isRedCardId,
   parseReplayCardIds
 } from "./tablePresentation";
-import { getTableDevicePixelRatio, TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
-import { AVATAR_COUNT, avatarIndexes, themeAsset, type ThemeId } from "../theme";
+import { TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
+import { AVATAR_COUNT, themeAsset, type ThemeId } from "../theme";
+import { HandLayer, TableCardLayers } from "./cardLayers";
+import { SeatLayer } from "./seatLayer";
+import { TABLE_INK, TABLE_TEXT_STYLE } from "./tableStage";
 
 export interface TableGameBridge {
   applyEvent(event: GameEvent): void;
@@ -43,29 +42,6 @@ interface TableSceneOptions {
   readonly onPlay: (cards: readonly CardId[]) => void;
 }
 
-const TEXT_STYLE = {
-  fontFamily: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
-  fontSize: "16px",
-  fontStyle: "700",
-  color: "#fff6e0",
-  resolution: getTableDevicePixelRatio()
-} satisfies Phaser.Types.GameObjects.Text.TextStyle;
-
-const INK = "#5b3a1e";
-const INK_SOFT = "#7a5a36";
-
-// 按相对本地玩家的座位渲染：0 = 自己（左下角），1 = 下家（右上），2 = 上家（左上）
-const RELATIVE_SEAT_POSITIONS = [
-  { x: 130, y: 648 },
-  { x: 1064, y: 300 },
-  { x: 216, y: 300 }
-] as const;
-// 出牌展示区回到上半部居中，把下半部让给 HTML 操作控制行。
-const LAST_PLAY_Y = 330;
-// 手牌横排贴底；选中的牌上抬 20px
-const HAND_RESTING_Y = 632;
-const HAND_SELECTED_Y = 612;
-
 export class TableScene extends Phaser.Scene implements TableGameBridge {
   private readonly selection = new HandSelection();
   private hand: CardDto[] = [];
@@ -82,11 +58,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
-  private landlordCardsLayer?: Phaser.GameObjects.Container;
-  private settlementLayer?: Phaser.GameObjects.Container;
-  private handLayer?: Phaser.GameObjects.Container;
-  private lastPlayLayer?: Phaser.GameObjects.Container;
-  private seatsLayer?: Phaser.GameObjects.Container;
+  private seatLayer?: SeatLayer;
+  private handLayer?: HandLayer;
+  private cardLayers?: TableCardLayers;
   private sfxLevel: number;
 
   constructor(private readonly options: TableSceneOptions) {
@@ -127,7 +101,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     this.feedbackText = this.add
       .text(640, 408, "", {
-        ...TEXT_STYLE,
+        ...TABLE_TEXT_STYLE,
         fontSize: "15px",
         backgroundColor: "rgba(74, 42, 16, 0.78)",
         wordWrap: {
@@ -140,18 +114,18 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .setVisible(false);
     this.phaseText = this.add
       .text(640, 246, "等待玩家入座", {
-        ...TEXT_STYLE,
+        ...TABLE_TEXT_STYLE,
         fontSize: "30px",
         fontStyle: "900",
         color: "#ffffff",
-        stroke: INK,
+        stroke: TABLE_INK,
         strokeThickness: 6
       })
       .setOrigin(0.5)
       .setDepth(15);
     this.actionText = this.add
       .text(640, 298, "", {
-        ...TEXT_STYLE,
+        ...TABLE_TEXT_STYLE,
         fontSize: "22px",
         color: "#fff6e0",
         backgroundColor: "rgba(74, 42, 16, 0.78)"
@@ -161,11 +135,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       .setDepth(16)
       .setAlpha(0);
 
-    this.seatsLayer = this.add.container(0, 0);
-    this.landlordCardsLayer = this.add.container(0, 0);
-    this.settlementLayer = this.add.container(0, 0).setDepth(22).setVisible(false);
-    this.lastPlayLayer = this.add.container(0, 0);
-    this.handLayer = this.add.container(0, 0);
+    this.seatLayer = new SeatLayer(this, this.options.theme, this.options.localPlayerId);
+    this.cardLayers = new TableCardLayers(this);
+    this.handLayer = new HandLayer(this);
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       this.applyDragResult(this.selection.beginDrag(pointer, this.replayMode));
     });
@@ -221,8 +193,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     if (event.type === "round_started") {
       this.playSound("sound-start");
       this.playSound("sound-deal");
-      this.lastPlayLayer?.removeAll(true);
-      this.settlementLayer?.setVisible(false);
+      this.cardLayers?.clearLastPlay();
     }
 
     if (event.type === "landlord_bid") {
@@ -305,7 +276,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     } else {
       this.renderReplaySeats(replay);
       this.renderLandlordCards(null);
-      this.settlementLayer?.setVisible(false);
       this.setFeedback(action ? `历史事件缺少快照: ${formatReplayAction(action, replayActor)}` : "暂无回放事件");
     }
 
@@ -314,7 +284,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     } else if (action?.type === "cards_played") {
       this.renderReplayLastPlay(parseReplayCardIds(action.payload.cards));
     } else {
-      this.lastPlayLayer?.removeAll(true);
+      this.cardLayers?.clearLastPlay();
     }
   }
 
@@ -364,72 +334,13 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.applySuggestion();
   }
 
-  private createSeatPlate(x: number, y: number, active: boolean): Phaser.GameObjects.Graphics {
-    const plate = this.add.graphics();
-    const left = x - 107;
-    const top = y - 37;
-    // 像素主题用硬直角方块 + 厚阴影，卡通主题保留奶油圆角
-    if (this.options.theme === "pixel") {
-      plate.fillStyle(0x3a2a18, active ? 0.9 : 0.6);
-      plate.fillRect(left + 4, top + 5, 214, 74);
-      plate.fillStyle(0xfff3da, 0.97);
-      plate.fillRect(left, top, 214, 74);
-      plate.lineStyle(active ? 4 : 2, active ? 0xffb300 : 0x8c5a22, 1);
-      plate.strokeRect(left, top, 214, 74);
-      return plate;
-    }
-
-    plate.fillStyle(0x8c5318, active ? 0.85 : 0.5);
-    plate.fillRoundedRect(left + 3, top + 5, 214, 74, 18);
-    plate.fillStyle(0xfff6e0, 0.96);
-    plate.fillRoundedRect(left, top, 214, 74, 18);
-    plate.lineStyle(active ? 4 : 2, active ? 0xffb300 : 0xb9772f, 1);
-    plate.strokeRoundedRect(left, top, 214, 74, 18);
-    return plate;
-  }
-
-  /** 座位头像：按玩家 id 确定性取一张主题头像，居中在座位牌左侧 */
-  private createSeatAvatar(x: number, y: number, index: number): Phaser.GameObjects.Image {
-    return this.add.image(x - 70, y, `avatar-${index}`).setDisplaySize(52, 52);
-  }
-
   private renderHand(): void {
-    if (!this.handLayer) {
+    const layer = this.handLayer;
+    if (!layer) {
       return;
     }
 
-    this.handLayer.removeAll(true);
-    const rendered: RenderedHandCard[] = [];
-    const cardWidth = 74;
-    const cardHeight = 106;
-    const gap = 30;
-    const totalWidth = cardWidth + Math.max(0, this.hand.length - 1) * gap;
-    const startX = 640 - totalWidth / 2;
-
-    this.hand.forEach((card, index) => {
-      const cardId = card.id as CardId;
-      const selected = this.selection.has(cardId);
-      const x = startX + index * gap;
-      const y = selected ? HAND_SELECTED_Y : HAND_RESTING_Y;
-      // 手牌横向重叠，右侧牌盖在左侧牌上；除最后一张外只露出左侧 gap 宽的可见条。
-      // 命中区限制在可见条，命中判定见 HandSelection（世界坐标矩形），
-      // 不用每张牌各自 setInteractive——大量重叠的 Container 命中区会被 Phaser 整体错位一张。
-      const isLast = index === this.hand.length - 1;
-      const hitWidth = isLast ? cardWidth : gap;
-      const cardFace = createCardFace(this, x, y, formatCard(card), isRed(card), {
-        selected,
-        width: cardWidth,
-        height: cardHeight
-      });
-      rendered.push({
-        id: cardId,
-        bounds: new Phaser.Geom.Rectangle(x - cardWidth / 2, y - cardHeight / 2, hitWidth, cardHeight)
-      });
-
-      this.handLayer?.add(cardFace);
-    });
-
-    this.selection.setRendered(rendered);
+    this.selection.setRendered(layer.render(this.hand, (id) => this.selection.has(id)));
   }
 
   /** 拖拽选牌的副作用（重绘/清反馈/选牌音）由 HandSelection 的结果驱动，机制本身见 handSelection.ts */
@@ -493,12 +404,11 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     return true;
   }
 
-  /** 渲染快照对应的全部视图（座位/底牌/结算/状态行） */
+  /** 渲染快照对应的全部视图（座位/底牌/状态行） */
   private renderSnapshotViews(snapshot: GameSnapshotDto): void {
     this.renderStatus(snapshot);
     this.renderSeats(snapshot);
     this.renderLandlordCards(snapshot);
-    this.renderSettlementOverlay(snapshot);
   }
 
   /** 按快照同步上一手牌区（无动画） */
@@ -506,7 +416,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     if (snapshot.lastPlay) {
       this.renderLastPlay(snapshot.lastPlay.cards, snapshot.lastPlay.playerId, false);
     } else {
-      this.lastPlayLayer?.removeAll(true);
+      this.cardLayers?.clearLastPlay();
     }
   }
 
@@ -519,10 +429,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
       return;
     }
 
-    this.seatsLayer?.removeAll(true);
-    this.renderLandlordCards(null);
-    this.settlementLayer?.setVisible(false);
-    this.lastPlayLayer?.removeAll(true);
+    this.seatLayer?.clear();
+    this.cardLayers?.clearLandlordCards();
+    this.cardLayers?.clearLastPlay();
     this.phaseText?.setText("等待玩家入座").setVisible(true);
   }
 
@@ -552,461 +461,24 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   private renderSeats(snapshot: GameSnapshotDto): void {
-    const seatsLayer = this.seatsLayer;
-    if (!seatsLayer) {
-      return;
-    }
-
-    seatsLayer.removeAll(true);
-    const localSeat = snapshot.players.find((player) => player.id === this.options.localPlayerId)?.seat ?? null;
-    const showReady = snapshot.phase === "waiting" || snapshot.phase === "ready";
-
-    const seatAvatarIndexes = avatarIndexes(snapshot.players.map((player) => player.id));
-    snapshot.players.forEach((player, seatIndex) => {
-      const position = this.seatPositionFor(player.seat, localSeat);
-      const isLocal = player.id === this.options.localPlayerId;
-      const active = snapshot.currentPlayerId === player.id;
-      const plate = this.createSeatPlate(position.x, position.y, active);
-      const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
-      const landlord = snapshot.landlordId === player.id ? " 👑地主" : "";
-      const label = this.add.text(
-        position.x - 42,
-        position.y - 28,
-        `${formatActor(player.id, this.options.localPlayerId, player.nickname)}${landlord}`,
-        {
-          ...TEXT_STYLE,
-          fontSize: "14px",
-          fontStyle: "900",
-          color: INK
-        }
-      );
-      const offline = !player.connected ? "  已离线" : "";
-      // 对手的余牌数由牌背堆徽章展示，文字行不再重复
-      const handInfo = isLocal ? `手牌 ${player.handCount}  ` : "";
-      const meta = this.add.text(
-        position.x - 42,
-        position.y - 4,
-        `${showReady ? (player.ready ? "已准备  " : "未准备  ") : ""}${handInfo}分 ${player.score}${offline}`,
-        {
-          ...TEXT_STYLE,
-          fontSize: "12px",
-          color: player.connected ? INK_SOFT : "#e25840"
-        }
-      );
-
-      if (!isLocal) {
-        const revealed = snapshot.phase === "settled" ? this.revealedHands.get(player.id) : undefined;
-        if (revealed) {
-          this.addRevealedHand(seatsLayer, position.x, position.y + 70, revealed);
-        } else {
-          this.addCardBackStack(seatsLayer, position.x, position.y + 67, player.handCount);
-        }
-      }
-      seatsLayer.add([plate, avatar, label, meta]);
-    });
-  }
-
-  private settlementActorName(snapshot: GameSnapshotDto, playerId: string): string {
-    const player = snapshot.players.find((item) => item.id === playerId);
-    return formatActor(playerId, this.options.localPlayerId, player?.nickname);
-  }
-
-  private seatPositionFor(seat: number, localSeat: number | null): { x: number; y: number } {
-    const relative = localSeat === null ? seat : (seat - localSeat + 3) % 3;
-    return RELATIVE_SEAT_POSITIONS[relative] ?? RELATIVE_SEAT_POSITIONS[0];
+    this.seatLayer?.renderSnapshot(snapshot, this.revealedHands);
   }
 
   private renderLandlordCards(snapshot: GameSnapshotDto | null): void {
-    const layer = this.landlordCardsLayer;
-    if (!layer) {
-      return;
-    }
-
-    layer.removeAll(true);
-    const cards = snapshot?.landlordCards ?? [];
-    const revealed = cards.length > 0;
-    const label = this.add.text(640, 74, revealed ? "地主底牌" : "底牌待定", {
-      ...TEXT_STYLE,
-      fontSize: "14px",
-      fontStyle: "900",
-      color: "#ffffff",
-      stroke: INK,
-      strokeThickness: 4
-    }).setOrigin(0.5);
-    layer.add(label);
-
-    const startX = 640 - 58;
-    for (let index = 0; index < 3; index += 1) {
-      const card = cards[index];
-      const x = startX + index * 58;
-      if (card) {
-        const cardFace = createCardFace(this, x, 126, formatCard(card), isRed(card), {
-          fontSize: "14px",
-          width: 48,
-          height: 68
-        });
-        layer.add(cardFace);
-      } else {
-        const cardBack = this.add.image(x, 126, "card-back").setDisplaySize(48, 68).setAlpha(revealed ? 1 : 0.72);
-        layer.add(cardBack);
-      }
-    }
-  }
-
-  private renderSettlementOverlay(snapshot: GameSnapshotDto): void {
-    const layer = this.settlementLayer;
-    if (!layer) {
-      return;
-    }
-
-    layer.removeAll(true);
-    if (!snapshot.settlement) {
-      layer.setVisible(false);
-      return;
-    }
-
-    const { settlement } = snapshot;
-    const panelX = 332;
-    const panelY = 172;
-    const panelWidth = 616;
-    const panelHeight = 336;
-    const panelRadius = 30;
-    const titleY = panelY + 4;
-    const localResult = settlement.players.find((player) => player.playerId === this.options.localPlayerId);
-    const localWon = localResult ? localResult.scoreDelta > 0 : settlement.winnerId === this.options.localPlayerId;
-    const resultText = localWon ? "胜利" : "惜败";
-    const resultColor = localWon ? "#9a3d09" : "#31506e";
-    const rows = settlement.players.slice().sort((a, b) => a.seat - b.seat);
-
-    const backdrop = this.add.graphics();
-    backdrop.fillStyle(0x6a3b10, 0.24);
-    backdrop.fillRoundedRect(panelX + 10, panelY + 14, panelWidth, panelHeight, panelRadius);
-    backdrop.fillStyle(0xb9772f, 0.22);
-    backdrop.fillRoundedRect(panelX + 4, panelY + 6, panelWidth, panelHeight, panelRadius);
-    backdrop.fillStyle(0xfff7df, 0.98);
-    backdrop.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
-    backdrop.lineStyle(5, 0xb9772f, 1);
-    backdrop.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, panelRadius);
-    backdrop.lineStyle(2, 0xffffff, 0.55);
-    backdrop.strokeRoundedRect(panelX + 10, panelY + 10, panelWidth - 20, panelHeight - 20, panelRadius - 8);
-    layer.add(backdrop);
-
-    const ribbon = this.add.image(640, titleY + 2, "ribbon-title").setDisplaySize(284, 70);
-    const title = this.add
-      .text(640, titleY - 1, "本局结算", {
-        ...TEXT_STYLE,
-        fontSize: "26px",
-        fontStyle: "900",
-        color: "#ffffff"
-      })
-      .setOrigin(0.5);
-    title.setShadow(0, 2, "rgba(80, 40, 0, 0.45)", 2);
-    layer.add([ribbon, title]);
-
-    const resultBadge = this.createSettlementPill(640, panelY + 82, resultText, resultColor, 104, 42);
-    const winnerName = this.settlementActorName(snapshot, settlement.winnerId);
-    const summary = this.add
-      .text(640, panelY + 122, `${winnerName} 获得本局胜利`, {
-        ...TEXT_STYLE,
-        fontSize: "18px",
-        fontStyle: "900",
-        color: INK
-      })
-      .setOrigin(0.5);
-    layer.add([resultBadge, summary]);
-
-    const metricY = panelY + 160;
-    layer.add([
-      this.createSettlementMetric(panelX + 116, metricY, "地主", this.settlementActorName(snapshot, settlement.landlordId)),
-      this.createSettlementMetric(panelX + 308, metricY, "倍数", `x${settlement.multiplier}`),
-      this.createSettlementMetric(panelX + 500, metricY, "底分", String(settlement.baseScore))
-    ]);
-    if (settlement.spring) {
-      layer.add(this.createSettlementPill(panelX + 515, panelY + 82, "春天", "#bd4a0b", 82, 34));
-    }
-
-    const tableX = panelX + 44;
-    const tableY = panelY + 194;
-    const tableWidth = panelWidth - 88;
-    const headerHeight = 32;
-    const rowHeight = 30;
-    const tableHeight = headerHeight + rows.length * rowHeight + 8;
-    const table = this.add.graphics();
-    table.fillStyle(0xffedd3, 0.9);
-    table.fillRoundedRect(tableX, tableY, tableWidth, tableHeight, 18);
-    table.lineStyle(2, 0xe4b46d, 0.95);
-    table.strokeRoundedRect(tableX, tableY, tableWidth, tableHeight, 18);
-    table.fillStyle(0xf2c77f, 0.55);
-    table.fillRoundedRect(tableX + 4, tableY + 4, tableWidth - 8, headerHeight, 14);
-    for (let index = 1; index < rows.length; index += 1) {
-      const lineY = tableY + headerHeight + 8 + index * rowHeight;
-      table.lineStyle(1, 0xe5c08a, 0.8);
-      table.lineBetween(tableX + 14, lineY, tableX + tableWidth - 14, lineY);
-    }
-    layer.add(table);
-
-    const headerStyle = {
-      ...TEXT_STYLE,
-      fontSize: "13px",
-      fontStyle: "900",
-      color: "#8a5c2d"
-    } satisfies Phaser.Types.GameObjects.Text.TextStyle;
-    const headerY = tableY + 20;
-    layer.add([
-      this.add.text(tableX + 24, headerY, "玩家", headerStyle).setOrigin(0, 0.5),
-      this.add.text(tableX + 238, headerY, "身份", headerStyle).setOrigin(0.5),
-      this.add.text(tableX + 352, headerY, "本局", headerStyle).setOrigin(0.5),
-      this.add.text(tableX + 470, headerY, "总分", headerStyle).setOrigin(0.5)
-    ]);
-
-    rows.forEach((player, index) => {
-      const rowY = tableY + headerHeight + 18 + index * rowHeight;
-      const won = player.scoreDelta > 0;
-      const name = this.settlementActorName(snapshot, player.playerId);
-      const nameColor = player.playerId === settlement.winnerId ? "#9a3d09" : INK;
-      const roleLabel = player.role === "landlord" ? "地主" : "农民";
-      const roleColor = player.role === "landlord" ? "#bd4a0b" : "#33705a";
-      const scoreColor = player.scoreDelta > 0 ? "#c23f1d" : player.scoreDelta < 0 ? "#2f6f9d" : INK_SOFT;
-      const nameText = this.add
-        .text(tableX + 24, rowY, name, {
-          ...TEXT_STYLE,
-          fontSize: "16px",
-          fontStyle: "900",
-          color: nameColor
-        })
-        .setOrigin(0, 0.5);
-      const role = this.createSettlementPill(tableX + 238, rowY, roleLabel, roleColor, 58, 24);
-      const delta = this.add
-        .text(tableX + 352, rowY, formatScore(player.scoreDelta), {
-          ...TEXT_STYLE,
-          fontSize: "18px",
-          fontStyle: "900",
-          color: scoreColor
-        })
-        .setOrigin(0.5);
-      const total = this.add
-        .text(tableX + 470, rowY, String(player.totalScore), {
-          ...TEXT_STYLE,
-          fontSize: "16px",
-          fontStyle: "900",
-          color: INK
-        })
-        .setOrigin(0.5);
-
-      if (won) {
-        const marker = this.add
-          .text(tableX + 8, rowY, "▲", {
-            ...TEXT_STYLE,
-            fontSize: "12px",
-            fontStyle: "900",
-            color: "#d64b1f"
-          })
-          .setOrigin(0.5);
-        layer.add(marker);
-      }
-      layer.add([nameText, role, delta, total]);
-    });
-
-    layer.setVisible(true).setAlpha(0);
-    this.tweens.add({
-      targets: layer,
-      alpha: 1,
-      duration: 180,
-      ease: "Cubic.easeOut"
-    });
-  }
-
-  private createSettlementPill(
-    x: number,
-    y: number,
-    label: string,
-    color: string,
-    width: number,
-    height: number
-  ): Phaser.GameObjects.Container {
-    const container = this.add.container(x, y);
-    const fillColor = Number.parseInt(color.slice(1), 16);
-    const radius = height / 2;
-    const background = this.add.graphics();
-    background.fillStyle(0x4c2a0c, 0.18);
-    background.fillRoundedRect(-width / 2 + 2, -height / 2 + 3, width, height, radius);
-    background.fillStyle(fillColor, 0.96);
-    background.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
-    background.lineStyle(2, 0xffffff, 0.52);
-    background.strokeRoundedRect(-width / 2 + 2, -height / 2 + 2, width - 4, height - 4, radius - 2);
-    const text = this.add
-      .text(0, 1, label, {
-        ...TEXT_STYLE,
-        fontSize: height >= 34 ? "18px" : "13px",
-        fontStyle: "900",
-        color: "#fff8de"
-      })
-      .setOrigin(0.5);
-    text.setShadow(0, 1, "rgba(70, 30, 0, 0.45)", 2);
-    container.add([background, text]);
-    return container;
-  }
-
-  private createSettlementMetric(x: number, y: number, label: string, value: string): Phaser.GameObjects.Container {
-    const container = this.add.container(x, y);
-    const width = 150;
-    const height = 54;
-    const background = this.add.graphics();
-    background.fillStyle(0x8c5318, 0.12);
-    background.fillRoundedRect(-width / 2, -height / 2, width, height, 16);
-    background.lineStyle(1, 0xe8bd77, 0.75);
-    background.strokeRoundedRect(-width / 2, -height / 2, width, height, 16);
-    const labelText = this.add
-      .text(0, -11, label, {
-        ...TEXT_STYLE,
-        fontSize: "12px",
-        fontStyle: "900",
-        color: "#9b6a35"
-      })
-      .setOrigin(0.5);
-    const valueText = this.add
-      .text(0, 12, value, {
-        ...TEXT_STYLE,
-        fontSize: "17px",
-        fontStyle: "900",
-        color: INK
-      })
-      .setOrigin(0.5);
-    container.add([background, labelText, valueText]);
-    return container;
+    this.cardLayers?.renderLandlordCards(snapshot);
   }
 
   private renderLastPlay(cards: readonly CardDto[], playerId?: string, animated = true): void {
-    if (!this.lastPlayLayer) {
-      return;
-    }
-
-    this.lastPlayLayer.removeAll(true);
-    const startX = 640 - Math.max(0, cards.length - 1) * 24;
-    const source = playerId ? this.findSeatPosition(playerId) : null;
-    cards.forEach((card, index) => {
-      const x = startX + index * 48;
-      const y = LAST_PLAY_Y;
-      const cardFace = createCardFace(this, x, y, formatCard(card), isRed(card), {
-        width: 72,
-        height: 100
-      });
-      if (animated && source) {
-        cardFace.setPosition(source.x, source.y).setAlpha(0.2).setScale(0.72);
-        this.tweens.add({
-          targets: cardFace,
-          x,
-          y,
-          alpha: 1,
-          scaleX: 1,
-          scaleY: 1,
-          duration: 180,
-          ease: "Cubic.easeOut",
-          delay: index * 22
-        });
-      }
-      this.lastPlayLayer?.add(cardFace);
-    });
+    const source = playerId ? this.seatLayer?.findSnapshotPosition(this.snapshot, playerId) ?? null : null;
+    this.cardLayers?.renderLastPlay(cards, source, animated);
   }
 
   private renderReplayLastPlay(cardIds: readonly string[]): void {
-    if (!this.lastPlayLayer) {
-      return;
-    }
-
-    this.lastPlayLayer.removeAll(true);
-    const startX = 640 - Math.max(0, cardIds.length - 1) * 24;
-    cardIds.forEach((cardId, index) => {
-      const x = startX + index * 48;
-      const cardFace = createCardFace(this, x, LAST_PLAY_Y, formatCardId(cardId), isRedCardId(cardId), {
-        fontSize: "17px",
-        width: 72,
-        height: 100
-      });
-      this.lastPlayLayer?.add(cardFace);
-    });
+    this.cardLayers?.renderReplayLastPlay(cardIds);
   }
 
   private renderReplaySeats(replay: RoundReplayDto): void {
-    const seatsLayer = this.seatsLayer;
-    if (!seatsLayer) {
-      return;
-    }
-
-    seatsLayer.removeAll(true);
-    const localSeat = replay.players.find((player) => player.playerId === this.options.localPlayerId)?.seat ?? null;
-
-    const seatAvatarIndexes = avatarIndexes(replay.players.map((player) => player.playerId));
-    replay.players.forEach((player, seatIndex) => {
-      const position = this.seatPositionFor(player.seat, localSeat);
-      const plate = this.createSeatPlate(position.x, position.y, false);
-      const avatar = this.createSeatAvatar(position.x, position.y, seatAvatarIndexes[seatIndex]!);
-      const label = this.add.text(
-        position.x - 42,
-        position.y - 28,
-        formatActor(player.playerId, this.options.localPlayerId, player.nickname),
-        {
-          ...TEXT_STYLE,
-          fontSize: "14px",
-          fontStyle: "900",
-          color: INK
-        }
-      );
-      const meta = this.add.text(position.x - 42, position.y - 4, `分 ${player.score}  流水 ${formatScore(player.coinDelta)}`, {
-        ...TEXT_STYLE,
-        fontSize: "12px",
-        color: INK_SOFT
-      });
-
-      // 回放数据不含逐步手牌数，不渲染牌背堆，避免显示假数量
-      seatsLayer.add([plate, avatar, label, meta]);
-    });
-  }
-
-  /** 对手手牌：一张牌一张背的紧凑横排，余牌数徽章叠在中央 */
-  private addCardBackStack(layer: Phaser.GameObjects.Container, x: number, y: number, count: number): void {
-    if (count <= 0) {
-      return;
-    }
-
-    const visibleCards = Math.min(20, count);
-    const overlapOffset = 11;
-    const startX = x - ((visibleCards - 1) * overlapOffset) / 2;
-    for (let index = 0; index < visibleCards; index += 1) {
-      const cardBack = this.add.image(startX + index * overlapOffset, y, "card-back").setDisplaySize(36, 50);
-      layer.add(cardBack);
-    }
-
-    const countText = this.add
-      .text(x, y, `${count}`, {
-        ...TEXT_STYLE,
-        fontSize: "17px",
-        fontStyle: "900",
-        color: "#ffffff",
-        stroke: INK,
-        strokeThickness: 4
-      })
-      .setOrigin(0.5);
-    layer.add(countText);
-  }
-
-  /** 结算明牌：对手剩余手牌以紧凑小牌面横排展示，便于复盘最后为什么输赢。 */
-  private addRevealedHand(layer: Phaser.GameObjects.Container, x: number, y: number, cards: readonly CardDto[]): void {
-    if (cards.length === 0) {
-      return;
-    }
-
-    const visibleCards = cards.slice(0, 20);
-    const gap = 16;
-    const startX = x - ((visibleCards.length - 1) * gap) / 2;
-    visibleCards.forEach((card, index) => {
-      const cardFace = createCardFace(this, startX + index * gap, y, formatCard(card), isRed(card), {
-        fontSize: "10px",
-        width: 32,
-        height: 46
-      });
-      layer.add(cardFace);
-    });
+    this.seatLayer?.renderReplay(replay);
   }
 
   /** 回合超时提醒（由 React 控制行在本地玩家剩余时间不多时触发） */
@@ -1055,17 +527,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
   private pruneSelectedCards(): void {
     this.selection.prune(new Set(this.hand.map((card) => card.id)));
-  }
-
-  private findSeatPosition(playerId: string): { x: number; y: number } | null {
-    const players = this.snapshot?.players;
-    const player = players?.find((item) => item.id === playerId);
-    if (!player) {
-      return null;
-    }
-
-    const localSeat = players?.find((item) => item.id === this.options.localPlayerId)?.seat ?? null;
-    return this.seatPositionFor(player.seat, localSeat);
   }
 
 }

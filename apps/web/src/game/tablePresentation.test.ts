@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GameEvent, GameSnapshotDto } from "@ddz/protocol";
-import { describeEventFeedback, describePhasePrompt, describeSettlement, describeSnapshotStatus, formatActor } from "./tablePresentation";
+import { describeEventFeedback, describePhasePrompt, describeSnapshotStatus, formatActor } from "./tablePresentation";
 
 describe("table presentation", () => {
   it("describes status with localized phase and local actor", () => {
@@ -55,16 +55,6 @@ describe("table presentation", () => {
     );
   });
 
-  it("describes settlement rows in seat order", () => {
-    expect(describeSettlement(settledSnapshot(), "p0")).toEqual([
-      "赢家 你",
-      "地主 你",
-      "倍数 x1",
-      "你  地主  +2  总分 2",
-      "机器人1  农民  -1  总分 -1",
-      "机器人2  农民  -1  总分 -1"
-    ]);
-  });
 });
 
 function snapshot(phase: GameSnapshotDto["phase"], currentPlayerId: string | null): GameSnapshotDto {
@@ -107,25 +97,5 @@ function cardPlayedEvent(): GameEvent {
     },
     snapshot: snapshot("playing", "bot:room:1"),
     hand: []
-  };
-}
-
-function settledSnapshot(): GameSnapshotDto {
-  return {
-    ...snapshot("settled", null),
-    landlordId: "p0",
-    settlement: {
-      winnerId: "p0",
-      landlordId: "p0",
-      landlordWon: true,
-      baseScore: 1,
-      multiplier: 1,
-      spring: false,
-      players: [
-        { playerId: "bot:room:2", seat: 2, role: "farmer", handCount: 8, scoreDelta: -1, totalScore: -1 },
-        { playerId: "p0", seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },
-        { playerId: "bot:room:1", seat: 1, role: "farmer", handCount: 5, scoreDelta: -1, totalScore: -1 }
-      ]
-    }
   };
 }

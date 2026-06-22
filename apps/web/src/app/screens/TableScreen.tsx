@@ -1,7 +1,5 @@
 import { Suspense, lazy, type RefObject } from "react";
-import { TableControlRow } from "../components/TableControlRow";
-import { BotThinkingBubble } from "../components/BotThinkingBubble";
-import { SeatTurnClock } from "../components/SeatTurnClock";
+import { TableOverlay } from "../components/TableOverlay";
 import type { PhaserTableHandle } from "../../PhaserTable";
 import type { DdzApp } from "../useDdzApp";
 
@@ -29,20 +27,7 @@ export function TableScreen({
     selectedReplay,
     replayStep,
     theme,
-    audioLevels,
-    selectedRoom,
-    leaveRoom,
-    clearReplay,
-    tableControls,
-    status,
-    reconnecting,
-    client,
-    turnTimer,
-    snapshot,
-    thinking,
-    replayPlaying,
-    setReplayPlaying,
-    setReplayStep
+    audioLevels
   } = app;
 
   // 牌桌仅在已登录时渲染（App 已据 session 分屏），此处守卫满足类型收窄
@@ -66,100 +51,7 @@ export function TableScreen({
         />
       </Suspense>
 
-      {!selectedReplay ? (
-        <BotThinkingBubble thinking={thinking} snapshot={snapshot} localPlayerId={session.user.id} />
-      ) : null}
-
-      {!selectedReplay ? (
-        <SeatTurnClock snapshot={snapshot} turnTimer={turnTimer} localPlayerId={session.user.id} theme={theme} />
-      ) : null}
-
-      <header className="table-hud">
-        <button
-          type="button"
-          className="btn-img btn-img-wood btn-img-sm"
-          onClick={selectedRoom ? leaveRoom : clearReplay}
-          disabled={selectedRoom ? !tableControls.leave : false}
-        >
-          ← 离开
-        </button>
-        <span className="table-chip">{selectedRoom ? status : "回放模式"}</span>
-        {reconnecting ? <span className="table-chip">重连中…</span> : null}
-        <span className="hud-spacer" />
-        <button
-          type="button"
-          className="btn-img btn-img-wood btn-img-sm"
-          onClick={onOpenSettings}
-          aria-label="设置"
-        >
-          ⚙️ 设置
-        </button>
-      </header>
-
-      {!selectedReplay && snapshot?.phase !== "settled" ? (
-        <TableControlRow
-          controls={tableControls}
-          turnTimer={turnTimer}
-          localId={session.user.id}
-          theme={theme}
-          client={client}
-          tableRef={tableRef}
-        />
-      ) : null}
-
-      {!selectedReplay && snapshot?.phase === "settled" ? (
-        <div className="table-settled-dock">
-          {tableControls.ready ? (
-            <button type="button" className="btn-img btn-img-orange" onClick={() => client.ready()}>
-              准备
-            </button>
-          ) : null}
-          <button type="button" className="btn-img btn-img-wood" onClick={leaveRoom}>
-            返回大厅
-          </button>
-        </div>
-      ) : null}
-
-      {selectedReplay ? (
-        <div className="table-replay-dock">
-          <span className="table-chip">
-            回放 {Math.min(replayStep + 1, selectedReplay.actions.length)}/{selectedReplay.actions.length}
-          </span>
-          <button
-            type="button"
-            className="btn-img btn-img-wood btn-img-sm"
-            disabled={selectedReplay.actions.length <= 1}
-            onClick={() => setReplayPlaying((playing) => !playing)}
-          >
-            {replayPlaying ? "暂停" : "播放"}
-          </button>
-          <button
-            type="button"
-            className="btn-img btn-img-wood btn-img-sm"
-            disabled={replayStep <= 0}
-            onClick={() => {
-              setReplayPlaying(false);
-              setReplayStep((step) => Math.max(0, step - 1));
-            }}
-          >
-            上一步
-          </button>
-          <button
-            type="button"
-            className="btn-img btn-img-wood btn-img-sm"
-            disabled={replayStep >= selectedReplay.actions.length - 1}
-            onClick={() => {
-              setReplayPlaying(false);
-              setReplayStep((step) => Math.min(selectedReplay.actions.length - 1, step + 1));
-            }}
-          >
-            下一步
-          </button>
-          <button type="button" className="btn-img btn-img-wood btn-img-sm" onClick={clearReplay}>
-            {selectedRoom ? "返回牌桌" : "返回大厅"}
-          </button>
-        </div>
-      ) : null}
+      <TableOverlay app={app} tableRef={tableRef} onOpenSettings={onOpenSettings} />
     </main>
   );
 }
