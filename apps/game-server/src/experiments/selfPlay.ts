@@ -108,7 +108,7 @@ async function playGame(brains: Record<PlayerId, BotBrain>): Promise<Settlement>
     if (!pid) {
       throw new Error(`no current player in phase ${snap.phase}`);
     }
-    const action = await brains[pid]!.decide(snap, pid, table.getHand(pid), table.playedCards());
+    const action = await brains[pid]!.decide(snap, pid, table.getHand(pid), table.playedCards(), table.history());
     applyAction(table, pid, action);
   }
   throw new Error("game did not settle within turn cap");

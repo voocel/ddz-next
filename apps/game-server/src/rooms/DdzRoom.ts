@@ -929,7 +929,13 @@ export class DdzRoom extends Room {
     let action: BotAction;
     this.botDecisionInFlight.add(playerId);
     try {
-      action = await this.botBrain.decide(snapshot, playerId, this.table.getHand(playerId), this.table.playedCards());
+      action = await this.botBrain.decide(
+        snapshot,
+        playerId,
+        this.table.getHand(playerId),
+        this.table.playedCards(),
+        this.table.history()
+      );
     } catch (error) {
       if (error instanceof LlmDecisionError) {
         this.handleBotDecisionFailure(playerId, error);

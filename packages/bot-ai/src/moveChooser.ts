@@ -25,6 +25,19 @@ export interface LastPlayInfo {
   readonly description: string;
 }
 
+export interface RecentActionInfo {
+  /** 行动者相对自己的身份,如「你」「地主」「队友」「农民」。 */
+  readonly by: string;
+  readonly action: "play" | "pass";
+  /** action=play 时的牌型/牌点简述;pass 时省略。 */
+  readonly description?: string;
+}
+
+export interface TurnOrderInfo {
+  readonly label: string;
+  readonly handCount: number;
+}
+
 /**
  * 选牌所需的公开局势 + 候选走法(由调用方从快照映射,bot-ai 不依赖游戏内部类型)。
  * 刻意给足农民/地主决策所需的公开事实:自己的完整手牌、本局已出的牌、各家身份+剩牌+明牌、上一手由谁打出——
@@ -36,15 +49,23 @@ export interface MoveSelectionContext {
   readonly role: "landlord" | "farmer";
   /** 自己的完整手牌(按从小到大分组的中文描述,如 ["3","5×2","J","2×2"]),供模型规划。 */
   readonly hand: readonly string[];
+  /** 地主底牌(公开后按从小到大分组);叫抢阶段不会调用 LLM 出牌,正常出牌时已公开。 */
+  readonly landlordCards?: readonly string[];
   /**
    * 本局已出的牌(按从小到大分组的中文,如 ["3×2","K","大王"])。公开信息、桌上人人可见,
    * 给模型用于记牌、推断各点数还剩多少未现——这是事实而非策略。开局领出、本局尚无人出牌时为空数组。
    */
   readonly playedCards: readonly string[];
+  /** 当前公开信息下尚未出现的牌(不含自己手牌、已出牌、地主底牌),帮助模型稳定记牌。 */
+  readonly unseenCards?: readonly string[];
+  /** 从自己开始的出牌顺序与剩牌数。 */
+  readonly turnOrder?: readonly TurnOrderInfo[];
   /** 其他两家,按座位顺序;含身份标签/剩牌/公开可见手牌,农民据此分辨地主与队友。 */
   readonly opponents: readonly OpponentInfo[];
   /** 上一手由谁打出的什么;轮到领出时为 null。 */
   readonly lastPlay: LastPlayInfo | null;
+  /** 最近公开动作,有界保留,用于理解谁连续出牌/谁过牌/自己刚做过什么。 */
+  readonly recentActions?: readonly RecentActionInfo[];
   /** 候选走法标签,至少一项;模型只能在提示词展示的 1..N 编号中选一项。 */
   readonly candidates: readonly string[];
 }
@@ -472,9 +493,21 @@ export function formatMoveSelectionPrompt(ctx: MoveSelectionContext): string {
   const options = ctx.candidates.map((label, index) => `${index + 1}: ${label}`).join("\n");
   // 手牌/已出都用分组计数(×N)如实呈现张数,不再额外报一个会和列表对不上的总数。
   const lines = [`你的手牌:${ctx.hand.join(" ")}`];
+  if (ctx.turnOrder && ctx.turnOrder.length > 0) {
+    lines.push(`出牌顺序:${ctx.turnOrder.map((item) => `${item.label}(${item.handCount}张)`).join(" -> ")}。`);
+  }
+  if (ctx.landlordCards && ctx.landlordCards.length > 0) {
+    lines.push(`地主底牌:${ctx.landlordCards.join(" ")}。`);
+  }
   // 本局已出是公开信息(桌上人人可见),供模型记牌、推断剩余;开局无人出牌时不赘述。
   if (ctx.playedCards.length > 0) {
     lines.push(`本局已出:${ctx.playedCards.join(" ")}。`);
+  }
+  if (ctx.unseenCards && ctx.unseenCards.length > 0) {
+    lines.push(`未见牌:${ctx.unseenCards.join(" ")}。`);
+  }
+  if (ctx.recentActions && ctx.recentActions.length > 0) {
+    lines.push(`最近动作:\n${ctx.recentActions.map((action, index) => `${index + 1}. ${formatRecentAction(action)}`).join("\n")}`);
   }
   const focus = decisionFocus(ctx);
   lines.push(
@@ -510,4 +543,8 @@ function formatOpponentInfo(opponent: OpponentInfo): string {
   const revealed =
     opponent.revealedCards.length > 0 ? `,明牌:${opponent.revealedCards.join(" ")}` : "";
   return `${opponent.label}剩 ${opponent.handCount} 张${revealed}`;
+}
+
+function formatRecentAction(action: RecentActionInfo): string {
+  return action.action === "pass" ? `${action.by}: 不要` : `${action.by}: ${action.description ?? "出牌"}`;
 }

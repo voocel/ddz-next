@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Card, CardId, Combination, GamePhase, GameSnapshot, PlayerId } from "@ddz/domain";
+import type { Card, CardId, Combination, GamePhase, GameSnapshot, PlayerId, PlayHistoryEntry } from "@ddz/domain";
 import { identifyCombination, parseCardIds } from "@ddz/domain";
 import type { ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext } from "@ddz/bot-ai";
 import type { BotAction, BotBrain } from "../../src/rooms/botBrain";
@@ -25,6 +25,7 @@ function snapshot(options: {
   lastPlay?: Combination | null;
   landlordId?: PlayerId | null;
   handCounts?: Record<PlayerId, number>;
+  landlordCards?: readonly Card[];
 }): GameSnapshot {
   const handCounts = options.handCounts ?? { p0: 5, p1: 8, p2: 9 };
   return {
@@ -41,7 +42,7 @@ function snapshot(options: {
     currentPlayerId: "p0",
     landlordId: options.landlordId ?? null,
     bidCandidateId: null,
-    landlordCards: [],
+    landlordCards: options.landlordCards ?? [],
     lastPlay: options.lastPlay ? { playerId: "p1", cards: [], combination: options.lastPlay } : null,
     passCount: 0,
     multiplier: 1,
@@ -227,6 +228,46 @@ describe("LlmBotBrain", () => {
     expect(captured!.hand).toEqual(["3×2", "5"]);
   });
 
+  it("地主视角:两个农民按上下家区分,避免历史动作主体同名", async () => {
+    let captured: MoveSelectionContext | null = null;
+    const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
+      captured = ctx;
+    });
+    const brain = new LlmBotBrain({ chooser });
+    const history: PlayHistoryEntry[] = [
+      { type: "play", playerId: "p1", cards: hand(["3-clubs"]) },
+      { type: "pass", playerId: "p2" }
+    ];
+
+    await brain.decide(
+      snapshot({
+        phase: "playing",
+        landlordId: "p0",
+        handCounts: { p0: 5, p1: 8, p2: 9 },
+        lastPlay: combo(["3-clubs"])
+      }),
+      "p0",
+      hand(["4-clubs", "5-clubs"]),
+      hand(["3-clubs"]),
+      history
+    );
+
+    expect(captured!.opponents).toEqual([
+      { label: "下家农民", handCount: 8, revealedCards: [] },
+      { label: "上家农民", handCount: 9, revealedCards: [] }
+    ]);
+    expect(captured!.turnOrder).toEqual([
+      { label: "你", handCount: 5 },
+      { label: "下家农民", handCount: 8 },
+      { label: "上家农民", handCount: 9 }
+    ]);
+    expect(captured!.lastPlay).toEqual({ by: "下家农民", description: "单张3" });
+    expect(captured!.recentActions).toEqual([
+      { by: "下家农民", action: "play", description: "单张3" },
+      { by: "上家农民", action: "pass" }
+    ]);
+  });
+
   it("把本局已出的牌(公开信息)按分组计数喂给模型,并写入留证", async () => {
     let captured: MoveSelectionContext | null = null;
     const traces: LlmDecisionTrace[] = [];
@@ -245,6 +286,50 @@ describe("LlmBotBrain", () => {
     // 出过的牌是桌面公开信息,按从小到大分组计数下发(与手牌同口径),并原样进 trace 供离线分析
     expect(captured!.playedCards).toEqual(["5×2", "9", "大王"]);
     expect(traces[0]!.context.playedCards).toEqual(["5×2", "9", "大王"]);
+  });
+
+  it("下发地主底牌、未见牌、出牌顺序和最近公开动作", async () => {
+    let captured: MoveSelectionContext | null = null;
+    const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
+      captured = ctx;
+    });
+    const brain = new LlmBotBrain({ chooser });
+    const history: PlayHistoryEntry[] = [
+      { type: "play", playerId: "p1", cards: hand(["3-clubs"]) },
+      { type: "pass", playerId: "p2" },
+      { type: "pass", playerId: "p0" },
+      { type: "play", playerId: "p1", cards: hand(["4-clubs", "4-hearts"]) }
+    ];
+
+    await brain.decide(
+      snapshot({
+        phase: "playing",
+        landlordId: "p1",
+        landlordCards: hand(["7-clubs", "7-hearts", "K-spades"]),
+        handCounts: { p0: 3, p1: 8, p2: 9 }
+      }),
+      "p0",
+      hand(["3-hearts", "5-clubs", "BJ"]),
+      hand(["3-clubs", "4-clubs", "4-hearts"]),
+      history
+    );
+
+    expect(captured!.landlordCards).toEqual(["7×2", "K"]);
+    expect(captured!.turnOrder).toEqual([
+      { label: "你", handCount: 3 },
+      { label: "地主", handCount: 8 },
+      { label: "队友", handCount: 9 }
+    ]);
+    expect(captured!.recentActions).toEqual([
+      { by: "地主", action: "play", description: "单张3" },
+      { by: "队友", action: "pass" },
+      { by: "你", action: "pass" },
+      { by: "地主", action: "play", description: "对子4" }
+    ]);
+    expect(captured!.unseenCards).toContain("3×2");
+    expect(captured!.unseenCards).toContain("4×2");
+    expect(captured!.unseenCards).toContain("7×2");
+    expect(captured!.unseenCards).not.toContain("大王");
   });
 
   it("模型返回 null(超时/缺 key)时抛错暴露,不回退、不上报指标", async () => {

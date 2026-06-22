@@ -39,6 +39,28 @@ export interface PublicPlay {
   readonly combination: Combination;
 }
 
+export type PlayHistoryEntry =
+  | {
+      readonly type: "play";
+      readonly playerId: PlayerId;
+      readonly cards: readonly Card[];
+    }
+  | {
+      readonly type: "pass";
+      readonly playerId: PlayerId;
+    };
+
+export type GameTableHistoryEntry =
+  | {
+      readonly type: "play";
+      readonly playerId: PlayerId;
+      readonly cards: readonly CardId[];
+    }
+  | {
+      readonly type: "pass";
+      readonly playerId: PlayerId;
+    };
+
 export interface SettlementPlayer {
   readonly playerId: PlayerId;
   readonly seat: SeatIndex;
@@ -119,6 +141,7 @@ export interface GameTableState {
   readonly robCount: number;
   readonly bombCount: number;
   readonly playCounts: Readonly<Record<PlayerId, number>>;
+  readonly playHistory: readonly GameTableHistoryEntry[];
 }
 
 export class GameTable {
@@ -139,9 +162,7 @@ export class GameTable {
   private robCount = 0;
   private bombCount = 0;
   private readonly playCounts = new Map<PlayerId, number>();
-  // 本局已出的所有牌,供机器人记牌使用。仅作机器人决策的辅助输入,
-  // 故不进入 dump/restore;崩溃恢复后记忆清空,机器人仍能合法出牌(略保守)。
-  private readonly playedThisRound: Card[] = [];
+  private readonly playHistory: PlayHistoryEntry[] = [];
 
   addPlayer(playerId: PlayerId): SeatIndex {
     return this.seatPlayer(playerId, "human");
@@ -371,7 +392,7 @@ export class GameTable {
       this.bombCount += 1;
     }
     this.playCounts.set(playerId, (this.playCounts.get(playerId) ?? 0) + 1);
-    this.playedThisRound.push(...selected);
+    this.playHistory.push({ type: "play", playerId, cards: selected });
     this.lastPlay = play;
     this.passCount = 0;
 
@@ -400,6 +421,7 @@ export class GameTable {
     }
 
     this.passCount += 1;
+    this.playHistory.push({ type: "pass", playerId });
     if (this.passCount >= 2) {
       this.currentPlayerId = this.lastPlay.playerId;
       this.lastPlay = null;
@@ -416,7 +438,14 @@ export class GameTable {
 
   /** 本局至今已打出的所有牌(供机器人记牌)。返回拷贝,避免外部持有活引用。 */
   playedCards(): readonly Card[] {
-    return [...this.playedThisRound];
+    return this.playHistory.flatMap((entry) => (entry.type === "play" ? [...entry.cards] : []));
+  }
+
+  /** 本局公开动作历史。用于 AI 上下文与崩溃恢复;返回深拷贝,避免外部改写权威状态。 */
+  history(): readonly PlayHistoryEntry[] {
+    return this.playHistory.map((entry) =>
+      entry.type === "play" ? { type: "play", playerId: entry.playerId, cards: [...entry.cards] } : { ...entry }
+    );
   }
 
   snapshot(): GameSnapshot {
@@ -475,7 +504,12 @@ export class GameTable {
       robIndex: this.robIndex,
       robCount: this.robCount,
       bombCount: this.bombCount,
-      playCounts: Object.fromEntries(this.playCounts)
+      playCounts: Object.fromEntries(this.playCounts),
+      playHistory: this.playHistory.map((entry) =>
+        entry.type === "play"
+          ? { type: "play", playerId: entry.playerId, cards: entry.cards.map((card) => card.id) }
+          : { ...entry }
+      )
     };
   }
 
@@ -518,6 +552,14 @@ export class GameTable {
     for (const [playerId, count] of Object.entries(state.playCounts)) {
       this.playCounts.set(playerId, count);
     }
+    this.playHistory.length = 0;
+    for (const entry of state.playHistory) {
+      this.playHistory.push(
+        entry.type === "play"
+          ? { type: "play", playerId: entry.playerId, cards: parseCardIds(entry.cards) }
+          : { type: "pass", playerId: entry.playerId }
+      );
+    }
   }
 
   /** 结算后开启下一局：保留玩家与累计分，清空牌局状态，回到 ready/waiting。 */
@@ -546,7 +588,7 @@ export class GameTable {
     this.robCount = 0;
     this.bombCount = 0;
     this.playCounts.clear();
-    this.playedThisRound.length = 0;
+    this.playHistory.length = 0;
     this.phase = this.players.size === 3 ? "ready" : "waiting";
     return this.snapshot();
   }
@@ -576,7 +618,7 @@ export class GameTable {
     this.robCount = 0;
     this.bombCount = 0;
     this.playCounts.clear();
-    this.playedThisRound.length = 0;
+    this.playHistory.length = 0;
     this.phase = "bidding";
   }
 
@@ -758,6 +800,9 @@ function validateTableState(state: GameTableState): void {
   }
   for (const playerId of Object.keys(state.playCounts)) {
     belongs(playerId, "playCounts entry");
+  }
+  for (const entry of state.playHistory) {
+    belongs(entry.playerId, "playHistory entry");
   }
 
   const requireCount = (value: number, label: string): void => {

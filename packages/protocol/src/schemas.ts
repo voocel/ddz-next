@@ -5,6 +5,7 @@ import type {
   CombinationKind,
   GamePhase,
   GameSnapshot,
+  GameTableHistoryEntry,
   GameTablePlayerState,
   GameTableState,
   PublicPlay,
@@ -412,6 +413,18 @@ export const gameTablePlayerStateSchema = z.object({
   score: z.number().int()
 }) satisfies z.ZodType<GameTablePlayerState>;
 
+const gameTableHistoryEntrySchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("play"),
+    playerId: z.string().min(1),
+    cards: z.array(cardIdSchema).min(1).max(20)
+  }),
+  z.object({
+    type: z.literal("pass"),
+    playerId: z.string().min(1)
+  })
+]) satisfies z.ZodType<GameTableHistoryEntry>;
+
 // 崩溃恢复用的完整牌桌状态（含手牌）。安全红线：只经 internal 通道传输，绝不并入公开响应/action payload。
 export const gameTableStateSchema = z.object({
   phase: gamePhaseSchema,
@@ -436,7 +449,8 @@ export const gameTableStateSchema = z.object({
   robIndex: z.number().int().min(0),
   robCount: z.number().int().min(0),
   bombCount: z.number().int().min(0),
-  playCounts: z.record(z.string(), z.number().int().min(0))
+  playCounts: z.record(z.string(), z.number().int().min(0)),
+  playHistory: z.array(gameTableHistoryEntrySchema)
 }) satisfies z.ZodType<GameTableState>;
 
 /** 牌局恢复信封：版本号留迁移余地；nicknames 是 DdzRoom 从 JWT 收集的展示昵称 */

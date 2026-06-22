@@ -1,12 +1,14 @@
-import { compareRank, enumerateLegalMoves } from "@ddz/domain";
-import type { Card, Combination, GameSnapshot, LegalMove, PlayerId, Rank } from "@ddz/domain";
+import { compareRank, createDeck, enumerateLegalMoves, identifyCombination } from "@ddz/domain";
+import type { Card, Combination, GameSnapshot, LegalMove, PlayerId, PlayHistoryEntry, Rank } from "@ddz/domain";
 import type {
   ChooserTrace,
+  RecentActionInfo,
   MoveChooser,
   MoveDecision,
   MoveSelectionContext,
   MoveStreamDelta,
   MoveStreamHooks,
+  TurnOrderInfo,
   LlmRequestErrorInfo,
   ProviderRequestSummary,
   ProviderHttpTrace,
@@ -15,6 +17,8 @@ import type {
 import type { BotAction, BotBrain } from "./botBrain.js";
 import { RuleBotBrain } from "./ruleBotBrain.js";
 import { describeCombination, rankLabel } from "./combinationLabels.js";
+
+const RECENT_ACTION_LIMIT = 10;
 
 /** 一次成功 LLM 出牌决策的可观测指标(失败不再回退,而是抛错,故无 fallback 记录)。 */
 export interface LlmDecisionMetric {
@@ -116,11 +120,12 @@ export class LlmBotBrain implements BotBrain {
     snapshot: GameSnapshot,
     playerId: PlayerId,
     hand: readonly Card[],
-    playedCards: readonly Card[]
+    playedCards: readonly Card[],
+    history: readonly PlayHistoryEntry[] = []
   ): Promise<BotAction> {
     // 叫/抢地主:用固定策略,隔离实验变量(只验证 LLM 的出牌能力)。
     if (snapshot.phase !== "playing") {
-      return this.bidStrategy.decide(snapshot, playerId, hand, playedCards);
+      return this.bidStrategy.decide(snapshot, playerId, hand, playedCards, history);
     }
 
     const previous: Combination | null = snapshot.lastPlay?.combination ?? null;
@@ -144,7 +149,7 @@ export class LlmBotBrain implements BotBrain {
       }
     }
 
-    const context = buildContext(snapshot, playerId, hand, playedCards, previous, labels);
+    const context = buildContext(snapshot, playerId, hand, playedCards, history, previous, labels);
     this.options.onStreamStart?.(playerId);
     // AI 输出流:把模型 reasoning/text 增量带上 playerId 转给上层(只在 LLM 出牌路径产生,叫抢/强制出牌不产生)。
     const onStreamDelta = this.options.onStreamDelta;
@@ -338,6 +343,7 @@ function buildContext(
   playerId: PlayerId,
   hand: readonly Card[],
   playedCards: readonly Card[],
+  history: readonly PlayHistoryEntry[],
   previous: Combination | null,
   labels: readonly string[]
 ): MoveSelectionContext {
@@ -346,28 +352,115 @@ function buildContext(
   return {
     role: landlordId === playerId ? "landlord" : "farmer",
     hand: groupCardsByRank(hand),
+    landlordCards: groupCardsByRank(snapshot.landlordCards),
     playedCards: groupCardsByRank(playedCards),
+    unseenCards: groupCardsByRank(unseenCards(hand, playedCards, snapshot.landlordCards)),
+    turnOrder: turnOrder(snapshot, playerId, landlordId),
     opponents: snapshot.players
       .filter((player) => player.id !== playerId)
       .map((player) => ({
-        label: seatRoleLabel(player.id, playerId, landlordId),
+        label: seatRoleLabel(snapshot, player.id, playerId, landlordId),
         handCount: player.handCount,
         revealedCards: []
       })),
     lastPlay:
       previous && lastPlayerId
-        ? { by: seatRoleLabel(lastPlayerId, playerId, landlordId), description: describeCombination(previous) }
+        ? { by: seatRoleLabel(snapshot, lastPlayerId, playerId, landlordId), description: describeCombination(previous) }
         : null,
+    recentActions: recentActions(snapshot, history, playerId, landlordId),
     candidates: labels
   };
 }
 
-/** 某玩家相对自己的身份标签:地主 / 队友(自己是农民时的另一农民)/ 农民(自己是地主时的对手)。 */
-function seatRoleLabel(targetId: PlayerId, selfId: PlayerId, landlordId: PlayerId | null): string {
+function turnOrder(snapshot: GameSnapshot, selfId: PlayerId, landlordId: PlayerId | null): TurnOrderInfo[] {
+  const players = [...snapshot.players].sort((a, b) => a.seat - b.seat);
+  const selfIndex = players.findIndex((player) => player.id === selfId);
+  if (selfIndex === -1) {
+    return [];
+  }
+  return [...players.slice(selfIndex), ...players.slice(0, selfIndex)].map((player) => ({
+    label: actionActorLabel(snapshot, player.id, selfId, landlordId),
+    handCount: player.handCount
+  }));
+}
+
+function recentActions(
+  snapshot: GameSnapshot,
+  history: readonly PlayHistoryEntry[],
+  selfId: PlayerId,
+  landlordId: PlayerId | null
+): RecentActionInfo[] {
+  return history.slice(-RECENT_ACTION_LIMIT).map((entry) =>
+    entry.type === "play"
+      ? {
+          by: actionActorLabel(snapshot, entry.playerId, selfId, landlordId),
+          action: "play",
+          description: describeCombinationFromCards(entry.cards)
+        }
+      : {
+          by: actionActorLabel(snapshot, entry.playerId, selfId, landlordId),
+          action: "pass"
+        }
+  );
+}
+
+function unseenCards(hand: readonly Card[], playedCards: readonly Card[], landlordCards: readonly Card[]): Card[] {
+  const seen = new Map<string, number>();
+  for (const card of [...hand, ...playedCards, ...landlordCards]) {
+    seen.set(card.id, (seen.get(card.id) ?? 0) + 1);
+  }
+  return createDeck().filter((card) => {
+    const count = seen.get(card.id) ?? 0;
+    if (count <= 0) {
+      return true;
+    }
+    seen.set(card.id, count - 1);
+    return false;
+  });
+}
+
+/** 某玩家相对自己的身份标签:地主 / 队友 / 上下家农民。 */
+function seatRoleLabel(
+  snapshot: GameSnapshot,
+  targetId: PlayerId,
+  selfId: PlayerId,
+  landlordId: PlayerId | null
+): string {
   if (targetId === landlordId) {
     return "地主";
   }
-  return selfId === landlordId ? "农民" : "队友";
+  return selfId === landlordId ? farmerSeatLabel(snapshot, targetId, selfId) : "队友";
+}
+
+function actionActorLabel(
+  snapshot: GameSnapshot,
+  targetId: PlayerId,
+  selfId: PlayerId,
+  landlordId: PlayerId | null
+): string {
+  return targetId === selfId ? "你" : seatRoleLabel(snapshot, targetId, selfId, landlordId);
+}
+
+function farmerSeatLabel(snapshot: GameSnapshot, targetId: PlayerId, selfId: PlayerId): string {
+  const players = [...snapshot.players].sort((a, b) => a.seat - b.seat);
+  const selfIndex = players.findIndex((player) => player.id === selfId);
+  const targetIndex = players.findIndex((player) => player.id === targetId);
+  if (selfIndex === -1 || targetIndex === -1 || players.length < 2) {
+    return "农民";
+  }
+  const distance = (targetIndex - selfIndex + players.length) % players.length;
+  if (distance === 1) {
+    return "下家农民";
+  }
+  if (distance === players.length - 1) {
+    return "上家农民";
+  }
+  return "农民";
+}
+
+function describeCombinationFromCards(cards: readonly Card[]): string {
+  const combination = identifyCombination(cards);
+  return combination ? describeCombination(combination) : groupCardsByRank(cards).join(" ");
 }
 
 /** 把一组牌按从小到大分组成中文计数,如 ["3","5×2","J","2×2"];供「自己手牌」与「本局已出」复用。 */

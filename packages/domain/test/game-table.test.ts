@@ -376,6 +376,8 @@ describe("GameTable dump/restore", () => {
 
     const restored = restoreCopy(table);
     expect(restored.dump()).toEqual(table.dump());
+    expect(restored.history()).toEqual(table.history());
+    expect(restored.playedCards()).toEqual(table.playedCards());
 
     sweepToSettlement(table);
     sweepToSettlement(restored);

@@ -13,12 +13,23 @@ const fakeModel = { modelId: "test-model" } as unknown as LanguageModel;
 const context: MoveSelectionContext = {
   role: "landlord",
   hand: ["3", "5×2", "K×2", "2"],
+  landlordCards: ["7×2", "K"],
   playedCards: ["4×2", "9", "J×3", "小王"],
+  unseenCards: ["6×4", "8×4", "大王"],
+  turnOrder: [
+    { label: "你", handCount: 6 },
+    { label: "农民", handCount: 8 },
+    { label: "农民", handCount: 9 }
+  ],
   opponents: [
     { label: "农民", handCount: 8, revealedCards: [] },
     { label: "农民", handCount: 9, revealedCards: ["7×2", "K"] }
   ],
   lastPlay: { by: "农民", description: "对子K" },
+  recentActions: [
+    { by: "你", action: "play", description: "单张3" },
+    { by: "农民", action: "pass" }
+  ],
   candidates: ["过牌(不出)", "对子 2", "炸弹 33334"]
 };
 
@@ -325,6 +336,34 @@ describe("LlmMoveChooser", () => {
     expect(streamTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("你在领出。请优先比较一次能走掉多少张")
+      })
+    );
+  });
+
+  it("prompt 包含公开事实快照、未见牌和最近动作", async () => {
+    streamTextMock.mockReturnValue(fakeResult({ parts: [{ type: "text-delta", text: "2" }], text: "2" }));
+    const chooser = new LlmMoveChooser({ model: fakeModel });
+
+    await chooser.choose(context);
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("出牌顺序:你(6张) -> 农民(8张) -> 农民(9张)。")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("地主底牌:7×2 K。")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("未见牌:6×4 8×4 大王。")
+      })
+    );
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("最近动作:\n1. 你: 单张3\n2. 农民: 不要")
       })
     );
   });

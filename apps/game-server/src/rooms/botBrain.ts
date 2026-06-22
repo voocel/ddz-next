@@ -1,4 +1,4 @@
-import type { Card, CardId, GameSnapshot, PlayerId } from "@ddz/domain";
+import type { Card, CardId, GameSnapshot, PlayerId, PlayHistoryEntry } from "@ddz/domain";
 
 /** 机器人决策出的一个动作:叫/抢地主、过牌、或出具体的牌。 */
 export type BotAction =
@@ -28,6 +28,7 @@ export interface BotBrain {
     snapshot: GameSnapshot,
     playerId: PlayerId,
     hand: readonly Card[],
-    playedCards: readonly Card[]
+    playedCards: readonly Card[],
+    history: readonly PlayHistoryEntry[]
   ): Promise<BotAction>;
 }
