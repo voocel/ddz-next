@@ -2,6 +2,7 @@ import type { Card, CardId } from "./cards.js";
 import { createDeck, dealCards, parseCardIds, shuffleDeck, sortCards } from "./cards.js";
 import type { Combination } from "./combinations.js";
 import { canBeat, identifyCombination } from "./combinations.js";
+import type { RandomSource } from "./random.js";
 
 export type PlayerId = string;
 export type PlayerKind = "human" | "bot";
@@ -48,6 +49,16 @@ export type PlayHistoryEntry =
   | {
       readonly type: "pass";
       readonly playerId: PlayerId;
+    }
+  | {
+      readonly type: "bid";
+      readonly playerId: PlayerId;
+      readonly called: boolean;
+    }
+  | {
+      readonly type: "rob";
+      readonly playerId: PlayerId;
+      readonly robbed: boolean;
     };
 
 export type GameTableHistoryEntry =
@@ -59,6 +70,16 @@ export type GameTableHistoryEntry =
   | {
       readonly type: "pass";
       readonly playerId: PlayerId;
+    }
+  | {
+      readonly type: "bid";
+      readonly playerId: PlayerId;
+      readonly called: boolean;
+    }
+  | {
+      readonly type: "rob";
+      readonly playerId: PlayerId;
+      readonly robbed: boolean;
     };
 
 export interface SettlementPlayer {
@@ -164,6 +185,8 @@ export class GameTable {
   private readonly playCounts = new Map<PlayerId, number>();
   private readonly playHistory: PlayHistoryEntry[] = [];
 
+  constructor(private readonly random: RandomSource = Math.random) {}
+
   addPlayer(playerId: PlayerId): SeatIndex {
     return this.seatPlayer(playerId, "human");
   }
@@ -263,6 +286,8 @@ export class GameTable {
       throw new Error("It is not this player's bidding turn.");
     }
 
+    this.playHistory.push({ type: "bid", playerId, called });
+
     if (called) {
       this.bidCandidateId = playerId;
       this.firstBidderId = playerId;
@@ -312,6 +337,8 @@ export class GameTable {
     if (!this.bidCandidateId) {
       throw new Error("Cannot rob landlord before a player has called landlord.");
     }
+
+    this.playHistory.push({ type: "rob", playerId, robbed });
 
     if (robbed) {
       this.bidCandidateId = playerId;
@@ -555,9 +582,7 @@ export class GameTable {
     this.playHistory.length = 0;
     for (const entry of state.playHistory) {
       this.playHistory.push(
-        entry.type === "play"
-          ? { type: "play", playerId: entry.playerId, cards: parseCardIds(entry.cards) }
-          : { type: "pass", playerId: entry.playerId }
+        entry.type === "play" ? { type: "play", playerId: entry.playerId, cards: parseCardIds(entry.cards) } : { ...entry }
       );
     }
   }
@@ -568,6 +593,22 @@ export class GameTable {
       throw new Error(`Cannot reset during ${this.phase} phase.`);
     }
 
+    this.clearRoundState();
+    return this.snapshot();
+  }
+
+  /** 流局：进行中的一局无法继续(如 AI 决策不可恢复)时放弃本局——不产生结算、累计分不变，回到 ready 等下一局。 */
+  abortRound(): GameSnapshot {
+    if (this.phase !== "bidding" && this.phase !== "robbing" && this.phase !== "playing") {
+      throw new Error(`Cannot abort round during ${this.phase} phase.`);
+    }
+
+    this.clearRoundState();
+    return this.snapshot();
+  }
+
+  /** 清空一局的全部牌局状态（保留玩家与累计分），resetForNextRound/abortRound 共用。 */
+  private clearRoundState(): void {
     for (const player of this.players.values()) {
       player.ready = false;
       player.hand = [];
@@ -590,11 +631,10 @@ export class GameTable {
     this.playCounts.clear();
     this.playHistory.length = 0;
     this.phase = this.players.size === 3 ? "ready" : "waiting";
-    return this.snapshot();
   }
 
   private dealForBidding(): void {
-    const deck = shuffleDeck(createDeck());
+    const deck = shuffleDeck(createDeck(), this.random);
     const deal = dealCards(deck);
     const players = [...this.players.values()].sort((a, b) => a.seat - b.seat);
 

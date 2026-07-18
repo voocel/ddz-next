@@ -1,4 +1,5 @@
 import { Suspense, lazy, type RefObject } from "react";
+import { AiDock } from "../components/AiDock";
 import { TableOverlay } from "../components/TableOverlay";
 import type { PhaserTableHandle } from "../../PhaserTable";
 import type { DdzApp } from "../useDdzApp";
@@ -37,21 +38,25 @@ export function TableScreen({
 
   return (
     <main className="table-screen">
-      <Suspense fallback={<section className="game-host loading-host">加载牌桌</section>}>
-        <PhaserTable
-          ref={tableRef}
-          events={events}
-          localPlayerId={session.user.id}
-          onPass={handlePass}
-          replay={selectedReplay}
-          replayStep={replayStep}
-          theme={theme}
-          audioLevels={audioLevels}
-          onPlay={handlePlay}
-        />
-      </Suspense>
+      <section className="table-stage">
+        <Suspense fallback={<section className="game-host loading-host">加载牌桌</section>}>
+          <PhaserTable
+            ref={tableRef}
+            events={events}
+            localPlayerId={session.user.id}
+            onPass={handlePass}
+            replay={selectedReplay}
+            replayStep={replayStep}
+            theme={theme}
+            audioLevels={audioLevels}
+            onPlay={handlePlay}
+          />
+        </Suspense>
 
-      <TableOverlay app={app} tableRef={tableRef} onOpenSettings={onOpenSettings} />
+        <TableOverlay app={app} tableRef={tableRef} onOpenSettings={onOpenSettings} />
+      </section>
+
+      <AiDock app={app} />
     </main>
   );
 }

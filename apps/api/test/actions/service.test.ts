@@ -160,13 +160,201 @@ describe("GameActionService", () => {
         roundId: "round-1",
         landlordId: "p0",
         players: [
-          { playerId: "p0", playerKind: "human", seat: 0, scoreDelta: 2 },
-          { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1 },
-          { playerId: "p2", playerKind: "human", seat: 2, scoreDelta: -1 }
+          { playerId: "p0", playerKind: "human", seat: 0, scoreDelta: 2, botProvider: null, botModel: null },
+          { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1, botProvider: null, botModel: null },
+          { playerId: "p2", playerKind: "human", seat: 2, scoreDelta: -1, botProvider: null, botModel: null }
         ]
       }
     ]);
     expect(repository.coinLedgerPlayerIds).toEqual(["p0", "p1", "p2"]);
+  });
+
+  it("merges botPlayers model identity into settlement players (LLM bot 身份落库)", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.seedRoom("100012", "room-12");
+    await repository.seedRound("room-12");
+    const service = new GameActionService(repository);
+
+    await service.record({
+      roomCode: "100012",
+      ownerId: "owner-1",
+      mutationId: mutationId(12),
+      actions: [
+        {
+          playerId: "bot:100012:1",
+          playerKind: "bot",
+          type: "round_settled",
+          payload: {
+            settlement: {
+              winnerId: "bot:100012:1",
+              landlordId: "bot:100012:1",
+              landlordWon: true,
+              baseScore: 1,
+              players: [
+                { playerId: "bot:100012:1", seat: 0, role: "landlord", handCount: 0, scoreDelta: 2, totalScore: 2 },
+                { playerId: "bot:100012:2", seat: 1, role: "farmer", handCount: 3, scoreDelta: -1, totalScore: -1 },
+                { playerId: "p2", seat: 2, role: "farmer", handCount: 4, scoreDelta: -1, totalScore: -1 }
+              ]
+            },
+            botPlayers: {
+              "bot:100012:1": { provider: "anthropic", model: "claude-haiku-4-5" },
+              "bot:100012:2": { provider: "deepseek", model: "deepseek-v4-pro" }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(repository.settlements).toEqual([
+      {
+        roundId: "round-1",
+        landlordId: "bot:100012:1",
+        players: [
+          {
+            playerId: "bot:100012:1",
+            playerKind: "bot",
+            seat: 0,
+            scoreDelta: 2,
+            botProvider: "anthropic",
+            botModel: "claude-haiku-4-5"
+          },
+          {
+            playerId: "bot:100012:2",
+            playerKind: "bot",
+            seat: 1,
+            scoreDelta: -1,
+            botProvider: "deepseek",
+            botModel: "deepseek-v4-pro"
+          },
+          { playerId: "p2", playerKind: "human", seat: 2, scoreDelta: -1, botProvider: null, botModel: null }
+        ]
+      }
+    ]);
+    // 真人照常入账;bot 无 User 行,不产生金币流水
+    expect(repository.coinLedgerPlayerIds).toEqual(["p2"]);
+  });
+
+  it("round_aborted 关闭当前局并保留参局模型身份(技术负归属 failedPlayerId)", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.seedRoom("100013", "room-13");
+    await repository.seedRound("room-13");
+    const service = new GameActionService(repository);
+
+    await service.record({
+      roomCode: "100013",
+      ownerId: "owner-1",
+      mutationId: mutationId(13),
+      actions: [
+        {
+          playerId: "bot:100013:1",
+          playerKind: "bot",
+          type: "round_aborted",
+          payload: {
+            reason: "LLM 请求失败: 上游宕机",
+            failedPlayerId: "bot:100013:1",
+            players: [
+              { playerId: "bot:100013:1", seat: 0 },
+              { playerId: "bot:100013:2", seat: 1 },
+              { playerId: "bot:100013:3", seat: 2 }
+            ],
+            botPlayers: {
+              "bot:100013:1": { provider: "anthropic", model: "claude-sonnet-5" },
+              "bot:100013:2": { provider: "deepseek", model: "deepseek-v4-pro" },
+              "bot:100013:3": { provider: "moonshot", model: "kimi-k2" }
+            }
+          }
+        }
+      ]
+    });
+
+    expect(repository.aborts).toEqual([
+      {
+        roundId: "round-1",
+        reason: "LLM 请求失败: 上游宕机",
+        failedPlayerId: "bot:100013:1",
+        players: [
+          { playerId: "bot:100013:1", playerKind: "bot", seat: 0, botProvider: "anthropic", botModel: "claude-sonnet-5" },
+          { playerId: "bot:100013:2", playerKind: "bot", seat: 1, botProvider: "deepseek", botModel: "deepseek-v4-pro" },
+          { playerId: "bot:100013:3", playerKind: "bot", seat: 2, botProvider: "moonshot", botModel: "kimi-k2" }
+        ]
+      }
+    ]);
+    // 流局终结当前局:无结算、无金币流水
+    expect(repository.rounds[0]?.endedAt).not.toBeNull();
+    expect(repository.settlements).toHaveLength(0);
+    expect(repository.coinLedgerPlayerIds).toEqual([]);
+  });
+
+  it("round_aborted 后可开新一局;无未结束局时流局报 409", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.seedRoom("100014", "room-14");
+    await repository.seedRound("room-14");
+    const service = new GameActionService(repository);
+    const abortPayload = {
+      reason: "LLM 请求失败",
+      failedPlayerId: "bot:100014:1",
+      players: [
+        { playerId: "bot:100014:1", seat: 0 },
+        { playerId: "bot:100014:2", seat: 1 },
+        { playerId: "bot:100014:3", seat: 2 }
+      ]
+    };
+
+    await service.record({
+      roomCode: "100014",
+      ownerId: "owner-1",
+      mutationId: mutationId(14),
+      actions: [{ playerId: "bot:100014:1", playerKind: "bot", type: "round_aborted", payload: abortPayload }]
+    });
+
+    // 流局已终结上一局,round_started 可立即开新局
+    const next = await service.record({
+      roomCode: "100014",
+      ownerId: "owner-1",
+      mutationId: mutationId(15),
+      actions: [{ playerId: null, playerKind: null, type: "round_started", payload: { currentPlayerId: "bot:100014:1" } }]
+    });
+    expect(next.roundId).toBe("round-2");
+
+    // 新局未结束前再记流局合法;但没有未结束局(连续两次流局同一局)时报 409
+    await service.record({
+      roomCode: "100014",
+      ownerId: "owner-1",
+      mutationId: mutationId(16),
+      actions: [{ playerId: "bot:100014:1", playerKind: "bot", type: "round_aborted", payload: abortPayload }]
+    });
+    await expect(
+      service.record({
+        roomCode: "100014",
+        ownerId: "owner-1",
+        mutationId: mutationId(17),
+        actions: [{ playerId: "bot:100014:1", playerKind: "bot", type: "round_aborted", payload: abortPayload }]
+      })
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("非法流局 payload 报 400", async () => {
+    const repository = new InMemoryGameActionRepository();
+    repository.seedRoom("100015", "room-15");
+    await repository.seedRound("room-15");
+    const service = new GameActionService(repository);
+
+    await expect(
+      service.record({
+        roomCode: "100015",
+        ownerId: "owner-1",
+        mutationId: mutationId(18),
+        actions: [
+          {
+            playerId: "bot:100015:1",
+            playerKind: "bot",
+            type: "round_aborted",
+            // 缺 players/failedPlayerId
+            payload: { reason: "boom" }
+          }
+        ]
+      })
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("returns recorded mutation results without replaying settlement side effects", async () => {
@@ -274,9 +462,9 @@ describe("GameActionService", () => {
     });
 
     expect(repository.settlements[0]?.players).toEqual([
-      { playerId: "bot:100004:1", playerKind: "bot", seat: 0, scoreDelta: 2 },
-      { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1 },
-      { playerId: "bot:100004:2", playerKind: "bot", seat: 2, scoreDelta: -1 }
+      { playerId: "bot:100004:1", playerKind: "bot", seat: 0, scoreDelta: 2, botProvider: null, botModel: null },
+      { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1, botProvider: null, botModel: null },
+      { playerId: "bot:100004:2", playerKind: "bot", seat: 2, scoreDelta: -1, botProvider: null, botModel: null }
     ]);
     expect(repository.coinLedgerPlayerIds).toEqual(["p1"]);
   });

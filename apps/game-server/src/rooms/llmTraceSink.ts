@@ -15,17 +15,12 @@ export interface LlmTraceSink {
 const DEFAULT_TRACE_DIR = "logs/llm-traces";
 
 /**
- * env 开关(BOT_DECISION_TRACE=true)下的 JSONL 决策留证 sink:每个房间一文件,一行一次决策,
- * 含完整游戏上下文/手牌/模型 IO/思考/用量/延迟/结局,供逐手排错与优化。
- * 未开启时返回 null(零开销、不落盘、对生产无副作用)。
+ * JSONL 决策留证 sink(常开,不设开关——LLM 调用是全链路最不稳定的环节,事后排查必须有第一手证据):
+ * 每个房间一文件,一行一次决策,含完整游戏上下文/手牌/模型 IO/思考/用量/上游原始 HTTP/延迟/结局。
  * 路径:BOT_TRACE_DIR(相对仓库根或绝对路径,默认 logs/llm-traces)/<roomCode>-<起始时间>.jsonl。
  * 写入用「尾 promise 链」串行化(防交错 + 首写前 mkdir -p),失败只 console.error——绝不拖垮房间。
  */
-export function createLlmTraceSink(env: NodeJS.ProcessEnv, roomCode: string): LlmTraceSink | null {
-  if (env.BOT_DECISION_TRACE !== "true") {
-    return null;
-  }
-
+export function createLlmTraceSink(env: NodeJS.ProcessEnv, roomCode: string): LlmTraceSink {
   const dir = resolveRootPath(env.BOT_TRACE_DIR?.trim() || DEFAULT_TRACE_DIR);
   const startedAt = new Date().toISOString();
   const file = join(dir, `${sanitize(roomCode)}-${sanitize(startedAt)}.jsonl`);

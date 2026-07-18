@@ -16,6 +16,7 @@ import type { AuthService } from "./auth/service.js";
 import { ApiError } from "./errors.js";
 import type { HistoryService } from "./history/service.js";
 import type { InternalConfig } from "./internal/config.js";
+import type { LeaderboardService } from "./leaderboard/service.js";
 import type { RoomService } from "./rooms/service.js";
 
 interface ServerDependencies {
@@ -23,6 +24,7 @@ interface ServerDependencies {
   readonly roomService: RoomService;
   readonly gameActionService: GameActionService;
   readonly historyService: HistoryService;
+  readonly leaderboardService: LeaderboardService;
   readonly tokenConfig: TokenConfig;
   readonly internalConfig: InternalConfig;
   readonly healthCheck?: () => Promise<void>;
@@ -112,6 +114,35 @@ export function buildServer(dependencies: ServerDependencies) {
   });
 
   app.get("/rooms", async () => dependencies.roomService.listOpenRooms());
+
+  // 竞技场直播列表（公开）：open/playing 的全 AI 对战房
+  app.get("/arena/rooms", async () => dependencies.roomService.listArenaRooms());
+
+  // 模型排行榜（公开）：按 (provider, model) 聚合全部已结束对局
+  app.get("/leaderboard", async () => dependencies.leaderboardService.getLeaderboard());
+
+  // 最近的公开 AI 对局（全 bot 已结算局），复盘入口列表
+  app.get("/replays/recent", async () => dependencies.historyService.listRecentBotReplays());
+
+  // 公开复盘（仅全 bot 局，明牌下发 revealedHands）；真人局仍走 /me/rounds/:id 私有通道
+  app.get("/replays/:roundId", async (request) => {
+    const roundId = (request.params as { roundId?: string }).roundId;
+    if (!roundId) {
+      throw new ApiError("Round id is required.", 400);
+    }
+
+    return dependencies.historyService.getPublicRoundReplay(roundId);
+  });
+
+  // 公开查房（无牌局状态）：/table/:code、/arena/:code 直连与分享链接的入口
+  app.get("/rooms/:code", async (request) => {
+    const code = (request.params as { code?: string }).code;
+    if (!code) {
+      throw new ApiError("Room code is required.", 400);
+    }
+
+    return dependencies.roomService.getRoomByCode(code);
+  });
 
   app.post("/rooms", async (request) => {
     requireAuth(request.headers, dependencies.tokenConfig);

@@ -9,6 +9,7 @@ const roomSelect = {
   id: true,
   code: true,
   status: true,
+  mode: true,
   createdAt: true,
   updatedAt: true
 } as const;
@@ -19,10 +20,26 @@ export class PrismaRoomRepository implements RoomRepository {
   async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.prisma.room.findMany({
       where: {
-        status: "open"
+        status: "open",
+        // 竞技场房不能入座，不进普通大厅列表（走 /arena/rooms）
+        mode: "standard"
       },
       orderBy: {
         createdAt: "desc"
+      },
+      take: limit,
+      select: roomSelect
+    }) as Promise<RoomRecord[]>;
+  }
+
+  async listArenaRooms(limit: number): Promise<readonly RoomRecord[]> {
+    return this.prisma.room.findMany({
+      where: {
+        mode: "arena",
+        status: { in: ["open", "playing"] }
+      },
+      orderBy: {
+        updatedAt: "desc"
       },
       take: limit,
       select: roomSelect
@@ -205,7 +222,7 @@ export class PrismaRoomRepository implements RoomRepository {
 
 async function lockRoomByCode(tx: PrismaTransaction, code: string): Promise<RoomRecord | null> {
   const rows = await tx.$queryRaw<RoomRecord[]>`
-    SELECT "id", "code", "status", "createdAt", "updatedAt"
+    SELECT "id", "code", "status", "mode", "createdAt", "updatedAt"
     FROM "Room"
     WHERE "code" = ${code}
     FOR UPDATE
@@ -217,6 +234,7 @@ function toRoomRecord(room: {
   readonly id: string;
   readonly code: string;
   readonly status: string;
+  readonly mode: string;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }): RoomRecord {

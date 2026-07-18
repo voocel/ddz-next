@@ -1,6 +1,6 @@
 import { Client, type Room } from "@colyseus/sdk";
 import type { CardId } from "@ddz/domain";
-import { DUPLICATE_SESSION_CLOSE_CODE, gameEventSchema, type GameEvent } from "@ddz/protocol";
+import { DUPLICATE_SESSION_CLOSE_CODE, gameEventSchema, type BotModelRefDto, type GameEvent } from "@ddz/protocol";
 
 interface GameClientOptions {
   readonly endpoint: string;
@@ -8,6 +8,12 @@ interface GameClientOptions {
   readonly accessToken: string;
   readonly roomCode: string;
   readonly quickStart?: boolean;
+  /** 以观众身份入房（不占座位）；观战下 quickStart/bot 设置不生效 */
+  readonly spectate?: boolean;
+  /** 创建竞技场房的三席阵容（joinOrCreate 首次创建时生效；观战已存在的房省略） */
+  readonly arenaLineup?: readonly BotModelRefDto[] | null;
+  /** 创建竞技场房的思考强度（随 arenaLineup 首次创建时生效）；缺省由服务端定默认 */
+  readonly arenaReasoningEffort?: string | null;
   /** 当前 AI 房间的机器人设置:连接时作为初始值,连接后也可通过 update_bot_settings 热更新。 */
   readonly getBotSettings?: (() => BotSettings | null) | undefined;
   readonly onEvent: (event: GameEvent) => void;
@@ -38,8 +44,8 @@ export function createGameClient(options: GameClientOptions) {
   // 世代号：每次 connect/disconnect 自增，旧连接的异步回调据此失效，
   // 避免快速进出房间时旧连接覆盖新状态。
   let generation = 0;
-  // 快速开始只在首次入房时自动准备；断线重连回到牌局中再补发会被拒绝
-  let quickStartPending = options.quickStart === true;
+  // 快速开始只在首次入房时自动准备；断线重连回到牌局中再补发会被拒绝；观众不占座无准备一说
+  let quickStartPending = options.quickStart === true && options.spectate !== true;
 
   const sendBotSettings = (settings: {
     readonly provider: string;
@@ -85,7 +91,15 @@ export function createGameClient(options: GameClientOptions) {
         const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
           roomCode: options.roomCode,
-          quickStart: options.quickStart === true,
+          quickStart: options.quickStart === true && options.spectate !== true,
+          ...(options.spectate ? { spectate: true } : {}),
+          ...(options.arenaLineup?.length
+            ? {
+                arena: true,
+                lineup: options.arenaLineup,
+                ...(options.arenaReasoningEffort ? { botReasoningEffort: options.arenaReasoningEffort } : {})
+              }
+            : {}),
           ...(botSettings?.mode ? { botDecisionMode: botSettings.mode } : {}),
           ...(botSettings?.provider ? { botProvider: botSettings.provider } : {}),
           ...(botSettings?.model ? { botModel: botSettings.model } : {}),
@@ -101,7 +115,7 @@ export function createGameClient(options: GameClientOptions) {
         // 关闭 SDK 内建的会话级重连：服务器崩溃后旧 roomId 已不存在，按旧会话重试必败；
         // 关闭后异常断开会直接触发 onLeave(code)，由应用层 joinOrCreate 重连（同时覆盖服务端牌局恢复）
         joined.reconnection.enabled = false;
-        options.onStatus(`已进入房间 ${options.roomCode}`);
+        options.onStatus(options.spectate ? `正在观战直播间 ${options.roomCode}` : `已进入房间 ${options.roomCode}`);
 
         joined.onMessage("event", (payload: unknown) => {
           if (gen !== generation) {
@@ -137,7 +151,7 @@ export function createGameClient(options: GameClientOptions) {
         });
 
         const latestBotSettings = options.getBotSettings?.() ?? null;
-        if (latestBotSettings?.mode === "llm") {
+        if (options.spectate !== true && latestBotSettings?.mode === "llm") {
           sendBotSettings(latestBotSettings);
         }
 

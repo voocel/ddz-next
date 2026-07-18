@@ -9,12 +9,15 @@ import { PrismaGameActionRepository } from "../actions/prismaGameActionRepositor
 import { GameActionService } from "../actions/service.js";
 import { PrismaHistoryRepository } from "../history/prismaHistoryRepository.js";
 import { HistoryService } from "../history/service.js";
+import { PrismaLeaderboardRepository } from "../leaderboard/prismaLeaderboardRepository.js";
+import { LeaderboardService } from "../leaderboard/service.js";
 
 export interface DefaultAuthDependencies {
   readonly authService: AuthService;
   readonly roomService: RoomService;
   readonly gameActionService: GameActionService;
   readonly historyService: HistoryService;
+  readonly leaderboardService: LeaderboardService;
   readonly tokenConfig: ReturnType<typeof readTokenConfig>;
   readonly internalConfig: InternalConfig;
   connect(): Promise<void>;
@@ -32,6 +35,7 @@ export function createDefaultAuthDependencies(): DefaultAuthDependencies {
     roomService: new RoomService(new PrismaRoomRepository(prisma)),
     gameActionService: new GameActionService(new PrismaGameActionRepository(prisma)),
     historyService: new HistoryService(new PrismaHistoryRepository(prisma)),
+    leaderboardService: new LeaderboardService(new PrismaLeaderboardRepository(prisma)),
     tokenConfig,
     internalConfig: readInternalConfig(),
     connect: () => prisma.$connect(),

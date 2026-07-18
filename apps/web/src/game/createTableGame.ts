@@ -33,28 +33,34 @@ export function createTableGame(parent: HTMLElement, options: TableGameOptions) 
     antialiasGL: true,
     roundPixels: true,
     scale: {
+      // 画布显示尺寸由样式表钉死为铺满容器(.game-host canvas),这里只管内部分辨率;
+      // 禁用 autoCenter:它按新旧尺寸差算负 margin 居中画布,与容器随布局(AI 侧栏出现)变宽窄互相打架,会把画布推偏留黑边
       mode: Phaser.Scale.NONE,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
+      autoCenter: Phaser.Scale.NO_CENTER,
       autoRound: true
     },
     scene
   });
 
-  const setCanvasDisplaySize = (displayWidth: number, displayHeight: number): void => {
+  let lastDisplaySize = { width: bounds.width, height: bounds.height };
+  const setCanvasResolution = (displayWidth: number, displayHeight: number): void => {
+    lastDisplaySize = { width: displayWidth, height: displayHeight };
     const nextWidth = Math.max(TABLE_STAGE_WIDTH, Math.round(displayWidth * dpr));
     const nextHeight = Math.max(TABLE_STAGE_HEIGHT, Math.round(displayHeight * dpr));
     game.scale.resize(nextWidth, nextHeight);
-    game.canvas.style.width = `${displayWidth}px`;
-    game.canvas.style.height = `${displayHeight}px`;
   };
   const resizeObserver = new ResizeObserver(([entry]) => {
     if (!entry) {
       return;
     }
-    setCanvasDisplaySize(entry.contentRect.width, entry.contentRect.height);
+    setCanvasResolution(entry.contentRect.width, entry.contentRect.height);
   });
   resizeObserver.observe(parent);
-  setCanvasDisplaySize(bounds.width, bounds.height);
+  setCanvasResolution(bounds.width, bounds.height);
+  // 布局仍在变动(如 AI 侧栏出现)时,启动早期的 resize 可能被 Phaser 引导流程覆盖——就绪后按最终容器尺寸重放一次
+  game.events.once(Phaser.Core.Events.READY, () => {
+    setCanvasResolution(lastDisplaySize.width, lastDisplaySize.height);
+  });
 
   return {
     game,

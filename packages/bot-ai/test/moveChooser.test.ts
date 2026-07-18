@@ -73,6 +73,19 @@ describe("parseMoveIndex", () => {
     expect(parseMoveIndex("99 太大,选 1", 3)).toBe(0);
   });
 
+  it("夹带解释时候选标签唯一命中优先于数字提取(牌名数字不再被误当编号)", () => {
+    // 真实事故:glm 抢地主阶段输出整句话,旧逻辑把牌名「2」当编号选了「抢地主」,与其明说的「不抢」相反
+    expect(parseMoveIndex("牌力一般，仅双王及2，无炸弹，顺牌不顺畅，不抢。", 2, ["不抢", "抢地主"])).toBe(0);
+    expect(parseMoveIndex("手牌不错，叫地主！", 2, ["不叫", "叫地主"])).toBe(1);
+    expect(parseMoveIndex("上家对子 2 压不住，过牌(不出)保实力", 3, ["过牌(不出)", "对子 2", "炸弹 33334"])).toBe(1);
+    // ↑ 「过牌(不出)」与「对子 2」双标签命中 → 歧义,退数字提取:「2」在范围内 → 编号2(维持旧行为,不比从前差)
+  });
+
+  it("标签零命中或未传标签时保持数字提取兜底", () => {
+    expect(parseMoveIndex("我选 2 号", 3, ["过牌(不出)", "单张 K", "单张 A"])).toBe(1);
+    expect(parseMoveIndex("我选 2 号", 3)).toBe(1);
+  });
+
   it("越界/负数/非整数/解析不出数字返回 null", () => {
     expect(parseMoveIndex(0, 3)).toBeNull();
     expect(parseMoveIndex(4, 3)).toBeNull();

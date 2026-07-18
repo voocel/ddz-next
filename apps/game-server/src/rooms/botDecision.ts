@@ -2,6 +2,7 @@ import {
   buildReasoningProviderOptions,
   decisionConfigFromEnv,
   isAllowedModel,
+  LlmBidChooser,
   LlmMoveChooser,
   parseReasoningEffort,
   resolveModel,
@@ -102,17 +103,20 @@ export function createBotBrain(
   const providerConfig = registry.providers[config.model.provider]!;
   const providerType = providerConfig.type;
   const providerOptions = buildReasoningProviderOptions(providerType, config.model.provider, config.reasoningEffort);
+  // 出牌与叫抢共用同一份请求配置(同模型/超时/思考强度),prompt 内容由各自 chooser 组装。
+  const chooserOptions = {
+    model,
+    timeoutMs: config.timeoutMs,
+    providerOptions,
+    provider: {
+      key: config.model.provider,
+      type: providerType,
+      baseURL: providerConfig.baseURL
+    }
+  };
   return new LlmBotBrain({
-    chooser: new LlmMoveChooser({
-      model,
-      timeoutMs: config.timeoutMs,
-      providerOptions,
-      provider: {
-        key: config.model.provider,
-        type: providerType,
-        baseURL: providerConfig.baseURL
-      }
-    }),
+    chooser: new LlmMoveChooser(chooserOptions),
+    bidChooser: new LlmBidChooser(chooserOptions),
     onTrace: hooks?.onTrace,
     onDecision: hooks?.onDecision,
     onStreamStart: hooks?.onStreamStart,
@@ -130,6 +134,12 @@ export function resolveBotBrain(
   return createBotBrain(resolveDecisionConfig(options, registry, envConfig), registry, hooks);
 }
 
+/** 热更新结果:大脑实例 + 实际生效的模型(供房间登记 bot 身份落库)。 */
+export interface BotBrainUpdateResult {
+  readonly brain: BotBrain;
+  readonly model: ModelRef;
+}
+
 /**
  * 牌桌内热更新必须显式失败:provider/model 非空时必须命中注册表,否则告诉客户端更新被拒。
  * provider/model 皆空表示切回服务端默认模型。
@@ -139,7 +149,7 @@ export function resolveBotBrainUpdate(
   registry: BotProviderRegistry,
   hooks?: BotBrainHooks,
   envConfig: DecisionConfig = decisionConfigFromEnv()
-): BotBrain {
+): BotBrainUpdateResult {
   const hasProvider = update.provider.trim().length > 0;
   const hasModel = update.model.trim().length > 0;
   if (hasProvider !== hasModel) {
@@ -151,7 +161,7 @@ export function resolveBotBrainUpdate(
     throw new Error(`AI 模型更新失败: ${model.provider}/${model.model} 不在服务端允许的模型列表中。`);
   }
 
-  return createBotBrain(
+  const brain = createBotBrain(
     {
       useLlm: true,
       model,
@@ -161,4 +171,5 @@ export function resolveBotBrainUpdate(
     registry,
     hooks
   );
+  return { brain, model };
 }

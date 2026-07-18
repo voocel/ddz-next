@@ -119,16 +119,16 @@ describe("resolveBotBrain", () => {
 });
 
 describe("resolveBotBrainUpdate", () => {
-  it("动态更新合法模型时造大模型大脑", () => {
-    expect(
-      resolveBotBrainUpdate({ provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "off" }, registry)
-    ).toBeInstanceOf(LlmBotBrain);
+  it("动态更新合法模型时造大模型大脑,并返回生效模型供房间登记身份", () => {
+    const result = resolveBotBrainUpdate({ provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "off" }, registry);
+    expect(result.brain).toBeInstanceOf(LlmBotBrain);
+    expect(result.model).toEqual({ provider: "deepseek", model: "deepseek-v4-pro" });
   });
 
   it("动态更新空 provider/model 时切回服务端默认模型", () => {
-    expect(resolveBotBrainUpdate({ provider: "", model: "", reasoningEffort: "high" }, registry)).toBeInstanceOf(
-      LlmBotBrain
-    );
+    const result = resolveBotBrainUpdate({ provider: "", model: "", reasoningEffort: "high" }, registry);
+    expect(result.brain).toBeInstanceOf(LlmBotBrain);
+    expect(result.model).toEqual(registry.default);
   });
 
   it("动态更新非法 provider/model 时显式拒绝,不静默回退默认模型", () => {

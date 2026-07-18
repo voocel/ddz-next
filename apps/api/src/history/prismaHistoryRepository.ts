@@ -20,7 +20,9 @@ const roundHistorySelect = {
       playerKind: true,
       seat: true,
       score: true,
-      coinDelta: true
+      coinDelta: true,
+      botProvider: true,
+      botModel: true
     }
   }
 } as const;
@@ -83,6 +85,40 @@ export class PrismaHistoryRepository implements HistoryRepository {
     }
     const [enriched] = await this.attachNicknames([round]);
     return enriched ?? round;
+  }
+
+  async findPublicBotRoundById(roundId: string): Promise<RoundReplayRecord | null> {
+    // some bot + none human:排除真人局(保护手牌隐私)与尚无结算行的进行中局
+    return (await this.prisma.round.findFirst({
+      where: {
+        id: roundId,
+        endedAt: { not: null },
+        players: {
+          some: { playerKind: "bot" },
+          none: { playerKind: "human" }
+        }
+      },
+      select: roundReplaySelect
+    })) as RoundReplayRecord | null;
+  }
+
+  async listRecentBotRounds(limit: number): Promise<readonly RoundHistoryRecord[]> {
+    return (await this.prisma.round.findMany({
+      where: {
+        endedAt: { not: null },
+        // 流局无对局内容,不进公开复盘列表
+        abortReason: null,
+        players: {
+          some: { playerKind: "bot" },
+          none: { playerKind: "human" }
+        }
+      },
+      orderBy: {
+        endedAt: "desc"
+      },
+      take: limit,
+      select: roundHistorySelect
+    })) as RoundHistoryRecord[];
   }
 
   /** RoundPlayer.playerId 对真人即 User.id（bot 为 "bot:N" 无对应用户），批量回填昵称 */

@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import type { PhaserTableHandle } from "../../PhaserTable";
-import { BotThinkingBubble } from "./BotThinkingBubble";
+import { SeatThinkCloud } from "./SeatThinkCloud";
 import { SeatTurnClock } from "./SeatTurnClock";
 import { SettlementPanel } from "./SettlementPanel";
 import { TableControlRow } from "./TableControlRow";
@@ -29,12 +29,12 @@ export function TableOverlay({ app, tableRef, onOpenSettings }: TableOverlayProp
     client,
     turnTimer,
     snapshot,
-    thinking,
     replayPlaying,
     replayStep,
     setReplayPlaying,
     setReplayStep,
-    theme
+    theme,
+    thinking
   } = app;
 
   if (!session) {
@@ -47,12 +47,7 @@ export function TableOverlay({ app, tableRef, onOpenSettings }: TableOverlayProp
     <>
       {showLiveOverlays ? (
         <>
-          <BotThinkingBubble
-            thinking={thinking}
-            snapshot={snapshot}
-            localPlayerId={session.user.id}
-            onRetryBotTurn={() => client.retryBotTurn()}
-          />
+          <SeatThinkCloud snapshot={snapshot} thinking={thinking} localPlayerId={session.user.id} />
           <SeatTurnClock snapshot={snapshot} turnTimer={turnTimer} localPlayerId={session.user.id} theme={theme} />
         </>
       ) : null}

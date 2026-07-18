@@ -26,6 +26,8 @@ export interface RoundHistoryPlayerRecord {
   readonly seat: 0 | 1 | 2;
   readonly score: number;
   readonly coinDelta: number;
+  readonly botProvider?: string | null;
+  readonly botModel?: string | null;
 }
 
 export interface RoundHistoryRecord {
@@ -56,6 +58,10 @@ export interface CoinLedgerRecord {
 export interface HistoryRepository {
   listRoundsByUserId(userId: string, limit: number): Promise<readonly RoundHistoryRecord[]>;
   findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null>;
+  /** 公开复盘查询：仅命中全 bot 的已结束局（有真人参与即视为不存在，保护真人手牌隐私） */
+  findPublicBotRoundById(roundId: string): Promise<RoundReplayRecord | null>;
+  /** 最近的全 bot 已结算局（流局不含），公开对局列表用 */
+  listRecentBotRounds(limit: number): Promise<readonly RoundHistoryRecord[]>;
   listCoinLedgersByUserId(userId: string, limit: number): Promise<readonly CoinLedgerRecord[]>;
 }
 
@@ -77,6 +83,29 @@ export class HistoryService {
 
     return {
       round: toRoundReplayDto(round, userId)
+    };
+  }
+
+  /** 公开复盘：全 bot 局明牌下发（revealedHands），真人局在仓储层即不可见 */
+  async getPublicRoundReplay(roundId: string): Promise<RoundReplayResponse> {
+    const round = await this.history.findPublicBotRoundById(roundId);
+    if (!round) {
+      throw new HistoryError("Round replay not found.", 404);
+    }
+
+    return {
+      round: {
+        ...toRoundReplayDto(round, null),
+        revealedHands: readRevealedHands(round)
+      }
+    };
+  }
+
+  /** 最近的公开 AI 对局（全 bot 已结算局），复盘入口列表 */
+  async listRecentBotReplays(): Promise<RoundHistoryResponse> {
+    const rounds = await this.history.listRecentBotRounds(20);
+    return {
+      rounds: rounds.map(toRoundHistoryDto)
     };
   }
 
@@ -106,6 +135,9 @@ function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
     players: round.players.map((player) => ({
       playerId: player.playerId,
       ...(player.nickname === undefined ? {} : { nickname: player.nickname }),
+      ...(player.botProvider && player.botModel
+        ? { model: { provider: player.botProvider, model: player.botModel } }
+        : {}),
       playerKind: player.playerKind,
       seat: player.seat,
       score: player.score,
@@ -114,10 +146,11 @@ function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
   };
 }
 
-function toRoundReplayDto(round: RoundReplayRecord, userId: string): RoundReplayResponse["round"] {
+function toRoundReplayDto(round: RoundReplayRecord, userId: string | null): RoundReplayResponse["round"] {
   return {
     ...toRoundHistoryDto(round),
-    viewerInitialHand: readViewerInitialHand(round, userId),
+    viewerInitialHand: userId === null ? [] : readInitialHand(round, userId),
+    revealedHands: [],
     actions: round.actions.map((action) => ({
       id: action.id,
       seq: action.seq,
@@ -130,10 +163,10 @@ function toRoundReplayDto(round: RoundReplayRecord, userId: string): RoundReplay
   };
 }
 
-function readViewerInitialHand(round: RoundReplayRecord, userId: string): CardDto[] {
+function readInitialHand(round: RoundReplayRecord, playerId: string): CardDto[] {
   const started = round.actions.find((action) => action.type === "round_started");
   const initialHands = readObject(started?.payload.initialHands);
-  const hand = readUnknownArray(initialHands?.[userId]);
+  const hand = readUnknownArray(initialHands?.[playerId]);
   if (!hand) {
     return [];
   }
@@ -141,10 +174,20 @@ function readViewerInitialHand(round: RoundReplayRecord, userId: string): CardDt
   return hand.map((cardId) => {
     const parsed = cardSchema.safeParse(readReplayCard(cardId));
     if (!parsed.success) {
-      throw new HistoryError("Round replay contains an invalid viewer initial hand.", 500);
+      throw new HistoryError("Round replay contains an invalid initial hand.", 500);
     }
     return parsed.data;
   });
+}
+
+/** 明牌复盘的三家初始手牌：按座位序展开 round_started 落库的 initialHands */
+function readRevealedHands(round: RoundReplayRecord): RoundReplayResponse["round"]["revealedHands"] {
+  return round.players
+    .map((player) => ({
+      playerId: player.playerId,
+      cards: readInitialHand(round, player.playerId)
+    }))
+    .filter((entry) => entry.cards.length > 0);
 }
 
 function readReplayCard(value: unknown): unknown {

@@ -1,16 +1,19 @@
 import {
   coinLedgerResponseSchema,
+  leaderboardResponseSchema,
   roomListResponseSchema,
   roomResponseSchema,
   loginResponseSchema,
   roundHistoryResponseSchema,
   roundReplayResponseSchema,
   type CoinLedgerResponse,
+  type LeaderboardResponse,
   type LoginRequest,
   type LoginResponse,
   type RoundHistoryResponse,
   type RoundReplayResponse,
   type RoomListResponse,
+  type RoomMode,
   type RoomResponse,
   type RegisterRequest
 } from "@ddz/protocol";
@@ -34,11 +37,21 @@ export function createApiClient(options: ApiClientOptions) {
         method: "GET"
       }).then((body) => parseRoomList(body));
     },
-    createRoom(accessToken: string): Promise<RoomResponse> {
+    listArenaRooms(): Promise<RoomListResponse> {
+      return requestJson(options, "/arena/rooms", {
+        method: "GET"
+      }).then((body) => parseRoomList(body));
+    },
+    getRoomByCode(code: string): Promise<RoomResponse> {
+      return requestJson(options, `/rooms/${encodeURIComponent(code)}`, {
+        method: "GET"
+      }).then((body) => parseRoomResponse(body));
+    },
+    createRoom(accessToken: string, mode: RoomMode = "standard"): Promise<RoomResponse> {
       return requestJson(options, "/rooms", {
         method: "POST",
         headers: authHeaders(accessToken),
-        body: JSON.stringify({})
+        body: JSON.stringify(mode === "standard" ? {} : { mode })
       }).then((body) => parseRoomResponse(body));
     },
     listRoundHistory(accessToken: string): Promise<RoundHistoryResponse> {
@@ -53,11 +66,27 @@ export function createApiClient(options: ApiClientOptions) {
         headers: authHeaders(accessToken)
       }).then((body) => parseRoundReplay(body));
     },
+    /** 公开复盘（仅全 bot 局，明牌）：无需登录，供分享链接与竞技场回放入口 */
+    getPublicRoundReplay(roundId: string): Promise<RoundReplayResponse> {
+      return requestJson(options, `/replays/${encodeURIComponent(roundId)}`, {
+        method: "GET"
+      }).then((body) => parseRoundReplay(body));
+    },
+    listRecentReplays(): Promise<RoundHistoryResponse> {
+      return requestJson(options, "/replays/recent", {
+        method: "GET"
+      }).then((body) => parseRoundHistory(body));
+    },
     listCoinLedgers(accessToken: string): Promise<CoinLedgerResponse> {
       return requestJson(options, "/me/coin-ledgers", {
         method: "GET",
         headers: authHeaders(accessToken)
       }).then((body) => parseCoinLedgers(body));
+    },
+    getLeaderboard(): Promise<LeaderboardResponse> {
+      return requestJson(options, "/leaderboard", {
+        method: "GET"
+      }).then((body) => parseLeaderboard(body));
     }
   };
 }
@@ -127,6 +156,15 @@ function parseRoundReplay(body: unknown): RoundReplayResponse {
   const parsed = roundReplayResponseSchema.safeParse(body);
   if (!parsed.success) {
     throw new Error(`Invalid round replay response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+  }
+
+  return parsed.data;
+}
+
+function parseLeaderboard(body: unknown): LeaderboardResponse {
+  const parsed = leaderboardResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error(`Invalid leaderboard response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   }
 
   return parsed.data;

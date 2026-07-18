@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Card, CardId, Combination, GamePhase, GameSnapshot, PlayerId, PlayHistoryEntry } from "@ddz/domain";
 import { identifyCombination, parseCardIds } from "@ddz/domain";
-import type { ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext } from "@ddz/bot-ai";
-import type { BotAction, BotBrain } from "../../src/rooms/botBrain";
+import type { BidChooser, BiddingContext, ChooserTrace, MoveChooser, MoveDecision, MoveSelectionContext } from "@ddz/bot-ai";
+import type { BotAction } from "../../src/rooms/botBrain";
 import {
   LlmBotBrain,
   LlmDecisionError,
   takeThinkingChunk,
+  type LlmBotBrainOptions,
   type LlmDecisionMetric,
   type LlmDecisionTrace
 } from "../../src/rooms/llmBotBrain";
@@ -19,13 +20,14 @@ function combo(ids: readonly CardId[]): Combination {
   return result;
 }
 
-// 仅 phase / lastPlay / landlordId / players(handCount) 参与决策,其余给最小合法占位。
+// 仅 phase / lastPlay / landlordId / players(handCount) / multiplier 参与决策,其余给最小合法占位。
 function snapshot(options: {
   phase: GamePhase;
   lastPlay?: Combination | null;
   landlordId?: PlayerId | null;
   handCounts?: Record<PlayerId, number>;
   landlordCards?: readonly Card[];
+  multiplier?: number;
 }): GameSnapshot {
   const handCounts = options.handCounts ?? { p0: 5, p1: 8, p2: 9 };
   return {
@@ -45,7 +47,7 @@ function snapshot(options: {
     landlordCards: options.landlordCards ?? [],
     lastPlay: options.lastPlay ? { playerId: "p1", cards: [], combination: options.lastPlay } : null,
     passCount: 0,
-    multiplier: 1,
+    multiplier: options.multiplier ?? 1,
     settlement: null
   };
 }
@@ -81,36 +83,95 @@ function chooserReturning(result: MoveDecision | null, onCall?: (ctx: MoveSelect
   };
 }
 
-function recordingBidStrategy(action: BotAction): BotBrain & { calls: number } {
+function bidChooserReturning(
+  result: MoveDecision | null,
+  onCall?: (ctx: BiddingContext) => void
+): BidChooser & { calls: number } {
   return {
     calls: 0,
-    decide(this: { calls: number }) {
+    choose(this: { calls: number }, ctx: BiddingContext) {
       this.calls += 1;
-      return Promise.resolve(action);
+      onCall?.(ctx);
+      return Promise.resolve(result);
     }
   };
+}
+
+/** 出牌相位测试用:叫抢决策器绝不应被触碰。 */
+const unusedBidChooser: BidChooser = {
+  choose: () => {
+    throw new Error("bidChooser should not be called in this test");
+  }
+};
+
+function makeBrain(options: Omit<LlmBotBrainOptions, "bidChooser"> & { bidChooser?: BidChooser }): LlmBotBrain {
+  return new LlmBotBrain({ bidChooser: unusedBidChooser, ...options });
 }
 
 const PASS: BotAction = { type: "pass" };
 
 describe("LlmBotBrain", () => {
-  it("叫/抢地主相位走固定策略(隔离实验变量,不调用 LLM)", async () => {
-    const bidStrategy = recordingBidStrategy({ type: "bid_landlord", called: true });
-    const chooser = chooserReturning(null, () => {
-      throw new Error("chooser should not be called outside playing phase");
+  it("叫地主相位走 LLM 叫抢决策:候选[不叫,叫地主],编号映射为布尔动作", async () => {
+    let captured: BiddingContext | null = null;
+    const bidChooser = bidChooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
+      captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser, bidStrategy });
+    const chooser = chooserReturning(null, () => {
+      throw new Error("move chooser should not be called during bidding");
+    });
+    const brain = makeBrain({ chooser, bidChooser });
+    const history: PlayHistoryEntry[] = [{ type: "bid", playerId: "p2", called: false }];
 
-    const action = await brain.decide(snapshot({ phase: "bidding" }), "p0", hand(["3-clubs"]), []);
+    const action = await brain.decide(snapshot({ phase: "bidding" }), "p0", hand(["3-clubs", "3-hearts", "K-spades"]), [], history);
+
     expect(action).toEqual({ type: "bid_landlord", called: true });
-    expect(bidStrategy.calls).toBe(1);
+    expect(bidChooser.calls).toBe(1);
+    expect(captured!.kind).toBe("bidding");
+    expect(captured!.candidates).toEqual(["不叫", "叫地主"]);
+    expect(captured!.isCounterRob).toBe(false);
+    // 手牌按分组计数下发;叫抢阶段身份未定,行动者按相对座位标注
+    expect(captured!.hand).toEqual(["3×2", "K"]);
+    expect(captured!.bidHistory).toEqual([{ by: "上家", action: "bid", description: "不叫" }]);
+  });
+
+  it("抢地主相位:编号 0=不抢;首叫者再遇抢相位标记为反抢,倍数透传", async () => {
+    let captured: BiddingContext | null = null;
+    const bidChooser = bidChooserReturning({ index: 0, trace: traceFixture() }, (ctx) => {
+      captured = ctx;
+    });
+    const brain = makeBrain({ chooser: chooserReturning(null), bidChooser });
+    const history: PlayHistoryEntry[] = [
+      { type: "bid", playerId: "p0", called: true },
+      { type: "rob", playerId: "p1", robbed: true }
+    ];
+
+    const action = await brain.decide(snapshot({ phase: "robbing", multiplier: 2 }), "p0", hand(["3-clubs"]), [], history);
+
+    expect(action).toEqual({ type: "rob_landlord", robbed: false });
+    expect(captured!.kind).toBe("robbing");
+    expect(captured!.candidates).toEqual(["不抢", "抢地主"]);
+    expect(captured!.isCounterRob).toBe(true);
+    expect(captured!.currentMultiplier).toBe(2);
+    expect(captured!.bidHistory).toEqual([
+      { by: "你", action: "bid", description: "叫地主" },
+      { by: "下家", action: "rob", description: "抢地主" }
+    ]);
+  });
+
+  it("叫抢相位 LLM 失败同样抛错暴露,不回退规则", async () => {
+    const bidChooser = bidChooserReturning(null);
+    const brain = makeBrain({ chooser: chooserReturning(null), bidChooser });
+
+    await expect(brain.decide(snapshot({ phase: "bidding" }), "p0", hand(["3-clubs"]), [], [])).rejects.toBeInstanceOf(
+      LlmDecisionError
+    );
   });
 
   it("跟牌且压不动时直接过牌,不调用 LLM", async () => {
     const chooser = chooserReturning(null, () => {
       throw new Error("chooser should not be called when only pass is legal");
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     const action = await brain.decide(
       snapshot({ phase: "playing", lastPlay: combo(["K-clubs", "K-hearts"]), landlordId: "p1" }),
@@ -126,7 +187,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning(null, () => {
       throw new Error("chooser should not be called when the only legal move is forced");
     });
-    const brain = new LlmBotBrain({ chooser, onDecision: (m) => metrics.push(m) });
+    const brain = makeBrain({ chooser, onDecision: (m) => metrics.push(m) });
 
     const action = await brain.decide(
       snapshot({ phase: "playing", landlordId: "p0" }),
@@ -148,7 +209,7 @@ describe("LlmBotBrain", () => {
     );
     const metrics: LlmDecisionMetric[] = [];
     const clock = vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1042);
-    const brain = new LlmBotBrain({ chooser, onDecision: (m) => metrics.push(m), now: clock });
+    const brain = makeBrain({ chooser, onDecision: (m) => metrics.push(m), now: clock });
 
     const action = await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
 
@@ -162,7 +223,7 @@ describe("LlmBotBrain", () => {
   it("成功决策时回调模型编号对应的具体候选动作", async () => {
     const choices: Array<{ playerId: string; index: number; label: string }> = [];
     const chooser = chooserReturning({ index: 1, trace: traceFixture() });
-    const brain = new LlmBotBrain({
+    const brain = makeBrain({
       chooser,
       onChoice: (playerId, choice) => choices.push({ playerId, ...choice })
     });
@@ -174,7 +235,7 @@ describe("LlmBotBrain", () => {
 
   it("跟牌时编号 0 表示过牌", async () => {
     const chooser = chooserReturning({ index: 0, trace: traceFixture() });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     const action = await brain.decide(
       snapshot({ phase: "playing", lastPlay: combo(["5-clubs", "5-hearts"]), landlordId: "p1" }),
@@ -190,7 +251,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
       captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     const action = await brain.decide(
       snapshot({ phase: "playing", lastPlay: combo(["5-clubs", "5-hearts"]), landlordId: "p1" }),
@@ -209,7 +270,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
       captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     await brain.decide(
       snapshot({ phase: "playing", landlordId: "p1", handCounts: { p0: 3, p1: 8, p2: 9 } }),
@@ -233,7 +294,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
       captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
     const history: PlayHistoryEntry[] = [
       { type: "play", playerId: "p1", cards: hand(["3-clubs"]) },
       { type: "pass", playerId: "p2" }
@@ -274,7 +335,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
       captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+    const brain = makeBrain({ chooser, onTrace: (t) => traces.push(t) });
 
     await brain.decide(
       snapshot({ phase: "playing", landlordId: "p0" }),
@@ -293,7 +354,7 @@ describe("LlmBotBrain", () => {
     const chooser = chooserReturning({ index: 1, trace: traceFixture() }, (ctx) => {
       captured = ctx;
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
     const history: PlayHistoryEntry[] = [
       { type: "play", playerId: "p1", cards: hand(["3-clubs"]) },
       { type: "pass", playerId: "p2" },
@@ -333,34 +394,34 @@ describe("LlmBotBrain", () => {
   });
 
   it("模型返回 null(超时/缺 key)时抛错暴露,不回退、不上报指标", async () => {
-    const bidStrategy = recordingBidStrategy({ type: "play_cards", cards: ["3-clubs"] });
+    const bidChooser = bidChooserReturning({ index: 1, trace: traceFixture() });
     const chooser = chooserReturning(null);
     const metrics: LlmDecisionMetric[] = [];
-    const brain = new LlmBotBrain({ chooser, bidStrategy, onDecision: (m) => metrics.push(m) });
+    const brain = makeBrain({ chooser, bidChooser, onDecision: (m) => metrics.push(m) });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
     ).rejects.toBeInstanceOf(LlmDecisionError);
-    // 出牌相位失败绝不回退叫抢策略,也不上报成功指标
-    expect(bidStrategy.calls).toBe(0);
+    // 出牌相位失败绝不回退到叫抢决策器,也不上报成功指标
+    expect(bidChooser.calls).toBe(0);
     expect(metrics).toEqual([]);
   });
 
   it("chooser 抛出真实错误(API/网络/超时)时原样冒泡,不吞、不回退", async () => {
     const boom = new Error("AI_APICallError: 401 invalid x-api-key");
     const chooser: MoveChooser = { choose: () => Promise.reject(boom) };
-    const bidStrategy = recordingBidStrategy({ type: "play_cards", cards: ["3-clubs"] });
-    const brain = new LlmBotBrain({ chooser, bidStrategy });
+    const bidChooser = bidChooserReturning({ index: 1, trace: traceFixture() });
+    const brain = makeBrain({ chooser, bidChooser });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
     ).rejects.toThrow("401 invalid x-api-key");
-    expect(bidStrategy.calls).toBe(0);
+    expect(bidChooser.calls).toBe(0);
   });
 
   it("模型返回越界 index 时抛 invalid_index 错误暴露", async () => {
     const chooser = chooserReturning({ index: 9, trace: traceFixture() });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
@@ -373,13 +434,13 @@ describe("LlmBotBrain", () => {
       index: null,
       trace: traceFixture({ rawText: "", finishReason: "unknown" })
     });
-    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+    const brain = makeBrain({ chooser, onTrace: (t) => traces.push(t) });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
     ).rejects.toMatchObject({
       reason: "empty_response",
-      message: "LLM 上游返回空响应(rawText 为空,finishReason=unknown);候选 2 项"
+      message: "LLM 上游返回空响应(rawText 为空,reasoning 0 字,finishReason=unknown) [model=test-model];候选 2 项"
     });
     expect(traces[0]?.outcome).toEqual({ kind: "empty_response", finishReason: "unknown" });
   });
@@ -397,7 +458,7 @@ describe("LlmBotBrain", () => {
         usage: { inputTokens: 200, outputTokens: 12 }
       })
     });
-    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+    const brain = makeBrain({ chooser, onTrace: (t) => traces.push(t) });
 
     const action = await brain.decide(
       snapshot({ phase: "playing", landlordId: "p0" }),
@@ -442,7 +503,7 @@ describe("LlmBotBrain", () => {
         }
       })
     });
-    const brain = new LlmBotBrain({ chooser, onTrace: (t) => traces.push(t) });
+    const brain = makeBrain({ chooser, onTrace: (t) => traces.push(t) });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
@@ -487,7 +548,7 @@ describe("LlmBotBrain", () => {
         }
       })
     });
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     await expect(
       brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), [])
@@ -514,7 +575,7 @@ describe("LlmBotBrain", () => {
       }
     };
     const events: Array<["start", string] | ["delta", string, "reasoning" | "text", string]> = [];
-    const brain = new LlmBotBrain({
+    const brain = makeBrain({
       chooser,
       onStreamStart: (pid) => events.push(["start", pid]),
       onStreamDelta: (pid, delta) => events.push(["delta", pid, delta.channel, delta.text])
@@ -536,7 +597,7 @@ describe("LlmBotBrain", () => {
         return Promise.resolve({ index: 1, trace: traceFixture() });
       }
     };
-    const brain = new LlmBotBrain({ chooser });
+    const brain = makeBrain({ chooser });
 
     await brain.decide(snapshot({ phase: "playing", landlordId: "p0" }), "p0", hand(["3-clubs", "4-clubs"]), []);
     expect(receivedHooks).toBeUndefined();

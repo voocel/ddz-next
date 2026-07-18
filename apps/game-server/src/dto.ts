@@ -33,15 +33,19 @@ export function toPublicPlayDto(play: PublicPlay) {
 
 export function toSnapshotDto(
   snapshot: GameSnapshot,
-  nicknames?: ReadonlyMap<string, string>
+  nicknames?: ReadonlyMap<string, string>,
+  // LLM bot 席位的模型身份(playerId → provider/model),观战/竞技场据此展示哪个模型坐哪;缺省不注入
+  models?: ReadonlyMap<string, { provider: string; model: string }>
 ): GameSnapshotDto {
   return {
     phase: snapshot.phase,
     players: snapshot.players.map((player) => {
       const nickname = nicknames?.get(player.id);
+      const model = models?.get(player.id);
       return {
         ...player,
-        ...(nickname === undefined ? {} : { nickname })
+        ...(nickname === undefined ? {} : { nickname }),
+        ...(model === undefined ? {} : { model: { provider: model.provider, model: model.model } })
       };
     }),
     currentPlayerId: snapshot.currentPlayerId,

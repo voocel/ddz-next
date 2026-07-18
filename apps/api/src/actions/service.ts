@@ -7,7 +7,7 @@ import type {
   RoomLiveStateEnvelope,
   RoundActionType
 } from "@ddz/protocol";
-import { roundSettledPayloadSchema } from "@ddz/protocol";
+import { roundAbortedPayloadSchema, roundSettledPayloadSchema } from "@ddz/protocol";
 import { createActionFingerprint } from "./actionFingerprint.js";
 import { GameActionError } from "./errors.js";
 import { normalizeRoomCode } from "../rooms/roomCode.js";
@@ -58,6 +58,22 @@ export interface RoundSettlementInput {
     readonly playerKind: "human" | "bot";
     readonly seat: number;
     readonly scoreDelta: number;
+    /** LLM bot 的模型身份;真人与规则 bot 为 null。供排行/战绩按模型聚合。 */
+    readonly botProvider: string | null;
+    readonly botModel: string | null;
+  }>;
+}
+
+/** 流局输入:关闭 Round(记原因与技术负归属),并写零分 RoundPlayer 行保留模型身份供排行聚合。 */
+export interface RoundAbortInput {
+  readonly reason: string;
+  readonly failedPlayerId: string | null;
+  readonly players: ReadonlyArray<{
+    readonly playerId: string;
+    readonly playerKind: "human" | "bot";
+    readonly seat: number;
+    readonly botProvider: string | null;
+    readonly botModel: string | null;
   }>;
 }
 
@@ -132,6 +148,7 @@ export interface RoundActionInput {
   readonly type: RoundActionType;
   readonly payload: Record<string, unknown>;
   readonly settlement: RoundSettlementInput | null;
+  readonly abort: RoundAbortInput | null;
 }
 
 function planActions(actions: readonly RecordGameAction[], openRound: RoundRecord | null): {
@@ -167,9 +184,11 @@ function planActions(actions: readonly RecordGameAction[], openRound: RoundRecor
       playerKind: action.playerKind,
       type: action.type,
       payload: action.payload,
-      settlement: action.type === "round_settled" ? parseSettlementPayload(action.payload) : null
+      settlement: action.type === "round_settled" ? parseSettlementPayload(action.payload) : null,
+      abort: action.type === "round_aborted" ? parseAbortPayload(action.payload) : null
     });
-    if (action.type === "round_settled") {
+    // 结算与流局都终结当前局
+    if (action.type === "round_settled" || action.type === "round_aborted") {
       roundIsAvailable = false;
     }
   }
@@ -204,13 +223,36 @@ function parseSettlementPayload(payload: Record<string, unknown>): RoundSettleme
     throw new GameActionError("Invalid round settlement payload.", 400);
   }
 
+  const botPlayers = parsed.data.botPlayers ?? {};
   return {
     landlordId: parsed.data.settlement.landlordId,
     players: parsed.data.settlement.players.map((player) => ({
       playerId: player.playerId,
       seat: player.seat,
       playerKind: player.playerId.startsWith("bot:") ? "bot" : "human",
-      scoreDelta: player.scoreDelta
+      scoreDelta: player.scoreDelta,
+      botProvider: botPlayers[player.playerId]?.provider ?? null,
+      botModel: botPlayers[player.playerId]?.model ?? null
+    }))
+  };
+}
+
+function parseAbortPayload(payload: Record<string, unknown>): RoundAbortInput {
+  const parsed = roundAbortedPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new GameActionError("Invalid round abort payload.", 400);
+  }
+
+  const botPlayers = parsed.data.botPlayers ?? {};
+  return {
+    reason: parsed.data.reason,
+    failedPlayerId: parsed.data.failedPlayerId,
+    players: parsed.data.players.map((player) => ({
+      playerId: player.playerId,
+      seat: player.seat,
+      playerKind: player.playerId.startsWith("bot:") ? "bot" : "human",
+      botProvider: botPlayers[player.playerId]?.provider ?? null,
+      botModel: botPlayers[player.playerId]?.model ?? null
     }))
   };
 }

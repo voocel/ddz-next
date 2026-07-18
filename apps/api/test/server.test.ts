@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { AuthService } from "../src/auth/service";
 import { GameActionService } from "../src/actions/service";
 import { HistoryService } from "../src/history/service";
+import { LeaderboardService } from "../src/leaderboard/service";
 import { RoomService } from "../src/rooms/service";
 import { buildServer } from "../src/server";
 import {
   InMemoryGameActionRepository,
   InMemoryHistoryRepository,
+  InMemoryLeaderboardRepository,
   InMemoryRoomRepository,
   InMemoryUserRepository
 } from "./helpers";
@@ -25,6 +27,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -70,6 +73,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -97,6 +101,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -143,6 +148,54 @@ describe("API auth routes", () => {
     expect(list.statusCode).toBe(200);
     expect(list.json().rooms).toHaveLength(1);
 
+    // 公开查房：直连 /table/:code 分享链接的入口
+    const fetched = await app.inject({
+      method: "GET",
+      url: "/rooms/100001"
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().room.code).toBe("100001");
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/rooms/999999"
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const invalidCode = await app.inject({
+      method: "GET",
+      url: "/rooms/not-a-code"
+    });
+    expect(invalidCode.statusCode).toBe(400);
+
+    // 竞技场房不进普通大厅列表，走 /arena/rooms 直播列表
+    const arenaCreated = await app.inject({
+      method: "POST",
+      url: "/rooms",
+      headers: {
+        authorization: `Bearer ${accessToken}`
+      },
+      payload: {
+        code: "100002",
+        mode: "arena"
+      }
+    });
+    expect(arenaCreated.statusCode).toBe(200);
+    expect(arenaCreated.json().room.mode).toBe("arena");
+
+    const listAfterArena = await app.inject({
+      method: "GET",
+      url: "/rooms"
+    });
+    expect(listAfterArena.json().rooms.map((room: { code: string }) => room.code)).toEqual(["100001"]);
+
+    const arenaList = await app.inject({
+      method: "GET",
+      url: "/arena/rooms"
+    });
+    expect(arenaList.statusCode).toBe(200);
+    expect(arenaList.json().rooms.map((room: { code: string }) => room.code)).toEqual(["100002"]);
+
     const internalCreated = await app.inject({
       method: "POST",
       url: "/internal/rooms",
@@ -162,12 +215,59 @@ describe("API auth routes", () => {
     await app.close();
   });
 
+  it("serves the public model leaderboard", async () => {
+    const leaderboard = new InMemoryLeaderboardRepository();
+    leaderboard.rows.push(
+      {
+        playerId: "bot:1",
+        score: 4,
+        botProvider: "anthropic",
+        botModel: "model-a",
+        landlordId: "bot:1",
+        abortReason: null,
+        failedPlayerId: null,
+        endedAt: new Date()
+      },
+      {
+        playerId: "bot:2",
+        score: -2,
+        botProvider: "openai",
+        botModel: "model-b",
+        landlordId: "bot:1",
+        abortReason: null,
+        failedPlayerId: null,
+        endedAt: new Date()
+      }
+    );
+    const app = buildServer({
+      authService: new AuthService(new InMemoryUserRepository(), tokenConfig),
+      roomService: new RoomService(new InMemoryRoomRepository()),
+      gameActionService: new GameActionService(new InMemoryGameActionRepository()),
+      historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(leaderboard),
+      tokenConfig,
+      internalConfig: {
+        token: "internal-test-token"
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/leaderboard"
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().entries.map((entry: { model: string }) => entry.model)).toEqual(["model-a", "model-b"]);
+
+    await app.close();
+  });
+
   it("protects internal room status updates", async () => {
     const app = buildServer({
       authService: new AuthService(new InMemoryUserRepository(), tokenConfig),
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -273,6 +373,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(actionRepository),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -338,6 +439,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(history),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"
@@ -546,6 +648,7 @@ describe("API auth routes", () => {
       roomService: new RoomService(new InMemoryRoomRepository()),
       gameActionService: new GameActionService(new InMemoryGameActionRepository()),
       historyService: new HistoryService(new InMemoryHistoryRepository()),
+      leaderboardService: new LeaderboardService(new InMemoryLeaderboardRepository()),
       tokenConfig,
       internalConfig: {
         token: "internal-test-token"

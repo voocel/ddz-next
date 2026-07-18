@@ -25,10 +25,11 @@ export function SeatTurnClock({
   }
 
   const relative = localSeat === null ? timerSeat : (timerSeat - localSeat + 3) % 3;
-  if (relative === 0) {
+  // 本地玩家自己的倒计时在操作控制行展示;观战视角(未入座)下底部居中座位的倒计时在座位上方展示
+  if (relative === 0 && localSeat !== null) {
     return null;
   }
-  const side = relative === 1 ? "right" : "left";
+  const side = relative === 0 ? "bottom" : relative === 1 ? "right" : "left";
 
   return (
     <div className="seat-clock-layer" aria-live="polite">

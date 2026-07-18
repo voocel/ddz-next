@@ -49,6 +49,12 @@ export const cardSchema = z
     { message: "Card id must match its rank and suit." }
   ) satisfies z.ZodType<Card>;
 
+/** LLM bot 的模型身份(provider+model);快照/结算/流局 payload 共用。 */
+export const botModelRefSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1)
+});
+
 export const playerSnapshotSchema = z.object({
   id: z.string().min(1),
   // 展示用昵称；旧快照/bot 可能缺省，前端按 id 规则兜底
@@ -58,7 +64,9 @@ export const playerSnapshotSchema = z.object({
   ready: z.boolean(),
   handCount: z.number().int().min(0).max(20),
   connected: z.boolean(),
-  score: z.number().int()
+  score: z.number().int(),
+  /** LLM bot 席位的模型身份;真人与规则 bot 缺省。观战/竞技场据此展示哪个模型坐哪。 */
+  model: botModelRefSchema.optional()
 });
 
 export const gamePhaseSchema = z.enum(GAME_PHASES) satisfies z.ZodType<GamePhase>;
@@ -281,7 +289,25 @@ export const gameEventSchema = z.discriminatedUnion("type", [
     playerId: z.string().min(1),
     message: z.string().min(1),
     retryable: z.boolean(),
+    /** 本回合第几次决策失败(1 基);缺省表示服务端未启用自动重试计数。 */
+    attempt: z.number().int().positive().optional(),
+    /** true 表示服务端将按退避自动重试,前端只需展示等待;false/缺省表示等待手动重试。 */
+    willRetry: z.boolean().optional(),
     snapshot: gameSnapshotSchema
+  }),
+  // 竞技场流局:LLM 决策耗尽重试后放弃本局(不产生结算,累计分不变),failedPlayerId 记技术负。
+  z.object({
+    type: z.literal("round_aborted"),
+    reason: z.string().min(1),
+    failedPlayerId: z.string().min(1).nullable(),
+    snapshot: gameSnapshotSchema
+  }),
+  // 赛事解说:全局旁白短句(非流式),仅竞技场房广播;与 bot_ai_stream(席位第一人称思考流)是不同内容层。
+  z.object({
+    type: z.literal("commentary"),
+    text: z.string().min(1).max(200),
+    /** 触发场景标签(opening/landlord/bomb/endgame/settlement 等),前端可按需做样式区分。 */
+    tag: z.string().min(1).max(32).optional()
   }),
   z.object({
     type: z.literal("bot_chat"),
@@ -331,10 +357,14 @@ export const loginResponseSchema = z.object({
 
 export const roomStatusSchema = z.enum(["open", "playing", "closed"]);
 
+/** 房间玩法模式:standard=常规(真人可参与);arena=全 AI 对战房(供直播列表过滤,不做行为分支依据)。 */
+export const roomModeSchema = z.enum(["standard", "arena"]);
+
 export const roomSchema = z.object({
   id: z.string().min(1),
   code: z.string().min(4).max(12),
   status: roomStatusSchema,
+  mode: roomModeSchema.default("standard"),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -365,7 +395,8 @@ export type BotModelOption = z.infer<typeof botModelOptionSchema>;
 export type BotModelsResponse = z.infer<typeof botModelsResponseSchema>;
 
 export const createRoomRequestSchema = z.object({
-  code: roomCodeSchema.optional()
+  code: roomCodeSchema.optional(),
+  mode: roomModeSchema.optional()
 });
 
 export const updateRoomStatusRequestSchema = z.object({
@@ -391,7 +422,8 @@ export const roundActionTypeSchema = z.enum([
   "cards_played",
   "player_passed",
   "round_started",
-  "round_settled"
+  "round_settled",
+  "round_aborted"
 ]);
 
 export const gameActionTypeSchema = z.union([roomActionTypeSchema, roundActionTypeSchema]);
@@ -422,6 +454,16 @@ const gameTableHistoryEntrySchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pass"),
     playerId: z.string().min(1)
+  }),
+  z.object({
+    type: z.literal("bid"),
+    playerId: z.string().min(1),
+    called: z.boolean()
+  }),
+  z.object({
+    type: z.literal("rob"),
+    playerId: z.string().min(1),
+    robbed: z.boolean()
   })
 ]) satisfies z.ZodType<GameTableHistoryEntry>;
 
@@ -458,12 +500,18 @@ export interface RoomLiveStateEnvelope {
   readonly version: 1;
   readonly table: GameTableState;
   readonly nicknames: Readonly<Record<string, string>>;
+  /** 参局 LLM bot 的模型身份(playerId → provider/model);崩溃恢复时据此重建各席位大脑,缺失走房间默认大脑。 */
+  readonly botModels?: Readonly<Record<string, { readonly provider: string; readonly model: string }>> | undefined;
+  /** 全 AI 竞技场房标记;恢复时还原观战语义与局间自动推进。 */
+  readonly arena?: boolean | undefined;
 }
 
 export const roomLiveStateEnvelopeSchema = z.object({
   version: z.literal(1),
   table: gameTableStateSchema,
-  nicknames: z.record(z.string(), z.string().min(1))
+  nicknames: z.record(z.string(), z.string().min(1)),
+  botModels: z.record(z.string(), botModelRefSchema).optional(),
+  arena: z.boolean().optional()
 }) satisfies z.ZodType<RoomLiveStateEnvelope>;
 
 export const recordGameActionRequestSchema = z.object({
@@ -477,8 +525,28 @@ export const recordGameActionRequestSchema = z.object({
   state: roomLiveStateEnvelopeSchema.optional()
 });
 
+/** 参局 LLM bot 的模型身份(playerId → provider/model);规则 bot 局无此字段。 */
+const botPlayersSchema = z.record(z.string(), botModelRefSchema).optional();
+
 export const roundSettledPayloadSchema = z.object({
-  settlement: settlementSchema
+  settlement: settlementSchema,
+  botPlayers: botPlayersSchema
+});
+
+/** 流局 payload:api 据此关闭 Round(记 abortReason/failedPlayerId)并写零分 RoundPlayer 行保留模型身份。 */
+export const roundAbortedPayloadSchema = z.object({
+  reason: z.string().min(1),
+  /** 技术负归属:导致流局的 bot;为 null 表示非决策失败导致(预留)。 */
+  failedPlayerId: z.string().min(1).nullable(),
+  players: z
+    .array(
+      z.object({
+        playerId: z.string().min(1),
+        seat: z.union([z.literal(0), z.literal(1), z.literal(2)])
+      })
+    )
+    .length(3),
+  botPlayers: botPlayersSchema
 });
 
 export const roomListResponseSchema = z.object({
@@ -524,6 +592,8 @@ export const roundHistoryActionSchema = z.object({
 export const roundHistoryPlayerSchema = z.object({
   playerId: z.string().min(1),
   nickname: z.string().min(1).optional(),
+  /** LLM bot 的模型身份（真人与规则 bot 缺省）：复盘/公开对局列表据此展示选手档案 */
+  model: botModelRefSchema.optional(),
   playerKind: z.enum(["human", "bot"]),
   seat: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   score: z.number().int(),
@@ -546,7 +616,16 @@ export const roundHistoryResponseSchema = z.object({
 export const roundReplaySchema = roundHistoryItemSchema.extend({
   actions: z.array(roundHistoryActionSchema),
   /** 当前查看者自己的初始牌；旧对局或缺失时为空，绝不包含其他玩家手牌。 */
-  viewerInitialHand: z.array(cardSchema).default([])
+  viewerInitialHand: z.array(cardSchema).default([]),
+  /** 明牌复盘：三家完整初始手牌。仅公开回放（全 bot 局）下发，真人局恒为空。 */
+  revealedHands: z
+    .array(
+      z.object({
+        playerId: z.string().min(1),
+        cards: z.array(cardSchema)
+      })
+    )
+    .default([])
 });
 
 export const roundReplayResponseSchema = z.object({
@@ -567,7 +646,42 @@ export const coinLedgerResponseSchema = z.object({
   ledgers: z.array(coinLedgerItemSchema)
 });
 
+/**
+ * bot 成功决策的留证摘要:game-server 写进 landlord_bid/landlord_robbed/cards_played/player_passed
+ * 的动作 payload(aiTrace 键),复盘读侧按此解析展示逐手 reasoning。
+ */
+export const aiTracePayloadSchema = z.object({
+  model: z.string().min(1),
+  latencyMs: z.number().int().min(0),
+  reasoningText: z.string().optional(),
+  usage: z.record(z.string(), z.unknown()).optional()
+});
+
+/**
+ * 模型排行榜条目:按 (provider, model) 聚合全部已结束对局。
+ * games/wins 只计有结算的局;技术负(流局归属)单列,不算 games。
+ */
+export const leaderboardEntrySchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  games: z.number().int().min(0),
+  wins: z.number().int().min(0),
+  landlordGames: z.number().int().min(0),
+  landlordWins: z.number().int().min(0),
+  farmerGames: z.number().int().min(0),
+  farmerWins: z.number().int().min(0),
+  /** 累计得分(zero-sum 结算分,含倍数),体现赢的含金量 */
+  totalScore: z.number().int(),
+  /** 技术负:LLM 决策耗尽重试导致的流局次数 */
+  technicalLosses: z.number().int().min(0)
+});
+
+export const leaderboardResponseSchema = z.object({
+  entries: z.array(leaderboardEntrySchema)
+});
+
 export type CardDto = z.infer<typeof cardSchema>;
+export type BotModelRefDto = z.infer<typeof botModelRefSchema>;
 export type ClientCommand = z.infer<typeof clientCommandSchema>;
 export type GameEvent = z.infer<typeof gameEventSchema>;
 export type GameSnapshotDto = z.infer<typeof gameSnapshotSchema>;
@@ -589,6 +703,7 @@ export type RoomResponse = z.infer<typeof roomResponseSchema>;
 export type InternalRoomStateResponse = z.infer<typeof internalRoomStateResponseSchema>;
 export type MatchmakingEvent = z.infer<typeof matchmakingEventSchema>;
 export type RoomStatus = z.infer<typeof roomStatusSchema>;
+export type RoomMode = z.infer<typeof roomModeSchema>;
 export type SettlementDto = z.infer<typeof settlementSchema>;
 export type RoundHistoryActionDto = z.infer<typeof roundHistoryActionSchema>;
 export type RoundHistoryPlayerDto = z.infer<typeof roundHistoryPlayerSchema>;
@@ -598,3 +713,6 @@ export type RoundReplayDto = z.infer<typeof roundReplaySchema>;
 export type RoundReplayResponse = z.infer<typeof roundReplayResponseSchema>;
 export type CoinLedgerItemDto = z.infer<typeof coinLedgerItemSchema>;
 export type CoinLedgerResponse = z.infer<typeof coinLedgerResponseSchema>;
+export type LeaderboardEntryDto = z.infer<typeof leaderboardEntrySchema>;
+export type LeaderboardResponse = z.infer<typeof leaderboardResponseSchema>;
+export type AiTracePayloadDto = z.infer<typeof aiTracePayloadSchema>;

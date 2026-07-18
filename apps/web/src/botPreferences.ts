@@ -4,7 +4,7 @@
  * 服务端 parseReasoningEffort 仍是校验权威,非法值回退 auto)。
  */
 export type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
-const REASONING_EFFORTS: readonly ReasoningEffort[] = ["auto", "off", "low", "medium", "high"];
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ["auto", "off", "low", "medium", "high"];
 
 /**
  * 「AI 对战」机器人偏好:选定的 provider + model + 思考强度(API key 始终在服务端,前端永不接触)。

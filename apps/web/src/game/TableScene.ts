@@ -11,7 +11,9 @@ import {
   describePhasePrompt,
   formatActor,
   formatReplayAction,
-  parseReplayCardIds
+  parseReplayCardIds,
+  replayRemainingCards,
+  replayViewpoint
 } from "./tablePresentation";
 import { TABLE_STAGE_HEIGHT, TABLE_STAGE_WIDTH } from "./tableConfig";
 import { AVATAR_COUNT, themeAsset, type ThemeId } from "../theme";
@@ -48,6 +50,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   private revealedHands = new Map<string, readonly CardDto[]>();
   private snapshot: GameSnapshotDto | null = null;
   private replayMode = false;
+  // 回放中占据底部手牌区的玩家（公开明牌局为座位 0 的选手，私有复盘为查看者本人）
+  private replayViewpointId: string | null = null;
   // React 状态可能先于场景 create() 到达，缓存待应用的回放与进入回放前的直播状态
   private replayState: { readonly replay: RoundReplayDto; readonly step: number } | null = null;
   private liveState: {
@@ -55,6 +59,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     readonly hand: CardDto[];
     readonly revealedHands: ReadonlyMap<string, readonly CardDto[]>;
   } | null = null;
+  private background?: Phaser.GameObjects.Image;
   private phaseText?: Phaser.GameObjects.Text;
   private actionText?: Phaser.GameObjects.Text;
   private feedbackText?: Phaser.GameObjects.Text;
@@ -97,7 +102,8 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.fitStageToCanvas, this);
     });
-    this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
+    this.background = this.add.image(640, 360, "table-bg").setDisplaySize(1280, 720);
+    this.coverBackground(this.cameras.main.zoom);
 
     this.feedbackText = this.add
       .text(640, 408, "", {
@@ -161,6 +167,18 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     const camera = this.cameras.main;
     camera.setZoom(scale);
     camera.centerOn(TABLE_STAGE_WIDTH / 2, TABLE_STAGE_HEIGHT / 2);
+    this.coverBackground(scale);
+  }
+
+  /** 背景图按 cover 延展铺满相机可视区：画布比例偏离 16:9 时用背景吃掉 letterbox，不露画布底色 */
+  private coverBackground(zoom: number): void {
+    if (!this.background || zoom <= 0) {
+      return;
+    }
+    const visibleWidth = this.scale.width / zoom;
+    const visibleHeight = this.scale.height / zoom;
+    const cover = Math.max(visibleWidth / TABLE_STAGE_WIDTH, visibleHeight / TABLE_STAGE_HEIGHT);
+    this.background.setDisplaySize(TABLE_STAGE_WIDTH * cover, TABLE_STAGE_HEIGHT * cover);
   }
 
   applyEvent(event: GameEvent): void {
@@ -227,6 +245,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
 
     if (!replay) {
       this.replayState = null;
+      this.replayViewpointId = null;
       if (wasReplay) {
         // 退出回放：恢复进入前暂存的直播状态
         this.snapshot = this.liveState?.snapshot ?? null;
@@ -247,10 +266,17 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     this.replayState = { replay, step };
 
     this.selection.clear();
-    this.revealedHands.clear();
     this.snapshot = null;
     const currentStep = Math.min(Math.max(step, 0), Math.max(0, replay.actions.length - 1));
-    this.hand = this.replayHandAtStep(replay, currentStep);
+    const viewpoint = replayViewpoint(replay, this.options.localPlayerId);
+    this.replayViewpointId = viewpoint?.playerId ?? null;
+    // 明牌复盘：底部视角选手的当步手牌走手牌区，其余选手摊在座位旁（私有复盘 revealedHands 为空，行为不变）
+    this.revealedHands = new Map(
+      replay.revealedHands
+        .filter((entry) => entry.playerId !== viewpoint?.playerId)
+        .map((entry) => [entry.playerId, replayRemainingCards(replay, currentStep, entry.playerId, entry.cards)])
+    );
+    this.hand = viewpoint ? replayRemainingCards(replay, currentStep, viewpoint.playerId, viewpoint.initial) : [];
     this.renderHand();
     const action = replay.actions[currentStep];
     const replayNickname = (playerId: string): string | undefined =>
@@ -286,25 +312,6 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
     } else {
       this.cardLayers?.clearLastPlay();
     }
-  }
-
-  private replayHandAtStep(replay: RoundReplayDto, step: number): CardDto[] {
-    const hand = replay.viewerInitialHand.slice();
-    if (hand.length === 0) {
-      return hand;
-    }
-
-    const played = new Set<CardId>();
-    for (const action of replay.actions.slice(0, step + 1)) {
-      if (action.type !== "cards_played" || action.playerId !== this.options.localPlayerId) {
-        continue;
-      }
-      for (const cardId of parseReplayCardIds(action.payload.cards)) {
-        played.add(cardId as CardId);
-      }
-    }
-
-    return hand.filter((card) => !played.has(card.id as CardId));
   }
 
   /** 出牌：校验当前选中的牌，非法则画布内反馈，合法则提交并清空选牌 */
@@ -461,7 +468,7 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   private renderSeats(snapshot: GameSnapshotDto): void {
-    this.seatLayer?.renderSnapshot(snapshot, this.revealedHands);
+    this.seatLayer?.renderSnapshot(snapshot, this.revealedHands, this.replayViewpointId);
   }
 
   private renderLandlordCards(snapshot: GameSnapshotDto | null): void {
@@ -469,7 +476,9 @@ export class TableScene extends Phaser.Scene implements TableGameBridge {
   }
 
   private renderLastPlay(cards: readonly CardDto[], playerId?: string, animated = true): void {
-    const source = playerId ? this.seatLayer?.findSnapshotPosition(this.snapshot, playerId) ?? null : null;
+    const source = playerId
+      ? this.seatLayer?.findSnapshotPosition(this.snapshot, playerId, this.replayViewpointId) ?? null
+      : null;
     this.cardLayers?.renderLastPlay(cards, source, animated);
   }
 

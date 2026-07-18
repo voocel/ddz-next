@@ -1,4 +1,4 @@
-import type { CreateRoomRequest, RoomDto, RoomListResponse, RoomResponse, RoomStatus } from "@ddz/protocol";
+import type { CreateRoomRequest, RoomDto, RoomListResponse, RoomMode, RoomResponse, RoomStatus } from "@ddz/protocol";
 import { RoomError } from "./errors.js";
 import { createRoomCode, normalizeRoomCode } from "./roomCode.js";
 import { assertRoomStatusTransition } from "./status.js";
@@ -7,6 +7,7 @@ export interface RoomRecord {
   readonly id: string;
   readonly code: string;
   readonly status: RoomStatus;
+  readonly mode: RoomMode;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -14,10 +15,13 @@ export interface RoomRecord {
 export interface CreateRoomInput {
   readonly code: string;
   readonly status: RoomStatus;
+  readonly mode: RoomMode;
 }
 
 export interface RoomRepository {
   listOpenRooms(limit: number): Promise<readonly RoomRecord[]>;
+  /** 竞技场直播列表：mode='arena' 且 open/playing，按活跃度（updatedAt）倒序 */
+  listArenaRooms(limit: number): Promise<readonly RoomRecord[]>;
   findRoomByCode(code: string): Promise<RoomRecord | null>;
   createRoom(input: CreateRoomInput): Promise<RoomRecord>;
   updateRoomStatusByCode(code: string, status: RoomStatus, ownerId: string): Promise<RoomRecord | null>;
@@ -42,6 +46,13 @@ export class RoomService {
     };
   }
 
+  async listArenaRooms(): Promise<RoomListResponse> {
+    const rooms = await this.rooms.listArenaRooms(20);
+    return {
+      rooms: rooms.map(toRoomDto)
+    };
+  }
+
   async createRoom(input: CreateRoomRequest = {}): Promise<RoomResponse> {
     const code = input.code ? requireRoomCode(input.code) : await this.generateUniqueCode();
     const existing = await this.rooms.findRoomByCode(code);
@@ -51,8 +62,21 @@ export class RoomService {
 
     const room = await this.rooms.createRoom({
       code,
-      status: "open"
+      status: "open",
+      mode: input.mode ?? "standard"
     });
+
+    return {
+      room: toRoomDto(room)
+    };
+  }
+
+  /** 公开查房（仅房间元信息，不含牌局状态） */
+  async getRoomByCode(code: string): Promise<RoomResponse> {
+    const room = await this.rooms.findRoomByCode(requireRoomCode(code));
+    if (!room) {
+      throw new RoomError("Room not found.", 404);
+    }
 
     return {
       room: toRoomDto(room)
@@ -144,6 +168,7 @@ export function toRoomDto(room: RoomRecord): RoomDto {
     id: room.id,
     code: room.code,
     status: room.status,
+    mode: room.mode,
     createdAt: room.createdAt.toISOString(),
     updatedAt: room.updatedAt.toISOString()
   };

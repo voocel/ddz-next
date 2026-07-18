@@ -15,6 +15,7 @@ import type { PlayerId, Settlement } from "@ddz/domain";
 import {
   buildReasoningProviderOptions,
   decisionConfigFromEnv,
+  LlmBidChooser,
   LlmMoveChooser,
   parseBotProviderRegistry,
   resolveModel,
@@ -22,6 +23,7 @@ import {
   type ProviderType
 } from "@ddz/bot-ai";
 import { readBotProvidersRaw } from "../botProviders.js";
+import { estimateCostUsd } from "./pricing.js";
 import type { BotAction, BotBrain } from "../rooms/botBrain.js";
 import { RuleBotBrain } from "../rooms/ruleBotBrain.js";
 import { LlmBotBrain, LlmDecisionError, type LlmDecisionMetric } from "../rooms/llmBotBrain.js";
@@ -38,16 +40,6 @@ const SEATS: readonly PlayerId[] = ["bot:p0", "bot:p1", "bot:p2"];
 const FOCUS_SEAT: PlayerId = "bot:p0";
 // 安全上限:防极端连续重发牌/异常导致不收敛(正常一局远小于此)。
 const MAX_TURNS = 800;
-
-// 模型计价($/百万 token):input / output。未知模型只报 token、不估成本。
-const PRICING: Record<string, readonly [number, number]> = {
-  "claude-haiku-4-5": [1, 5],
-  "claude-sonnet-4-6": [3, 15],
-  "claude-opus-4-8": [5, 25],
-  "claude-opus-4-7": [5, 25],
-  "claude-opus-4-6": [5, 25],
-  "claude-fable-5": [10, 50]
-};
 
 interface CliOptions {
   readonly games: number;
@@ -165,8 +157,7 @@ function summarizeMetrics(metrics: readonly LlmDecisionMetric[], errors: readonl
   const maxLatency = latencies.length ? Math.max(...latencies) : 0;
   const inputTokens = metrics.reduce((sum, m) => sum + (m.usage?.inputTokens ?? 0), 0);
   const outputTokens = metrics.reduce((sum, m) => sum + (m.usage?.outputTokens ?? 0), 0);
-  const price = PRICING[model];
-  const cost = price ? (inputTokens / 1e6) * price[0] + (outputTokens / 1e6) * price[1] : null;
+  const cost = estimateCostUsd(model, inputTokens, outputTokens);
 
   const lines = [
     `LLM 成功决策: ${metrics.length}  延迟: 平均 ${avgLatency.toFixed(0)}ms  最大 ${maxLatency}ms`,
@@ -283,20 +274,22 @@ async function main(): Promise<void> {
     resolved.providerKey,
     reasoningEffort
   );
-  // BOT_DECISION_TRACE=true 时把每手 LLM 决策逐条留证落 JSONL,供离线复盘(同生产用一套 sink)。
+  // 每手 LLM 决策逐条留证落 JSONL,供离线复盘(同生产用一套常开 sink)。
   const traceSink = createLlmTraceSink(process.env, `selfplay-${options.provider}-${options.model}`);
+  const chooserOptions = {
+    model: resolved.model,
+    providerOptions,
+    provider: {
+      key: resolved.providerKey,
+      type: resolved.providerType,
+      baseURL: resolved.baseURL
+    }
+  };
   const llmBrain = new LlmBotBrain({
-    chooser: new LlmMoveChooser({
-      model: resolved.model,
-      providerOptions,
-      provider: {
-        key: resolved.providerKey,
-        type: resolved.providerType,
-        baseURL: resolved.baseURL
-      }
-    }),
+    chooser: new LlmMoveChooser(chooserOptions),
+    bidChooser: new LlmBidChooser(chooserOptions),
     onDecision: (m) => metrics.push(m),
-    onTrace: traceSink ? (trace) => traceSink.record(trace) : undefined
+    onTrace: (trace) => traceSink.record(trace)
   });
   const treatment = await runArm(
     "llm",
@@ -307,10 +300,8 @@ async function main(): Promise<void> {
       errors.push({ game, reason, message: error instanceof Error ? error.message : String(error) });
     }
   );
-  await traceSink?.close();
-  if (traceSink) {
-    console.log("\n📝 每手 LLM 决策留证已写入 logs/llm-traces/(BOT_DECISION_TRACE=true)。");
-  }
+  await traceSink.close();
+  console.log(`\n📝 每手 LLM 决策留证已写入 ${traceSink.file}`);
 
   console.log(`\n${reportSeat(`实验(p0=LLM ${options.provider}/${options.model})`, treatment)}`);
   console.log(`\n${summarizeMetrics(metrics, errors, options.model)}`);

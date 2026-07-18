@@ -22,8 +22,8 @@ export interface DecisionConfig {
 const DEFAULT_PERSONA = "爱炫耀、嘴上不饶人但心态好的老牌玩家";
 const DEFAULT_TIMEOUT_MS = 4000;
 const DEFAULT_MAX_CHARS = 40;
-// 出牌决策默认超时:前沿/推理模型(gpt-5.5、o 系、deepseek thinking 等)单步思考动辄十几秒,
-// 给足 60s 头寸,避免误把「还在想」当失败。BOT_DECISION_TIMEOUT_MS 可覆盖。
+// 出牌决策默认超时(流静默口径,见 LlmChoiceRunner):思考型模型持续流式吐 reasoning 时不触发,
+// 静默 60s 才视为连接死亡;总时长硬上限为其 5 倍。BOT_DECISION_TIMEOUT_MS 可覆盖。
 // 注意:bot 回合不受面向真人的回合超时管辖(见 roomTurnScheduler),这是 bot 唯一的决策时钟,
 // 超时即 abort 抛错暴露(不回退规则),与「纯 LLM 实验」一致。
 const DEFAULT_DECISION_TIMEOUT_MS = 60_000;

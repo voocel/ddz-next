@@ -22,6 +22,8 @@ model Room {
   id        String   @id @default(cuid())
   code      String   @unique
   status    String
+  // 玩法模式:'standard' 常规;'arena' 全 AI 对战房(供直播/竞技场列表过滤)
+  mode      String   @default("standard")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   rounds    Round[]
@@ -66,6 +68,9 @@ model Round {
   landlordId String?
   startedAt  DateTime      @default(now())
   endedAt    DateTime?
+  // 流局(竞技场 LLM 决策耗尽重试):非空即本局未产生结算;failedPlayerId 记技术负归属
+  abortReason    String?
+  failedPlayerId String?
   players    RoundPlayer[]
   actions    GameAction[]
   coinLedgers CoinLedger[]
@@ -80,9 +85,13 @@ model RoundPlayer {
   seat       Int
   score      Int    @default(0)
   coinDelta  Int    @default(0)
+  // LLM bot 的模型身份(真人与规则 bot 为 NULL),排行榜按 (botProvider, botModel) 聚合
+  botProvider String?
+  botModel    String?
 
   @@unique([roundId, seat])
   @@unique([roundId, playerId])
+  @@index([botProvider, botModel])
 }
 
 model GameAction {

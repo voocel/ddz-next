@@ -1,6 +1,8 @@
 import { compareRank, createDeck, enumerateLegalMoves, identifyCombination } from "@ddz/domain";
 import type { Card, Combination, GameSnapshot, LegalMove, PlayerId, PlayHistoryEntry, Rank } from "@ddz/domain";
 import type {
+  BidChooser,
+  BiddingContext,
   ChooserTrace,
   RecentActionInfo,
   MoveChooser,
@@ -15,7 +17,6 @@ import type {
   TokenUsage
 } from "@ddz/bot-ai";
 import type { BotAction, BotBrain } from "./botBrain.js";
-import { RuleBotBrain } from "./ruleBotBrain.js";
 import { describeCombination, rankLabel } from "./combinationLabels.js";
 
 const RECENT_ACTION_LIMIT = 10;
@@ -46,8 +47,8 @@ export type LlmDecisionOutcome =
  */
 export interface LlmDecisionTrace {
   readonly playerId: PlayerId;
-  /** 本次真正喂给 LLM 的结构化局势上下文;prompt 由它渲染,trace 也按它复盘。 */
-  readonly context: MoveSelectionContext;
+  /** 本次真正喂给 LLM 的结构化局势上下文(出牌或叫抢);prompt 由它渲染,trace 也按它复盘。 */
+  readonly context: MoveSelectionContext | BiddingContext;
   readonly selfHand: readonly string[];
   readonly selfHandCount: number;
   readonly modelId: string | null;
@@ -82,12 +83,8 @@ export class LlmDecisionError extends Error {
 
 export interface LlmBotBrainOptions {
   readonly chooser: MoveChooser;
-  /**
-   * 叫/抢地主相位的固定策略(LLM 只决策出牌,隔离实验变量),默认规则 bot。
-   * 这不是失败兜底——出牌相位失败一律抛错暴露,绝不回退。
-   * TODO(等 LLM 出牌跑稳后): 叫/抢也改用 LLM、移除本字段,让两种 bot 零交集(见 tasks/todo.md)。
-   */
-  readonly bidStrategy?: BotBrain;
+  /** 叫/抢地主决策器:与出牌同为 LLM 候选编号制,失败同样抛错暴露,绝不回退规则 bot。 */
+  readonly bidChooser: BidChooser;
   readonly onDecision?: ((metric: LlmDecisionMetric) => void) | undefined;
   /** 每次 LLM 出牌决策(成功/no_choice/越界/请求出错)都回调一次完整留证,供落盘排错;不设则不记。 */
   readonly onTrace?: ((trace: LlmDecisionTrace) => void) | undefined;
@@ -102,17 +99,15 @@ export interface LlmBotBrainOptions {
 }
 
 /**
- * LLM 决策机器人:只在出牌相位用大模型,叫/抢地主用固定策略(隔离实验变量)。
- * 候选走法由 @ddz/domain 枚举给出,模型只能在其中选——天然杜绝非法出牌;
- * 但任何 null/越界/超时/缺 key 都直接抛错暴露(不回退),让实验能看到模型的真实失败。
+ * LLM 决策机器人:叫/抢地主与出牌全部由大模型决策,共用候选编号制——
+ * 候选由服务端枚举给出,模型只能在其中选,天然杜绝非法动作;
+ * 任何 null/越界/超时/缺 key 都直接抛错暴露(不回退),让实验能看到模型的真实失败。
  * 决策一律在串行锁外执行(见 BotBrain 契约);线上抛错由房间 onFailure 收口(故障关房 + 日志)。
  */
 export class LlmBotBrain implements BotBrain {
-  private readonly bidStrategy: BotBrain;
   private readonly now: () => number;
 
   constructor(private readonly options: LlmBotBrainOptions) {
-    this.bidStrategy = options.bidStrategy ?? new RuleBotBrain();
     this.now = options.now ?? Date.now;
   }
 
@@ -123,9 +118,12 @@ export class LlmBotBrain implements BotBrain {
     playedCards: readonly Card[],
     history: readonly PlayHistoryEntry[] = []
   ): Promise<BotAction> {
-    // 叫/抢地主:用固定策略,隔离实验变量(只验证 LLM 的出牌能力)。
+    if (snapshot.phase === "bidding" || snapshot.phase === "robbing") {
+      return this.decideBid(snapshot, playerId, hand, history);
+    }
+
     if (snapshot.phase !== "playing") {
-      return this.bidStrategy.decide(snapshot, playerId, hand, playedCards, history);
+      throw new Error(`Cannot decide bot action during ${snapshot.phase} phase.`);
     }
 
     const previous: Combination | null = snapshot.lastPlay?.combination ?? null;
@@ -150,8 +148,67 @@ export class LlmBotBrain implements BotBrain {
     }
 
     const context = buildContext(snapshot, playerId, hand, playedCards, history, previous, labels);
+    return this.runChoice({
+      playerId,
+      hand,
+      context,
+      labels,
+      choose: (streamHooks) => this.options.chooser.choose(context, streamHooks),
+      toAction: (index) => toAction(index, canPass, legal)
+    });
+  }
+
+  /** 叫/抢地主:候选固定两项(不叫/叫、不抢/抢),同一套编号制与错误分类。 */
+  private async decideBid(
+    snapshot: GameSnapshot,
+    playerId: PlayerId,
+    hand: readonly Card[],
+    history: readonly PlayHistoryEntry[]
+  ): Promise<BotAction> {
+    const kind = snapshot.phase === "bidding" ? "bidding" : "robbing";
+    const labels = kind === "bidding" ? ["不叫", "叫地主"] : ["不抢", "抢地主"];
+    const context: BiddingContext = {
+      kind,
+      hand: groupCardsByRank(hand),
+      bidHistory: bidHistory(snapshot, history, playerId),
+      currentMultiplier: snapshot.multiplier,
+      // 首叫者再次获得抢地主回合,只可能是「地主位被抢走后的唯一一次反抢」(见 GameTable.robLandlord)。
+      isCounterRob:
+        kind === "robbing" && history.some((entry) => entry.type === "bid" && entry.playerId === playerId && entry.called),
+      candidates: labels
+    };
+    return this.runChoice({
+      playerId,
+      hand,
+      context,
+      labels,
+      choose: (streamHooks) => this.options.bidChooser.choose(context, streamHooks),
+      toAction: (index) => {
+        if (index !== 0 && index !== 1) {
+          return null;
+        }
+        return kind === "bidding"
+          ? { type: "bid_landlord", called: index === 1 }
+          : { type: "rob_landlord", robbed: index === 1 };
+      }
+    });
+  }
+
+  /**
+   * 出牌与叫抢共用的决策执行:流式钩子接线、延迟计时、五步结局分类(请求出错/空响应/无有效编号/越界/成功)、
+   * trace 留证与指标回调。失败一律抛 LlmDecisionError 暴露,绝不静默。
+   */
+  private async runChoice(request: {
+    readonly playerId: PlayerId;
+    readonly hand: readonly Card[];
+    readonly context: MoveSelectionContext | BiddingContext;
+    readonly labels: readonly string[];
+    readonly choose: (streamHooks?: MoveStreamHooks) => Promise<MoveDecision | null>;
+    readonly toAction: (index: number) => BotAction | null;
+  }): Promise<BotAction> {
+    const { playerId, hand, context, labels } = request;
     this.options.onStreamStart?.(playerId);
-    // AI 输出流:把模型 reasoning/text 增量带上 playerId 转给上层(只在 LLM 出牌路径产生,叫抢/强制出牌不产生)。
+    // AI 输出流:把模型 reasoning/text 增量带上 playerId 转给上层(只在 LLM 决策路径产生,强制动作不产生)。
     const onStreamDelta = this.options.onStreamDelta;
     const streamHooks: MoveStreamHooks | undefined = onStreamDelta
       ? { onDelta: (delta) => onStreamDelta(playerId, delta) }
@@ -159,7 +216,7 @@ export class LlmBotBrain implements BotBrain {
     const start = this.now();
     let decision: MoveDecision | null;
     try {
-      decision = await this.options.chooser.choose(context, streamHooks);
+      decision = await request.choose(streamHooks);
     } catch (error) {
       // 真实 chooser 会把 API/abort 错误捕获进 trace.error;走到这里说明是自定义 chooser 直接抛——
       // 尽力记一条 error 留证后原样冒泡(暴露真因)。
@@ -193,32 +250,27 @@ export class LlmBotBrain implements BotBrain {
           kind: "empty_response",
           finishReason: trace.finishReason
         });
+        // reasoning 字数用于区分「上游整个空回」(0 字,多为中转故障)与「思考被截断没给最终答案」(有字,看 finishReason=length)
+        const detail = summarizeLlmRequestFailure(trace);
         throw new LlmDecisionError(
           "empty_response",
-          `LLM 上游返回空响应(rawText 为空,finishReason=${trace.finishReason ?? "null"});候选 ${labels.length} 项`,
-          latencyMs
+          `LLM 上游返回空响应(rawText 为空,reasoning ${trace.reasoningText?.length ?? 0} 字,finishReason=${trace.finishReason ?? "null"})${formatLlmRequestFailure(detail)};候选 ${labels.length} 项`,
+          latencyMs,
+          detail
         );
       }
       // 3) 模型有正文但解析不出有效编号。
       this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "no_choice" });
       throw new LlmDecisionError(
         "no_choice",
-        `LLM 未给出有效出牌选择(回复中无法解析出有效编号或越界);候选 ${labels.length} 项`,
+        `LLM 未给出有效选择(回复中无法解析出有效编号或越界);候选 ${labels.length} 项`,
         latencyMs
       );
     }
     // 4) 编号越界。
-    const action = toAction(decision.index, canPass, legal);
-    if (!action) {
-      this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "invalid_index", index: decision.index });
-      throw new LlmDecisionError(
-        "invalid_index",
-        `LLM 返回越界选择 index=${decision.index}(候选 ${labels.length} 项)`,
-        latencyMs
-      );
-    }
+    const action = request.toAction(decision.index);
     const label = labels[decision.index];
-    if (!label) {
+    if (!action || !label) {
       this.emitTrace(context, hand, playerId, trace, latencyMs, { kind: "invalid_index", index: decision.index });
       throw new LlmDecisionError(
         "invalid_index",
@@ -235,7 +287,7 @@ export class LlmBotBrain implements BotBrain {
 
   /** 把游戏上下文 + 该 bot 手牌 + chooser 留证 + 结局拼成一条完整 trace 交给 onTrace(未设则跳过)。 */
   private emitTrace(
-    context: MoveSelectionContext,
+    context: MoveSelectionContext | BiddingContext,
     hand: readonly Card[],
     playerId: PlayerId,
     trace: ChooserTrace | null,
@@ -284,6 +336,18 @@ function summarizeLlmRequestFailure(trace: ChooserTrace): Record<string, string 
   if (provider) {
     detail.provider = `${provider.key}/${provider.type}`;
     detail.baseHost = provider.baseHost;
+  }
+  if (trace.modelId) {
+    detail.model = trace.modelId;
+  }
+  // 上游最后一次 HTTP 的状态码与内容类型:contentType=text/html 即「baseURL 配错打到网页」这类误配的一眼铁证
+  const lastResponse = trace.httpTrace?.requests[trace.httpTrace.requests.length - 1]?.response;
+  if (lastResponse) {
+    detail.statusCode ??= lastResponse.status;
+    const contentType = lastResponse.headers["content-type"];
+    if (contentType) {
+      detail.contentType = contentType.split(";")[0]!.trim();
+    }
   }
   if (error?.statusCode !== null && error?.statusCode !== undefined) {
     detail.statusCode = error.statusCode;
@@ -390,18 +454,55 @@ function recentActions(
   selfId: PlayerId,
   landlordId: PlayerId | null
 ): RecentActionInfo[] {
-  return history.slice(-RECENT_ACTION_LIMIT).map((entry) =>
-    entry.type === "play"
-      ? {
-          by: actionActorLabel(snapshot, entry.playerId, selfId, landlordId),
-          action: "play",
-          description: describeCombinationFromCards(entry.cards)
-        }
-      : {
-          by: actionActorLabel(snapshot, entry.playerId, selfId, landlordId),
-          action: "pass"
-        }
-  );
+  return history.slice(-RECENT_ACTION_LIMIT).map((entry) => {
+    const by = actionActorLabel(snapshot, entry.playerId, selfId, landlordId);
+    switch (entry.type) {
+      case "play":
+        return { by, action: "play" as const, description: describeCombinationFromCards(entry.cards) };
+      case "pass":
+        return { by, action: "pass" as const };
+      case "bid":
+        return { by, action: "bid" as const, description: describeBidEntry(entry) };
+      case "rob":
+        return { by, action: "rob" as const, description: describeBidEntry(entry) };
+    }
+  });
+}
+
+/** 叫/抢动作的中文描述,叫抢 prompt 与出牌 prompt 的「最近动作」共用。 */
+function describeBidEntry(entry: Extract<PlayHistoryEntry, { type: "bid" | "rob" }>): string {
+  return entry.type === "bid" ? (entry.called ? "叫地主" : "不叫") : entry.robbed ? "抢地主" : "不抢";
+}
+
+/** 叫抢阶段的公开过程:此时身份未定,行动者标签用相对座位(你/下家/上家)。 */
+function bidHistory(snapshot: GameSnapshot, history: readonly PlayHistoryEntry[], selfId: PlayerId): RecentActionInfo[] {
+  return history
+    .filter((entry): entry is Extract<PlayHistoryEntry, { type: "bid" | "rob" }> => entry.type === "bid" || entry.type === "rob")
+    .map((entry) => ({
+      by: bidActorLabel(snapshot, entry.playerId, selfId),
+      action: entry.type,
+      description: describeBidEntry(entry)
+    }));
+}
+
+function bidActorLabel(snapshot: GameSnapshot, targetId: PlayerId, selfId: PlayerId): string {
+  if (targetId === selfId) {
+    return "你";
+  }
+  const players = [...snapshot.players].sort((a, b) => a.seat - b.seat);
+  const selfIndex = players.findIndex((player) => player.id === selfId);
+  const targetIndex = players.findIndex((player) => player.id === targetId);
+  if (selfIndex === -1 || targetIndex === -1) {
+    return "另一家";
+  }
+  const distance = (targetIndex - selfIndex + players.length) % players.length;
+  if (distance === 1) {
+    return "下家";
+  }
+  if (distance === players.length - 1) {
+    return "上家";
+  }
+  return "另一家";
 }
 
 function unseenCards(hand: readonly Card[], playedCards: readonly Card[], landlordCards: readonly Card[]): Card[] {

@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { avatarAsset, nextTheme, themeAsset, themeLabel } from "../../theme";
 import { formatDateTime, formatDelta, formatRoundDelta } from "../formatters";
+import { ArenaModal } from "../components/ArenaModal";
 import { Modal } from "../components/Modal";
 import type { DdzApp } from "../useDdzApp";
 
-type LobbyModalKind = "history" | "ledger" | "replay" | "rooms";
+type LobbyModalKind = "arena" | "history" | "ledger" | "replay" | "rooms";
 
 export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettings: () => void }) {
+  const navigate = useNavigate();
   const [lobbyModal, setLobbyModal] = useState<LobbyModalKind | null>(null);
   const {
     session,
@@ -17,7 +20,11 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
     logout,
     matchRoom,
     aiBattle,
+    arenaRooms,
+    botModels,
+    createArena,
     createRoom,
+    refreshArenaRooms,
     roomStatus,
     setTheme,
     refreshRooms,
@@ -27,7 +34,8 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
     roundHistory,
     loadReplay,
     historyStatus,
-    replayStatus
+    replayStatus,
+    watchArena
   } = app;
 
   // 大厅仅在已登录时渲染（App 已据 session 分屏），此处守卫满足类型收窄
@@ -38,6 +46,11 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
   const openRoomsModal = (): void => {
     setLobbyModal("rooms");
     void refreshRooms();
+  };
+
+  const openArenaModal = (): void => {
+    setLobbyModal("arena");
+    void refreshArenaRooms();
   };
 
   const historyRows = (
@@ -103,14 +116,17 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
         <img className="stage-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
         <div className="stage-center">
           <img className="stage-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
+          <button type="button" className="btn-img btn-img-ai btn-img-lg btn-ai" onClick={openArenaModal}>
+            AI 竞技场
+          </button>
           <button
             type="button"
-            className="btn-img btn-img-ai btn-img-lg btn-ai"
+            className="btn-img btn-img-blue btn-img-lg"
             onClick={() => {
               void aiBattle();
             }}
           >
-            大模型对战
+            人机对战
           </button>
           <button type="button" className="btn-img btn-img-orange btn-img-lg" onClick={matchRoom}>
             快速开始
@@ -145,6 +161,10 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
             </span>
             <span>回放</span>
           </button>
+          <button type="button" onClick={() => navigate("/leaderboard")}>
+            <span className="feature-icon feature-icon-emoji">🏆</span>
+            <span>排行</span>
+          </button>
           <button type="button" onClick={() => setTheme(nextTheme(theme))}>
             <span className="feature-icon">
               <img src={themeAsset(theme, "icon_theme.png")} alt="" />
@@ -157,6 +177,21 @@ export function LobbyScreen({ app, onOpenSettings }: { app: DdzApp; onOpenSettin
           </button>
         </nav>
       </section>
+
+      {lobbyModal === "arena" ? (
+        <ArenaModal
+          arenaRooms={arenaRooms}
+          botModels={botModels}
+          onClose={() => setLobbyModal(null)}
+          onCreate={(lineup, reasoningEffort) => {
+            void createArena(lineup, reasoningEffort);
+          }}
+          onRefresh={() => {
+            void refreshArenaRooms();
+          }}
+          onWatch={watchArena}
+        />
+      ) : null}
 
       {lobbyModal === "rooms" ? (
         <Modal title="牌桌选择" onClose={() => setLobbyModal(null)}>

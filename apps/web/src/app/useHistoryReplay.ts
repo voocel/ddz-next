@@ -42,6 +42,10 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
         if (!current) {
           return null;
         }
+        // 公开明牌复盘（revealedHands 非空）不属于个人战绩列表，刷新时保留
+        if (current.revealedHands.length > 0) {
+          return current;
+        }
         return rounds.rounds.some((round) => round.id === current.id) ? current : null;
       });
       setHistoryStatus(rounds.rounds.length || ledgers.ledgers.length ? "已更新" : "暂无战绩");
@@ -51,21 +55,22 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
   }, [api, session]);
 
   const loadReplay = useCallback(
-    async (roundId: string): Promise<void> => {
-      if (!session) {
-        return;
-      }
-
+    async (roundId: string): Promise<boolean> => {
       setReplayStatus("加载回放中");
       try {
-        const response = await api.getRoundReplay(session.accessToken, roundId);
+        // 本人战绩优先（真人局私有通道）；非本人的局回退公开通道（仅全 bot 局，明牌）
+        const response = session
+          ? await api.getRoundReplay(session.accessToken, roundId).catch(() => api.getPublicRoundReplay(roundId))
+          : await api.getPublicRoundReplay(roundId);
         setSelectedReplay(response.round);
         setReplayStep(0);
         setReplayPlaying(false);
         setReplayStatus(`${response.round.actions.length} 条事件`);
+        return true;
       } catch (error) {
         setSelectedReplay(null);
         setReplayStatus(error instanceof Error ? error.message : "加载回放失败");
+        return false;
       }
     },
     [api, session]

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import type { CardId } from "@ddz/domain";
-import type { BotDecisionMode, BotModelOption, GameEvent, GameSnapshotDto, RoomDto } from "@ddz/protocol";
+import type { BotDecisionMode, BotModelOption, BotModelRefDto, GameEvent, GameSnapshotDto, RoomDto } from "@ddz/protocol";
 import { getTableControlsState } from "../game/controlsState";
 import { createGameClient, isRecoverableDropCode } from "../net/gameClient";
 import { fetchBotModels } from "../net/botModels";
@@ -46,9 +47,24 @@ export function useDdzApp() {
   const { api, ...auth } = useAuthSession();
   const history = useHistoryReplay(api, auth.session);
 
+  // 路由跳转统一入口：经 ref 保持恒定引用（navigate 引用随 location 变化，直接入依赖会重建 game client）；
+  // 已在目标路径则无操作，状态驱动的导航因此可幂等调用
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  });
+  const goTo = useCallback((path: string): void => {
+    if (window.location.pathname !== path) {
+      navigateRef.current(path);
+    }
+  }, []);
+
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [status, setStatus] = useState("等待登录");
   const [rooms, setRooms] = useState<RoomDto[]>([]);
+  // 竞技场直播房列表（open/playing 的全 AI 房），大厅竞技场弹窗展示
+  const [arenaRooms, setArenaRooms] = useState<RoomDto[]>([]);
   const [roomStatus, setRoomStatus] = useState("等待登录");
   const [selectedRoom, setSelectedRoom] = useState<RoomDto | null>(null);
   const [selectedRoomQuickStart, setSelectedRoomQuickStart] = useState(false);
@@ -131,6 +147,7 @@ export function useDdzApp() {
             setSelectedRoomQuickStart(false);
             setSelectedRoomBot(null);
             setRoomStatus(`房间连接已断开 (${code})，请重新进入`);
+            goTo("/");
             return;
           }
           // 网络抖动或游戏服重启：留在牌桌自动重连，服务端会恢复牌局并补发快照
@@ -187,6 +204,7 @@ export function useDdzApp() {
         }
       }),
     [
+      goTo,
       history.refreshHistory,
       selectedRoom?.code,
       selectedRoomQuickStart,
@@ -268,8 +286,30 @@ export function useDdzApp() {
       history.clearReplay();
       setStatus(`准备进入房间 ${room.code}`);
       setRooms((items) => [room, ...items.filter((item) => item.id !== room.id)]);
+      goTo(`/table/${room.code}`);
     },
-    [history.clearReplay, resetRoomState, stopMatching]
+    [goTo, history.clearReplay, resetRoomState, stopMatching]
+  );
+
+  /** 直连 /table/:code（分享链接、牌桌页刷新）：按房间码查房后走正常进房流程，查不到回大厅 */
+  const enterRoomByCode = useCallback(
+    async (code: string): Promise<void> => {
+      if (!auth.session) {
+        return;
+      }
+
+      try {
+        const response = await api.getRoomByCode(code);
+        if (response.room.status === "closed") {
+          throw new Error(`房间 ${code} 已结束`);
+        }
+        enterRoom(response.room);
+      } catch (error) {
+        setRoomStatus(error instanceof Error ? error.message : `房间 ${code} 不存在`);
+        goTo("/");
+      }
+    },
+    [api, auth.session, enterRoom, goTo]
   );
 
   /** 登出/无会话时清空房间与大厅域状态（战绩回放域由其自身的 session 副作用清理） */
@@ -324,7 +364,8 @@ export function useDdzApp() {
     setSelectedRoomBot(null);
     history.clearReplay();
     void refreshRooms();
-  }, [history.clearReplay, refreshRooms, selectedRoom]);
+    goTo("/");
+  }, [goTo, history.clearReplay, refreshRooms, selectedRoom]);
 
   const createRoom = useCallback(async (): Promise<void> => {
     if (!auth.session) {
@@ -371,6 +412,41 @@ export function useDdzApp() {
     botPreferences.model,
     botPreferences.reasoningEffort
   ]);
+
+  /** 创建全 AI 竞技场并跳观战页；阵容与思考强度经路由 state 传给观战页，由首个观众入房时创建对局 */
+  const createArena = useCallback(
+    async (lineup: readonly BotModelRefDto[], reasoningEffort: ReasoningEffort): Promise<void> => {
+      if (!auth.session) {
+        return;
+      }
+
+      setRoomStatus("创建竞技场中");
+      try {
+        const response = await api.createRoom(auth.session.accessToken, "arena");
+        setRoomStatus(`已创建竞技场 ${response.room.code}`);
+        navigateRef.current(`/arena/${response.room.code}`, { state: { lineup, botReasoningEffort: reasoningEffort } });
+      } catch (error) {
+        setRoomStatus(error instanceof Error ? error.message : "创建竞技场失败");
+      }
+    },
+    [api, auth.session]
+  );
+
+  const watchArena = useCallback(
+    (roomCode: string): void => {
+      goTo(`/arena/${roomCode}`);
+    },
+    [goTo]
+  );
+
+  const refreshArenaRooms = useCallback(async (): Promise<void> => {
+    try {
+      const response = await api.listArenaRooms();
+      setArenaRooms(response.rooms);
+    } catch {
+      // 直播列表失败静默：竞技场弹窗里有手动刷新
+    }
+  }, [api]);
 
   const matchRoom = useCallback((): void => {
     if (!auth.session || matchClientRef.current) {
@@ -458,6 +534,7 @@ export function useDdzApp() {
         setSelectedRoomQuickStart(false);
         setSelectedRoomBot(null);
         setRoomStatus("重连失败，请重新进入房间");
+        goTo("/");
       }
     };
     void run();
@@ -465,13 +542,41 @@ export function useDdzApp() {
     return () => {
       cancelled = true;
     };
-  }, [client, reconnectRequest, selectedRoom, auth.session]);
+  }, [client, goTo, reconnectRequest, selectedRoom, auth.session]);
 
   useTurnTimerTicker(turnTimer, setTurnTimer);
+
+  /** 打开回放并跳转 /replay/:id；加载失败留在原地（replayStatus 已带错误文案） */
+  const openReplay = useCallback(
+    async (roundId: string): Promise<boolean> => {
+      const loaded = await history.loadReplay(roundId);
+      if (loaded) {
+        goTo(`/replay/${roundId}`);
+      }
+      return loaded;
+    },
+    [goTo, history.loadReplay]
+  );
+
+  /** 退出回放：在房间内则回牌桌，否则回大厅 */
+  const exitReplay = useCallback((): void => {
+    history.clearReplay();
+    goTo(selectedRoom ? `/table/${selectedRoom.code}` : "/");
+  }, [goTo, history.clearReplay, selectedRoom]);
+
+  const goHome = useCallback((): void => goTo("/"), [goTo]);
+
+  /** 模型排行榜（公开接口），排行页按需拉取 */
+  const fetchLeaderboard = useCallback(() => api.getLeaderboard(), [api]);
+
+  /** 最近公开 AI 对局（公开接口），排行页的复盘入口列表 */
+  const fetchRecentReplays = useCallback(() => api.listRecentReplays(), [api]);
 
   return {
     ...auth,
     ...history,
+    loadReplay: openReplay,
+    clearReplay: exitReplay,
     audioLevels,
     setAudioLevels,
     botPreferences,
@@ -481,17 +586,24 @@ export function useDdzApp() {
     theme,
     setTheme,
     aiBattle,
+    arenaRooms,
     cancelMatch,
     client,
+    createArena,
     createRoom,
     enterRoom,
+    enterRoomByCode,
     events,
+    fetchLeaderboard,
+    fetchRecentReplays,
+    goHome,
     handlePass,
     handlePlay,
     leaveRoom,
     matchQueue,
     matchRoom,
     reconnecting: reconnectRequest !== null,
+    refreshArenaRooms,
     refreshRooms,
     roomStatus,
     rooms,
@@ -500,7 +612,8 @@ export function useDdzApp() {
     status,
     tableControls,
     thinking,
-    turnTimer
+    turnTimer,
+    watchArena
   };
 }
 

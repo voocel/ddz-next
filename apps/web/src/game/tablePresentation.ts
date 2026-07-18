@@ -1,4 +1,4 @@
-import type { GameEvent, GameSnapshotDto, RoundHistoryActionDto } from "@ddz/protocol";
+import type { CardDto, GameEvent, GameSnapshotDto, RoundHistoryActionDto, RoundReplayDto } from "@ddz/protocol";
 
 const PHASE_LABELS: Record<GameSnapshotDto["phase"], string> = {
   waiting: "等待入座",
@@ -81,6 +81,11 @@ export function describeEventFeedback(event: GameEvent, localPlayerId: string): 
       return `${actor(event.playerId, event.snapshot)} 过牌`;
     case "round_settled":
       return `本局结算，赢家 ${actor(event.settlement.winnerId, event.snapshot)}`;
+    case "round_aborted":
+      return `本局流局: ${event.reason}`;
+    case "commentary":
+      // 赛事解说走独立展示层(观战页字幕条),不进牌桌反馈行。
+      return null;
     case "command_rejected":
       return `命令被拒绝: ${event.reason}`;
     case "room_failed":
@@ -138,7 +143,45 @@ export function formatReplayAction(action: RoundHistoryActionDto, resolveActor?:
       return `${actor} 过牌`;
     case "round_settled":
       return `${actor} 完成结算`;
+    case "round_aborted":
+      return `本局流局${typeof action.payload.reason === "string" ? `: ${action.payload.reason}` : ""}`;
   }
+}
+
+/** 回放第 step 步后某玩家的剩余手牌：初始手牌减去其此前打出的牌 */
+export function replayRemainingCards(
+  replay: RoundReplayDto,
+  step: number,
+  playerId: string,
+  initial: readonly CardDto[]
+): CardDto[] {
+  const played = new Set<string>();
+  for (const action of replay.actions.slice(0, step + 1)) {
+    if (action.type !== "cards_played" || action.playerId !== playerId) {
+      continue;
+    }
+    for (const cardId of parseReplayCardIds(action.payload.cards)) {
+      played.add(cardId);
+    }
+  }
+
+  return initial.filter((card) => !played.has(card.id));
+}
+
+/** 回放底部手牌区的视角归属：查看者在局中用自己的第一视角；公开明牌局由座位 0 的选手补位 */
+export function replayViewpoint(
+  replay: RoundReplayDto,
+  localPlayerId: string
+): { playerId: string; initial: readonly CardDto[] } | null {
+  if (replay.viewerInitialHand.length > 0) {
+    return { playerId: localPlayerId, initial: replay.viewerInitialHand };
+  }
+
+  const seatZero = replay.players.find((player) => player.seat === 0);
+  const revealed = seatZero
+    ? replay.revealedHands.find((entry) => entry.playerId === seatZero.playerId)
+    : undefined;
+  return revealed ? { playerId: revealed.playerId, initial: revealed.cards } : null;
 }
 
 export function parseReplayCardIds(value: unknown): string[] {

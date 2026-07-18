@@ -54,6 +54,98 @@ describe("DdzRoom bot decision failure", () => {
     );
     expect(fixture.closeFailedRoom).not.toHaveBeenCalled();
   });
+
+  it("失败广播携带 attempt/willRetry,退避回调自动重试成功后正常落子", async () => {
+    const fixture = createFixture();
+    const error = new LlmDecisionError("request_error", "上游超时", 100);
+    fixture.botBrain.decide.mockRejectedValueOnce(error).mockResolvedValueOnce({ type: "pass" } satisfies BotAction);
+
+    await fixture.handleBotTurn(fixture.botId, () => true);
+
+    expect(fixture.broadcast).toHaveBeenCalledWith(
+      "event",
+      expect.objectContaining({ type: "bot_decision_failed", attempt: 1, willRetry: true })
+    );
+
+    // 测试环境的 Colyseus clock 未启动,直接触发退避回调
+    fixture.invoke("autoRetryBotTurn", fixture.botId);
+    await vi.waitFor(() => {
+      expect(fixture.botBrain.decide).toHaveBeenCalledTimes(2);
+      expect(fixture.recordMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actions: [expect.objectContaining({ type: "player_passed", playerId: fixture.botId })]
+        })
+      );
+    });
+    expect(fixture.closeFailedRoom).not.toHaveBeenCalled();
+  });
+
+  it("真人房重试耗尽:willRetry=false,等待手动重试,不流局不关房", async () => {
+    const fixture = createFixture();
+    (fixture.internals.botRetryAttempts as Map<string, number>).set(fixture.botId, 2);
+    fixture.botBrain.decide.mockRejectedValueOnce(new LlmDecisionError("request_error", "上游宕机", 100));
+
+    await fixture.handleBotTurn(fixture.botId, () => true);
+
+    expect(fixture.broadcast).toHaveBeenCalledWith(
+      "event",
+      expect.objectContaining({ type: "bot_decision_failed", attempt: 3, willRetry: false, retryable: true })
+    );
+    expect(fixture.recordMutation).not.toHaveBeenCalled();
+    expect(fixture.closeFailedRoom).not.toHaveBeenCalled();
+    expect(fixture.internals.pendingBotDecisionFailure).toMatchObject({ playerId: fixture.botId });
+    expect(fixture.table.snapshot().phase).toBe("playing");
+  });
+
+  it("竞技场重试耗尽:流局落库+广播,牌桌回到 ready 等下一局", async () => {
+    const fixture = createFixture();
+    fixture.internals.arena = true;
+    (fixture.internals.botRetryAttempts as Map<string, number>).set(fixture.botId, 2);
+    fixture.botBrain.decide.mockRejectedValueOnce(new LlmDecisionError("request_error", "上游宕机", 100));
+
+    await fixture.handleBotTurn(fixture.botId, () => true);
+
+    await vi.waitFor(() => {
+      expect(fixture.recordMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actions: [
+            expect.objectContaining({
+              type: "round_aborted",
+              playerId: fixture.botId,
+              payload: expect.objectContaining({
+                failedPlayerId: fixture.botId,
+                players: expect.arrayContaining([expect.objectContaining({ playerId: "human-1", seat: 0 })])
+              })
+            })
+          ]
+        })
+      );
+    });
+    expect(fixture.broadcast).toHaveBeenCalledWith(
+      "event",
+      expect.objectContaining({ type: "round_aborted", failedPlayerId: fixture.botId })
+    );
+    expect(fixture.table.snapshot().phase).toBe("ready");
+    expect(fixture.closeFailedRoom).not.toHaveBeenCalled();
+    expect(fixture.internals.arenaConsecutiveAborts).toBe(1);
+  });
+
+  it("竞技场连续第二次流局:failRoom 止损", async () => {
+    const fixture = createFixture();
+    fixture.internals.arena = true;
+    fixture.internals.arenaConsecutiveAborts = 1;
+    fixture.internals.lock = vi.fn(async () => {});
+    fixture.internals.disconnect = vi.fn(async () => {});
+    (fixture.internals.botRetryAttempts as Map<string, number>).set(fixture.botId, 2);
+    fixture.botBrain.decide.mockRejectedValueOnce(new LlmDecisionError("request_error", "上游宕机", 100));
+
+    await fixture.handleBotTurn(fixture.botId, () => true);
+
+    await vi.waitFor(() => {
+      expect(fixture.closeFailedRoom).toHaveBeenCalledTimes(1);
+    });
+    expect(fixture.broadcast).toHaveBeenCalledWith("event", expect.objectContaining({ type: "room_failed" }));
+  });
 });
 
 interface Fixture {
@@ -65,6 +157,9 @@ interface Fixture {
   readonly handleBotTurn: (playerId: PlayerId, isValid: () => boolean) => Promise<void>;
   readonly handleCommand: (client: { readonly sessionId: string; readonly send: ReturnType<typeof vi.fn> }, payload: unknown) => Promise<void>;
   readonly recordMutation: ReturnType<typeof vi.fn>;
+  readonly internals: Record<string, unknown>;
+  readonly table: GameTable;
+  readonly invoke: (method: string, ...args: unknown[]) => unknown;
 }
 
 function createFixture(): Fixture {
@@ -84,7 +179,10 @@ function createFixture(): Fixture {
   internals.table = table;
   internals.tasks = new SerialTaskQueue();
   internals.botIds = [botId, "bot:100031:2"];
-  internals.botBrain = botBrain satisfies BotBrain;
+  internals.botBrains = new Map<PlayerId, BotBrain>([
+    [botId, botBrain satisfies BotBrain],
+    ["bot:100031:2", botBrain satisfies BotBrain]
+  ]);
   internals.clientPlayers = new Map([[client.sessionId, "human-1"]]);
   internals.playerSessions = new Map([["human-1", new Set([client.sessionId])]]);
   internals.nicknames = new Map([
@@ -123,7 +221,10 @@ function createFixture(): Fixture {
         commandClient,
         payload
       ),
-    recordMutation
+    recordMutation,
+    internals,
+    table,
+    invoke: (method, ...args) => (room as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!(...args)
   };
 }
 
@@ -179,7 +280,8 @@ function playingTable(): GameTable {
     bombCount: 0,
     playCounts: {
       "human-1": 1
-    }
+    },
+    playHistory: [{ type: "play", playerId: "human-1", cards: ["3-diamonds"] }]
   } satisfies RoomLiveStateEnvelope["table"]);
   return table;
 }

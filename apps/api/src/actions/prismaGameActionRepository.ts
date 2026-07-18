@@ -8,6 +8,7 @@ import type {
   GameActionRepository,
   RoomEventInput,
   RoomEventRecord,
+  RoundAbortInput,
   RoundActionInput,
   RoundRecord,
   RoundSettlementInput
@@ -171,6 +172,14 @@ export class PrismaGameActionRepository implements GameActionRepository {
 
           if (action.settlement) {
             await applySettlement(tx, round.id, action.settlement);
+            round = {
+              ...round,
+              endedAt: new Date()
+            };
+          }
+
+          if (action.abort) {
+            await applyAbort(tx, round.id, action.abort);
             round = {
               ...round,
               endedAt: new Date()
@@ -342,6 +351,56 @@ async function updateRoomStatus(tx: PrismaTransaction, roomId: string, status: R
   }
 }
 
+/**
+ * 流局:带 endedAt 守卫关闭 Round(记 abortReason/failedPlayerId),写零分 RoundPlayer 行保留模型身份
+ * (供排行把技术负关联到具体模型)。不产生结算、不动金币——事故与牌局结果分离,统计层定责。
+ */
+async function applyAbort(tx: PrismaTransaction, roundId: string, abort: RoundAbortInput): Promise<void> {
+  const aborted = await tx.round.updateMany({
+    where: {
+      id: roundId,
+      endedAt: null
+    },
+    data: {
+      endedAt: new Date(),
+      abortReason: abort.reason,
+      failedPlayerId: abort.failedPlayerId
+    }
+  });
+  if (aborted.count === 0) {
+    throw new GameActionError("Round was already settled.", 409);
+  }
+
+  // 与 applySettlement 同款排序,保证并发事务以相同顺序加锁
+  const players = [...abort.players].sort((a, b) => a.playerId.localeCompare(b.playerId));
+  for (const player of players) {
+    await tx.roundPlayer.upsert({
+      where: {
+        roundId_playerId: {
+          roundId,
+          playerId: player.playerId
+        }
+      },
+      update: {
+        playerKind: player.playerKind,
+        seat: player.seat,
+        botProvider: player.botProvider,
+        botModel: player.botModel
+      },
+      create: {
+        roundId,
+        playerId: player.playerId,
+        playerKind: player.playerKind,
+        seat: player.seat,
+        score: 0,
+        coinDelta: 0,
+        botProvider: player.botProvider,
+        botModel: player.botModel
+      }
+    });
+  }
+}
+
 async function applySettlement(tx: PrismaTransaction, roundId: string, settlement: RoundSettlementInput): Promise<void> {
   // 带 endedAt 守卫的条件更新：已结算的局不能二次结算
   const settled = await tx.round.updateMany({
@@ -372,7 +431,9 @@ async function applySettlement(tx: PrismaTransaction, roundId: string, settlemen
         playerKind: player.playerKind,
         seat: player.seat,
         score: player.scoreDelta,
-        coinDelta: player.scoreDelta
+        coinDelta: player.scoreDelta,
+        botProvider: player.botProvider,
+        botModel: player.botModel
       },
       create: {
         roundId,
@@ -380,7 +441,9 @@ async function applySettlement(tx: PrismaTransaction, roundId: string, settlemen
         playerKind: player.playerKind,
         seat: player.seat,
         score: player.scoreDelta,
-        coinDelta: player.scoreDelta
+        coinDelta: player.scoreDelta,
+        botProvider: player.botProvider,
+        botModel: player.botModel
       }
     });
 

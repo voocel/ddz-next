@@ -1,4 +1,10 @@
-import type { RoomActionType, RoomLiveStateEnvelope, RoomStatus, RoundActionType } from "@ddz/protocol";
+import type {
+  LeaderboardEntryDto,
+  RoomActionType,
+  RoomLiveStateEnvelope,
+  RoomStatus,
+  RoundActionType
+} from "@ddz/protocol";
 import { GameActionError } from "../src/actions/errors";
 import type { AuthUserRecord, CreateUserInput, UserRepository } from "../src/auth/service";
 import type {
@@ -17,7 +23,69 @@ import type {
   RoundReplayRecord
 } from "../src/history/service";
 import type { CreateRoomInput, RoomRecord, RoomRepository } from "../src/rooms/service";
+import type { LeaderboardRepository } from "../src/leaderboard/service";
 import { assertRoomStatusTransition } from "../src/rooms/status";
+
+/** 一行 = 一条 RoundPlayer join Round 的展开记录，与 Prisma 聚合 SQL 的输入语义一致 */
+export interface LeaderboardSeedRow {
+  readonly playerId: string;
+  readonly score: number;
+  readonly botProvider: string | null;
+  readonly botModel: string | null;
+  readonly landlordId: string | null;
+  readonly abortReason: string | null;
+  readonly failedPlayerId: string | null;
+  readonly endedAt: Date | null;
+}
+
+export class InMemoryLeaderboardRepository implements LeaderboardRepository {
+  readonly rows: LeaderboardSeedRow[] = [];
+
+  async aggregateByModel(): Promise<readonly LeaderboardEntryDto[]> {
+    const groups = new Map<string, LeaderboardEntryDto>();
+    for (const row of this.rows) {
+      if (!row.botProvider || !row.botModel || !row.endedAt) {
+        continue;
+      }
+      const key = `${row.botProvider}/${row.botModel}`;
+      const entry = groups.get(key) ?? {
+        provider: row.botProvider,
+        model: row.botModel,
+        games: 0,
+        wins: 0,
+        landlordGames: 0,
+        landlordWins: 0,
+        farmerGames: 0,
+        farmerWins: 0,
+        totalScore: 0,
+        technicalLosses: 0
+      };
+      const isLandlord = row.landlordId === row.playerId;
+      if (row.abortReason === null) {
+        entry.games += 1;
+        if (isLandlord) {
+          entry.landlordGames += 1;
+        } else {
+          entry.farmerGames += 1;
+        }
+      }
+      if (row.score > 0) {
+        entry.wins += 1;
+        if (isLandlord) {
+          entry.landlordWins += 1;
+        } else {
+          entry.farmerWins += 1;
+        }
+      }
+      entry.totalScore += row.score;
+      if (row.failedPlayerId === row.playerId) {
+        entry.technicalLosses += 1;
+      }
+      groups.set(key, entry);
+    }
+    return [...groups.values()];
+  }
+}
 
 export class InMemoryUserRepository implements UserRepository {
   readonly records: AuthUserRecord[] = [];
@@ -48,8 +116,15 @@ export class InMemoryRoomRepository implements RoomRepository {
 
   async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.records
-      .filter((room) => room.status === "open")
+      .filter((room) => room.status === "open" && room.mode === "standard")
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async listArenaRooms(limit: number): Promise<readonly RoomRecord[]> {
+    return this.records
+      .filter((room) => room.mode === "arena" && room.status !== "closed")
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
       .slice(0, limit);
   }
 
@@ -63,6 +138,7 @@ export class InMemoryRoomRepository implements RoomRepository {
       id: `room-${this.records.length + 1}`,
       code: input.code,
       status: input.status,
+      mode: input.mode,
       createdAt: now,
       updatedAt: now
     };
@@ -179,7 +255,27 @@ export class InMemoryGameActionRepository implements GameActionRepository {
   readonly settlements: Array<{
     roundId: string;
     landlordId: string;
-    players: Array<{ playerId: string; playerKind: "human" | "bot"; seat: number; scoreDelta: number }>;
+    players: Array<{
+      playerId: string;
+      playerKind: "human" | "bot";
+      seat: number;
+      scoreDelta: number;
+      botProvider: string | null;
+      botModel: string | null;
+    }>;
+  }> = [];
+  /** 镜像 applyAbort:流局关闭 Round 并保留参局者模型身份(零分行) */
+  readonly aborts: Array<{
+    roundId: string;
+    reason: string;
+    failedPlayerId: string | null;
+    players: Array<{
+      playerId: string;
+      playerKind: "human" | "bot";
+      seat: number;
+      botProvider: string | null;
+      botModel: string | null;
+    }>;
   }> = [];
   readonly coinLedgerPlayerIds: string[] = [];
 
@@ -263,6 +359,27 @@ export class InMemoryGameActionRepository implements GameActionRepository {
           this.rounds[index] = round;
         }
       }
+      if (action.abort) {
+        // 镜像 Prisma applyAbort 的 endedAt IS NULL 守卫:已终结的 round 不得再次流局
+        const persisted = this.rounds.find((item) => item.id === round?.id);
+        if (persisted?.endedAt) {
+          throw new GameActionError("Round was already settled.", 409);
+        }
+        this.aborts.push({
+          roundId: round.id,
+          reason: action.abort.reason,
+          failedPlayerId: action.abort.failedPlayerId,
+          players: action.abort.players.map((player) => ({ ...player }))
+        });
+        round = {
+          ...round,
+          endedAt: new Date(Date.UTC(2026, 0, this.actions.length + 1))
+        };
+        const index = this.rounds.findIndex((item) => item.id === round?.id);
+        if (index >= 0) {
+          this.rounds[index] = round;
+        }
+      }
     }
 
     // 镜像 Prisma 事务语义：动作全部成功后才写状态，closed mutation 不写可恢复状态
@@ -324,6 +441,8 @@ export class InMemoryHistoryRepository implements HistoryRepository {
   readonly rounds = new Map<string, readonly RoundHistoryRecord[]>();
   readonly replays = new Map<string, RoundReplayRecord>();
   readonly ledgers = new Map<string, readonly CoinLedgerRecord[]>();
+  /** 公开复盘（全 bot 局）：按 roundId 直取；带真人的局不应放进来（镜像仓储层过滤语义） */
+  readonly publicReplays = new Map<string, RoundReplayRecord>();
 
   async listRoundsByUserId(userId: string): Promise<readonly RoundHistoryRecord[]> {
     return this.rounds.get(userId) ?? [];
@@ -335,6 +454,21 @@ export class InMemoryHistoryRepository implements HistoryRepository {
 
   async findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null> {
     return this.replays.get(`${userId}:${roundId}`) ?? null;
+  }
+
+  async findPublicBotRoundById(roundId: string): Promise<RoundReplayRecord | null> {
+    const round = this.publicReplays.get(roundId) ?? null;
+    if (!round || round.endedAt === null || round.players.some((player) => player.playerKind === "human")) {
+      return null;
+    }
+    return round;
+  }
+
+  async listRecentBotRounds(limit: number): Promise<readonly RoundHistoryRecord[]> {
+    return [...this.publicReplays.values()]
+      .filter((round) => round.endedAt !== null && round.players.every((player) => player.playerKind === "bot"))
+      .sort((a, b) => (b.endedAt?.getTime() ?? 0) - (a.endedAt?.getTime() ?? 0))
+      .slice(0, limit);
   }
 }
 

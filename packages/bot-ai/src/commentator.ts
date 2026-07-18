@@ -56,7 +56,9 @@ export class LlmCommentator implements Commentator {
         abortSignal: controller.signal
       });
       return sanitizeComment(text, maxChars);
-    } catch {
+    } catch (error) {
+      // 台词纯装饰,吞错不影响对局;但留一行告警,否则台词模型挂了无从察觉
+      console.warn("[LlmCommentator] 台词生成失败(已跳过):", error instanceof Error ? error.message : error);
       return null;
     } finally {
       clearTimeout(timer);

@@ -232,6 +232,17 @@ input {
 
 /* ===== 登录页 ===== */
 
+/* 路由过渡占位：直连 /table/:code、/replay/:id 时的加载态 */
+.route-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100svh;
+  color: var(--cream);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+
 .auth-screen {
   position: relative;
   display: grid;
@@ -807,8 +818,11 @@ input {
 
 /* ===== 牌桌界面 ===== */
 
+/* 牌桌双栏布局：左列 Phaser 舞台自适应缩放，右列 AI 思考侧栏；侧栏无内容时列宽收为 0，互不遮挡 */
 .table-screen {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   width: 100vw;
   height: 100vh;
   height: 100svh;
@@ -816,9 +830,26 @@ input {
   background: var(--grass-3);
 }
 
+/* 舞台区：Phaser 画布与所有覆盖层(HUD/控制行/结算/字幕/回放条)的定位上下文 */
+.table-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .table-screen .game-host {
   position: absolute;
   inset: 0;
+}
+
+/* 画布显示尺寸钉死为铺满容器：内部分辨率由 ResizeObserver 同步，Phaser 引导期/布局变动期的
+   内联样式与 margin 竞态一律被此处压制，黑边在机制上不可能出现 */
+.game-host canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
 }
 
 .table-hud {
@@ -837,128 +868,79 @@ input {
   pointer-events: auto;
 }
 
-/* ===== 回合闹钟：锚到当前行动玩家座位附近 ===== */
-.seat-clock-layer {
+/* ===== 思考云：行动位头顶实时滚动思考尾巴(完整思考在右侧栏,云朵只做氛围)。
+   视觉沿用老版云朵气泡配方:云朵 SVG 本体 + 尾巴 SVG + AI 徽章 + 流光扫过/光环脉冲。 ===== */
+.seat-cloud-layer {
   position: absolute;
   inset: 0;
-  z-index: 8;
+  z-index: 7;
   pointer-events: none;
 }
 
-.seat-clock {
+.seat-cloud {
   position: absolute;
-}
-
-.seat-clock--left {
-  top: 43%;
-  left: 30%;
-  transform: translate(-50%, -50%);
-}
-
-.seat-clock--right {
-  top: 43%;
-  right: 29%;
-  transform: translate(50%, -50%);
-}
-
-/* ===== 大模型「AI 输出流」座位气泡(叠在 canvas 之上,默认折叠,点击展开) ===== */
-.bot-think-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 12;
-  pointer-events: none;
-}
-
-/* 按相对座位方位锚到两个对手头像上方,让 AI 输出和对应机器人形成明确关系。 */
-.bot-think {
-  position: absolute;
-  top: 24%;
-  pointer-events: none;
-}
-
-.bot-think--left {
-  left: 10%;
-}
-
-.bot-think--right {
-  right: 6%;
-}
-
-.bot-think.is-dragged {
-  right: auto;
-}
-
-/* 折叠态:云朵气泡内展示单行流式预览，点击后展开完整面板 */
-.bot-think-preview {
-  position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: 28px auto minmax(0, 1fr) auto;
+  grid-template-columns: 28px auto minmax(0, 1fr);
   align-items: center;
   gap: 9px;
-  width: min(420px, 42vw);
+  width: min(400px, 40%);
   min-height: 58px;
   padding: 12px 18px 10px 12px;
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 800;
+  border-radius: 34px;
   background:
     linear-gradient(90deg, rgba(127, 233, 255, 0), rgba(127, 233, 255, 0.28), rgba(127, 233, 255, 0)) 0 0 / 180% 100%,
     var(--asset-ai-bubble-cloud) center / 100% 100% no-repeat;
-  border: 0;
-  border-radius: 34px;
-  box-shadow:
-    0 12px 24px rgba(20, 10, 2, 0.34);
-  cursor: pointer;
-  pointer-events: auto;
-  transition:
-    box-shadow 140ms var(--pop),
-    transform 110ms var(--pop);
+  box-shadow: 0 12px 24px rgba(20, 10, 2, 0.34);
+  animation:
+    seat-cloud-pulse 1.5s ease-in-out infinite,
+    seat-cloud-scan 2.2s linear infinite;
 }
 
-.bot-think-preview::after {
+/* 云朵尾巴 SVG:垂在气泡下方指向座位;右席位镜像 */
+.seat-cloud::after {
+  content: "";
   position: absolute;
   bottom: -40px;
   z-index: -1;
   width: 74px;
   height: 60px;
-  content: "";
   background: var(--asset-ai-bubble-tail) center / contain no-repeat;
   pointer-events: none;
 }
 
-.bot-think-preview > * {
-  position: relative;
-  z-index: 1;
+.seat-cloud--left {
+  top: 24%;
+  left: 8%;
 }
 
-.bot-think--left .bot-think-preview::after {
+.seat-cloud--right {
+  top: 24%;
+  right: 6%;
+}
+
+/* 观战底部席位:云朵悬在座位牌右上方(闹钟居中在牌顶,云朵错开),尾巴垂向牌面右肩 */
+.seat-cloud--bottom {
+  bottom: 27.5%;
+  left: 56%;
+}
+
+.seat-cloud--left::after {
   left: 82px;
 }
 
-.bot-think--right .bot-think-preview::after {
+.seat-cloud--bottom::after {
+  left: 26px;
+  transform: scaleX(-1);
+}
+
+.seat-cloud--right::after {
   right: 82px;
   transform: scaleX(-1);
 }
 
-.bot-think-preview:hover {
-  transform: translateY(-1px) scale(1.04);
-}
-
-.bot-think-preview.is-active {
-  animation:
-    bot-think-pulse 1.5s ease-in-out infinite,
-    bot-think-scan 2.2s linear infinite;
-}
-
-.bot-think-preview.has-error {
-  color: #4a170f;
-  box-shadow:
-    0 0 0 2px rgba(176, 53, 35, 0.24),
-    0 12px 24px rgba(20, 10, 2, 0.34);
-}
-
-.bot-think-ai-mark {
+.seat-cloud-ai {
   display: grid;
   place-items: center;
   width: 28px;
@@ -974,237 +956,277 @@ input {
     0 2px 0 rgba(6, 60, 78, 0.42);
 }
 
-.bot-think-preview-name {
+.seat-cloud-name {
   max-width: 82px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.bot-think-preview-text {
+/* 单行只留最新一截:rtl 容器裁左端,右端(最新输出)恒可见;内层 dir=ltr 保持文字顺序 */
+.seat-cloud-text {
+  display: block;
   min-width: 0;
   overflow: hidden;
-  font-weight: 700;
+  direction: rtl;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
-.bot-think-ai-signal {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  gap: 8px;
+@keyframes seat-cloud-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(255, 248, 216, 0.65),
+      0 12px 24px rgba(20, 10, 2, 0.34);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(127, 233, 255, 0.42),
+      0 12px 24px rgba(20, 10, 2, 0.34);
+  }
 }
 
-.bot-think-ai-spark {
+@keyframes seat-cloud-scan {
+  from {
+    background-position: 180% 0, center;
+  }
+  to {
+    background-position: -180% 0, center;
+  }
+}
+
+/* ===== 回合闹钟：锚到当前行动玩家座位附近 ===== */
+.seat-clock-layer {
   position: absolute;
-  width: 10px;
-  height: 10px;
+  inset: 0;
+  z-index: 8;
   pointer-events: none;
-  background: linear-gradient(180deg, #fff7ba, #f8d35f);
-  clip-path: polygon(50% 0, 60% 37%, 100% 50%, 60% 63%, 50% 100%, 40% 63%, 0 50%, 40% 37%);
-  filter: drop-shadow(0 0 5px rgba(248, 211, 95, 0.82));
-  transform: scale(0.75);
-  animation: bot-think-sparkle 1.7s ease-in-out infinite;
 }
 
-.bot-think-ai-spark::after {
+.seat-clock {
   position: absolute;
-  inset: 3px;
-  content: "";
-  background: #fffdf2;
-  border-radius: 999px;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
 }
 
-.bot-think-ai-signal-rail {
-  position: relative;
-  flex: none;
-  width: 72px;
-  height: 5px;
-  overflow: hidden;
-  background: rgba(4, 70, 89, 0.14);
-  border: 1px solid rgba(4, 70, 89, 0.2);
-  border-radius: 999px;
+/* 当前行动位:闹钟呼吸缩放(座位牌另有金色光晕,两者足够指位,不再叠脉冲环) */
+.seat-clock .turn-clock {
+  animation: clock-breathe 1.6s ease-in-out infinite;
 }
 
-.bot-think-ai-signal-rail::after {
-  position: absolute;
-  inset: -1px auto -1px 0;
-  width: 28px;
-  content: "";
-  background: linear-gradient(90deg, rgba(79, 197, 220, 0), rgba(79, 197, 220, 0.95), rgba(79, 197, 220, 0));
-  transform: translateX(-100%);
-  animation: bot-think-rail-scan 1.15s ease-in-out infinite;
+@keyframes clock-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
 }
 
-.bot-think-ai-signal-dots {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  gap: 4px;
+.seat-clock--left {
+  top: 43%;
+  left: 30%;
+  transform: translate(-50%, -50%);
 }
 
-.bot-think-ai-signal-dots > span {
-  width: 5px;
-  height: 5px;
-  background: #0c6b80;
-  border-radius: 999px;
-  box-shadow: 0 0 0 2px rgba(79, 197, 220, 0.2);
-  animation: bot-think-dot-wave 0.9s ease-in-out infinite;
+.seat-clock--right {
+  top: 43%;
+  right: 29%;
+  transform: translate(50%, -50%);
 }
 
-.bot-think-ai-signal-dots > span:nth-child(2) {
-  animation-delay: 0.12s;
+/* 观战视角:底部居中座位(座位 0)的回合倒计时;29% 让闹钟(含呼吸放大)完全避开座位牌顶边 */
+.seat-clock--bottom {
+  bottom: 29%;
+  left: 50%;
+  transform: translate(-50%, 50%);
 }
 
-.bot-think-ai-signal-dots > span:nth-child(3) {
-  animation-delay: 0.24s;
-}
+/* ============ AI 思考侧栏(牌桌右列停靠区) ============ */
 
-.bot-think-ai-signal--preview {
-  justify-self: end;
-  gap: 0;
-}
-
-.bot-think-ai-signal--preview .bot-think-ai-spark--one {
-  right: -4px;
-  top: -9px;
-}
-
-.bot-think-ai-signal--preview .bot-think-ai-spark--two {
-  display: none;
-}
-
-.bot-think-ai-signal--preview .bot-think-ai-signal-rail {
-  display: none;
-}
-
-.bot-think-ai-signal--panel {
+/* 木质记分板质感:与座位牌/桌面芯片同一套主题令牌,像素主题随令牌自动切换 */
+.ai-dock {
   display: flex;
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid rgba(92, 55, 26, 0.2);
+  flex-direction: column;
+  gap: 10px;
+  width: clamp(280px, 24vw, 380px);
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
+  background: linear-gradient(180deg, var(--wood-1), var(--wood-2));
+  border-left: 3px solid var(--wood-3);
+  box-shadow: inset 2px 0 0 rgba(255, 246, 224, 0.35);
+  scrollbar-width: thin;
 }
 
-.bot-think-ai-signal--panel .bot-think-ai-spark--one {
-  left: 23px;
-  top: 3px;
+/* 模型选手头像,思考中外圈品牌色光环脉冲 */
+.bot-think-avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--ai-accent, var(--sun-2));
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.bot-think-ai-signal--panel .bot-think-ai-spark--two {
-  left: 82px;
-  top: 9px;
-  width: 7px;
-  height: 7px;
-  animation-delay: 0.45s;
+.bot-think-card.is-active .bot-think-avatar {
+  animation: bot-think-ring 1.4s ease-out infinite;
 }
 
-/* 展开态:从云朵预览条下拉完整面板，正文保持规整可读 */
+/* 思考直播卡:奶油面板 + 木边(与座位牌同质感),厂牌品牌色(--ai-accent 组件内联注入)只做点缀,思考中描边发光 */
 .bot-think-card {
-  position: relative;
-  isolation: isolate;
+  --ai-accent: var(--sun-2);
+
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(520px, 50vw);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  flex: 1 1 0;
+  min-height: 150px;
+  color: var(--ink);
   background: linear-gradient(180deg, #fffdf2, var(--cream-2));
-  border: 3px solid rgba(127, 233, 255, 0.86);
+  border: 2px solid var(--wood-2);
   border-radius: var(--r-m);
-  box-shadow:
-    0 5px 0 rgba(64, 98, 112, 0.6),
-    0 0 0 2px rgba(255, 248, 216, 0.7),
-    0 18px 36px rgba(20, 10, 2, 0.42);
-  pointer-events: auto;
+  box-shadow: 0 3px 0 var(--wood-3);
   transform-origin: top center;
-  animation: bot-think-drop 180ms var(--pop);
+  animation: bot-think-drop 160ms var(--pop);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
-.bot-think-card > * {
-  position: relative;
-  z-index: 1;
+.bot-think-card.is-active {
+  border-color: var(--ai-accent);
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--ai-accent) 40%, transparent),
+    0 3px 0 var(--wood-3);
+}
+
+.bot-think-card.has-error {
+  border-color: rgba(176, 53, 35, 0.65);
 }
 
 .bot-think-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 2px solid rgba(92, 55, 26, 0.22);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-}
-
-.bot-think-head:active {
-  cursor: grabbing;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(92, 55, 26, 0.22);
 }
 
 .bot-think-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.bot-think-title strong {
   overflow: hidden;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 900;
+  font-size: 14px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.bot-think-toggle {
+.bot-think-title span {
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.65;
+}
+
+/* 状态徽章:叫地主中/出牌中/思考中/出错 */
+.bot-think-badge {
   flex: none;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  color: var(--ink);
-  font-size: 18px;
-  font-weight: 900;
-  line-height: 1;
-  background: transparent;
-  border: 2px solid rgba(92, 55, 26, 0.45);
-  border-radius: 8px;
-  cursor: pointer;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ai-accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ai-accent) 55%, transparent);
+}
+
+.bot-think-badge.is-error {
+  background: rgba(255, 90, 69, 0.18);
+  border-color: rgba(255, 90, 69, 0.5);
 }
 
 .bot-think-body {
-  max-height: 360px;
-  overflow: auto;
+  min-height: 56px;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 10px 12px;
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  opacity: 0.94;
+  scrollbar-width: thin;
+}
+
+.bot-think-idle {
+  margin: 0;
+  opacity: 0.6;
 }
 
 .bot-think-section + .bot-think-section {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(92, 55, 26, 0.28);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(92, 55, 26, 0.28);
 }
 
 .bot-think-label {
-  margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 900;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  opacity: 0.55;
+}
+
+/* 流式光标:品牌色竖条闪烁,跟在最新输出末尾 */
+.bot-think-caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--ai-accent);
+  border-radius: 2px;
+  animation: bot-think-caret 0.9s steps(2, jump-none) infinite;
+}
+
+.bot-think-choice {
+  margin: 0 10px 10px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: var(--r-s);
+  background: rgba(125, 194, 66, 0.22);
+  border: 1px solid rgba(78, 158, 47, 0.55);
 }
 
 .bot-think-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 10px 10px;
+  padding: 8px 10px;
   color: #4a170f;
-}
-
-.bot-think-error-message {
-  padding: 9px 10px;
+  font-size: 12px;
+  border-radius: var(--r-s);
   background: rgba(176, 53, 35, 0.1);
   border: 1px solid rgba(176, 53, 35, 0.28);
-  border-radius: 8px;
 }
 
 .bot-think-retry {
-  margin-top: 10px;
-  padding: 7px 12px;
+  align-self: flex-start;
+  padding: 6px 12px;
   color: #fffdf2;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
   background: linear-gradient(180deg, #b84831, #7d2418);
   border: 0;
@@ -1225,71 +1247,19 @@ input {
   transform: translateY(-1px);
 }
 
-@keyframes bot-think-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 3px 0 rgba(64, 98, 112, 0.55),
-      0 0 0 2px rgba(255, 248, 216, 0.65),
-      0 12px 24px rgba(20, 10, 2, 0.34);
-  }
-
-  50% {
-    box-shadow:
-      0 3px 0 rgba(64, 98, 112, 0.55),
-      0 0 0 4px rgba(127, 233, 255, 0.42),
-      0 14px 28px rgba(20, 10, 2, 0.38);
-  }
-}
-
-@keyframes bot-think-scan {
+@keyframes bot-think-ring {
   from {
-    background-position: 180% 0, center;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ai-accent) 60%, transparent);
   }
 
   to {
-    background-position: -180% 0, center;
+    box-shadow: 0 0 0 9px transparent;
   }
 }
 
-@keyframes bot-think-rail-scan {
-  0% {
-    transform: translateX(-100%);
-  }
-
-  100% {
-    transform: translateX(270%);
-  }
-}
-
-@keyframes bot-think-dot-wave {
-  0%,
-  100% {
-    opacity: 0.45;
-    transform: translateY(0) scale(0.86);
-  }
-
+@keyframes bot-think-caret {
   50% {
-    opacity: 1;
-    transform: translateY(-2px) scale(1.08);
-  }
-}
-
-@keyframes bot-think-sparkle {
-  0%,
-  100% {
     opacity: 0;
-    transform: scale(0.45);
-  }
-
-  34% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  58% {
-    opacity: 0.42;
-    transform: scale(0.7);
   }
 }
 
@@ -1306,10 +1276,8 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bot-think-preview.is-active,
-  .bot-think-ai-signal-rail::after,
-  .bot-think-ai-signal-dots > span,
-  .bot-think-ai-spark,
+  .bot-think-card.is-active .bot-think-avatar,
+  .bot-think-caret,
   .bot-think-card {
     animation: none;
   }
@@ -2033,45 +2001,30 @@ h2 {
     gap: 12px;
   }
 
-  .bot-think {
-    top: 30%;
+  /* 小屏改上下分栏：舞台在上，AI 侧栏横向滚动停靠在下 */
+  .table-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .bot-think--left {
-    left: 4%;
+  .ai-dock {
+    flex-direction: row;
+    width: auto;
+    max-height: 32vh;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-left: 0;
+    border-top: 3px solid var(--wood-3);
+    box-shadow: inset 0 2px 0 rgba(255, 246, 224, 0.35);
   }
 
-  .bot-think--right {
-    right: 4%;
+  .ai-dock > * {
+    flex: 1 0 min(260px, 80vw);
   }
 
-  .bot-think-preview {
-    grid-template-columns: 26px minmax(0, 1fr) auto;
-    width: min(320px, 44vw);
-    min-height: 54px;
-    padding: 10px 10px 9px 10px;
-  }
-
-  .bot-think--left .bot-think-preview::after {
-    left: 54px;
-  }
-
-  .bot-think--right .bot-think-preview::after {
-    right: 54px;
-  }
-
-  .bot-think-ai-mark {
-    width: 26px;
-    height: 26px;
-    font-size: 10px;
-  }
-
-  .bot-think-preview-name {
-    display: none;
-  }
-
-  .bot-think-card {
-    width: min(460px, 92vw);
+  .bot-think-body {
+    max-height: 150px;
   }
 
   .settlement-overlay {
@@ -2247,5 +2200,575 @@ h2 {
   }
   100% {
     width: 1.2em;
+  }
+}
+
+/* ============ AI 竞技场（观战页 + 大厅弹窗） ============ */
+
+.arena-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.arena-live-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: arena-live-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes arena-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+.arena-hud-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--cream);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.arena-hud-status {
+  opacity: 0.85;
+}
+
+/* 解说字幕条：顶栏下方居中，短句入场后停留展示 */
+.arena-commentary {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(760px, 86vw);
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(20, 14, 6, 0.78);
+  border: 1px solid rgba(255, 214, 120, 0.35);
+  color: var(--cream);
+  font-size: 15px;
+  line-height: 1.5;
+  animation: arena-commentary-in 0.35s var(--pop);
+  pointer-events: none;
+}
+
+.arena-commentary-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sun-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@keyframes arena-commentary-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* 三席位 reasoning 面板：停靠在 AI 侧栏内纵向均分，公开视角的核心观赏区；与座位牌同套奶油/木边质感 */
+.arena-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 140px;
+  padding: 10px 12px;
+  border-radius: var(--r-m);
+  background: linear-gradient(180deg, #fffdf2, var(--cream-2));
+  border: 2px solid var(--wood-2);
+  box-shadow: 0 3px 0 var(--wood-3);
+  color: var(--ink);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.arena-panel.is-current {
+  border-color: var(--ai-accent, var(--sun-2));
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--ai-accent, var(--sun-2)) 40%, transparent),
+    0 3px 0 var(--wood-3);
+}
+
+.arena-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.arena-panel-head img {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ai-accent, #ffd678) 55%, transparent);
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.arena-panel-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.arena-panel-title strong {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arena-panel-title span {
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arena-panel-role {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-style: normal;
+}
+
+.arena-panel-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.arena-panel-live {
+  color: var(--ai-accent, var(--sun-1));
+  animation: arena-live-pulse 1.2s ease-in-out infinite;
+}
+
+.arena-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.92;
+  scrollbar-width: thin;
+}
+
+.arena-panel-choice {
+  padding: 4px 8px;
+  border-radius: var(--r-s);
+  background: rgba(125, 194, 66, 0.22);
+  border: 1px solid rgba(78, 158, 47, 0.55);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.arena-panel-error {
+  padding: 4px 8px;
+  border-radius: var(--r-s);
+  background: rgba(176, 53, 35, 0.1);
+  border: 1px solid rgba(176, 53, 35, 0.28);
+  color: #4a170f;
+  font-size: 12px;
+}
+
+/* 直播终结遮罩 */
+.arena-ended {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 7, 3, 0.6);
+}
+
+.arena-ended-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 40px;
+  border-radius: var(--r-l);
+  background: rgba(24, 16, 7, 0.94);
+  border: 2px solid rgba(255, 214, 120, 0.3);
+  color: var(--cream);
+  font-size: 16px;
+}
+
+/* 大厅弹窗：三席阵容选择 */
+.arena-create-heading {
+  margin-top: 14px;
+}
+
+.arena-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-seat-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arena-seat-pick img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid rgba(140, 83, 24, 0.45);
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.arena-seat-pick select,
+.arena-effort-pick select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-s);
+  border: 2px solid var(--wood-2);
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.arena-effort-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arena-effort-pick > span {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.arena-create-button {
+  align-self: center;
+  margin-top: 6px;
+}
+
+/* ============ 模型排行榜 ============ */
+
+.leaderboard-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: 26px clamp(16px, 6vw, 80px) 40px;
+  background: var(--asset-bg-lobby) center / cover no-repeat fixed;
+}
+
+.leaderboard-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.leaderboard-head h1 {
+  margin: 0;
+  font-size: 26px;
+  color: var(--cream);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.leaderboard-hint {
+  font-size: 13px;
+  color: var(--cream);
+  opacity: 0.75;
+}
+
+.leaderboard-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-content: start;
+  overflow-y: auto;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-radius: var(--r-m);
+  background: rgba(24, 16, 7, 0.82);
+  border: 2px solid rgba(255, 214, 120, 0.22);
+  color: var(--cream);
+}
+
+.leaderboard-rank {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+}
+
+.leaderboard-rank.is-top {
+  background: var(--sun-2);
+  color: var(--ink);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.leaderboard-avatar {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 214, 120, 0.4);
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.leaderboard-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.leaderboard-name strong {
+  font-size: 16px;
+}
+
+.leaderboard-name span {
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.leaderboard-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 84px;
+}
+
+.leaderboard-stat strong {
+  font-size: 15px;
+}
+
+.leaderboard-stat span {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.leaderboard-flaw {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 90, 69, 0.2);
+  border: 1px solid rgba(255, 90, 69, 0.5);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .leaderboard-row {
+    flex-wrap: wrap;
+  }
+  .leaderboard-stat {
+    align-items: flex-start;
+  }
+}
+
+/* ============ 复盘增强 ============ */
+
+/* 复盘 AI 思考面板：停靠在 AI 侧栏内，展示当前步的模型 reasoning；与直播卡同套奶油/木边质感 */
+.replay-reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-m);
+  background: linear-gradient(180deg, #fffdf2, var(--cream-2));
+  border: 2px solid var(--ai-accent, var(--wood-2));
+  box-shadow: 0 3px 0 var(--wood-3);
+  color: var(--ink);
+}
+
+.replay-reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay-reasoning-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--ai-accent, rgba(255, 214, 120, 0.4));
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.replay-reasoning-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.replay-reasoning-title strong {
+  font-size: 14px;
+}
+
+.replay-reasoning-title span {
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.replay-reasoning-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.92;
+  scrollbar-width: thin;
+}
+
+.replay-reasoning-empty {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+/* 排行页附属板块：最近公开 AI 对局（复盘入口） */
+.recent-replays {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent-replays h2 {
+  color: var(--cream);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.recent-replays-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.recent-replay-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-radius: var(--r-m);
+  background: rgba(24, 16, 7, 0.72);
+  border: 2px solid rgba(255, 214, 120, 0.16);
+  color: var(--cream);
+}
+
+.recent-replay-time {
+  min-width: 84px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.recent-replay-players {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.recent-replay-player {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.recent-replay-player img {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 214, 120, 0.35);
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.recent-replay-player.is-landlord {
+  font-weight: 700;
+}
+
+.recent-replay-result {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+@media (max-width: 720px) {
+  .recent-replay-row {
+    flex-wrap: wrap;
   }
 }

@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parseBotProviderRegistry } from "@ddz/bot-ai";
 import { GameTable } from "@ddz/domain";
-import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
-import type { RecordGameActionsInput } from "../../src/api/gameActionClient";
-import { DdzRoom } from "../../src/rooms/DdzRoom";
+import type { RoomLiveStateEnvelope } from "@ddz/protocol";
 import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
+import {
+  createRoomFixture,
+  restoreEnv,
+  runtimeEnv,
+  setEnv,
+  stateResponse,
+  type InternalRoomLiveState
+} from "./roomCreateFixture";
 
 const originalAiBattleEnabled = runtimeEnv().AI_BATTLE_ENABLED;
 const originalAiBattleMaxActive = runtimeEnv().AI_BATTLE_MAX_ACTIVE;
@@ -19,10 +25,6 @@ const llmRegistry = parseBotProviderRegistry(
     }
   })
 );
-
-type RoomCreateOptions = Parameters<DdzRoom["onCreate"]>[0];
-type RoomCreateOptionOverrides = Partial<Omit<RoomCreateOptions, "roomStatusClient" | "gameActionClient" | "roomCode">>;
-type InternalRoomLiveState = NonNullable<InternalRoomStateResponse["state"]>;
 
 describe("DdzRoom crash recovery", () => {
   afterEach(() => {
@@ -41,9 +43,9 @@ describe("DdzRoom crash recovery", () => {
     const snapshot = fixture.internals().table.snapshot();
     expect(snapshot.phase).toBe("playing");
     expect(snapshot.landlordId).toBe("human-1");
-    // bot 名单从状态重建，真人座位等待重连
+    // bot 名单从状态重建，真人座位等待重连;容量 = 剩余座位(1) + 观战名额(默认 20)
     expect(fixture.internals().botIds).toEqual([`bot:${code}:1`, `bot:${code}:2`]);
-    expect(fixture.room.maxClients).toBe(1);
+    expect(fixture.room.maxClients).toBe(21);
     expect(fixture.internals().nicknames.get("human-1")).toBe("Alice");
     expect(snapshot.players.find((player) => player.id === "human-1")?.connected).toBe(false);
     // 回合计时已重新调度（turn_timer 广播 + 计时器挂上）
@@ -282,154 +284,4 @@ function envelope(table: GameTable): InternalRoomLiveState {
     nicknames: { "human-1": "Alice" }
   };
   return state as unknown as InternalRoomLiveState;
-}
-
-function stateResponse(code: string, status: RoomStatus, state: InternalRoomLiveState | null): InternalRoomStateResponse {
-  return {
-    room: {
-      id: `room-${code}`,
-      code,
-      status,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z"
-    } satisfies RoomDto,
-    state
-  };
-}
-
-interface RoomFixture {
-  readonly room: DdzRoom;
-  readonly options: RoomCreateOptions;
-  readonly broadcast: ReturnType<typeof vi.fn>;
-  readonly clock: { setTimeout: ReturnType<typeof vi.fn>; setInterval: ReturnType<typeof vi.fn> };
-  readonly gameActions: RecordGameActionsInput[];
-  /** 房间上报过的状态序列（updateRoomStatus 调用记录） */
-  readonly statusUpdates: string[];
-  readonly claims: string[];
-  /** 让下一次 updateRoomStatus 挂起到给定 promise 解决，用于验证 dispose 期间的竞态 */
-  gateNextStatusUpdate(gate: Promise<void>): void;
-  internals(): Record<string, never> & {
-    botBrain: unknown;
-    table: GameTable;
-    botIds: string[];
-    clientPlayers: Map<string, string>;
-    nicknames: Map<string, string>;
-    tasks: { enqueue(task: () => Promise<void>): Promise<void> };
-  };
-  bindHumanClient(playerId: string): { readonly sessionId: string; readonly send: ReturnType<typeof vi.fn> };
-  handleCommand(client: { readonly sessionId: string; readonly send: ReturnType<typeof vi.fn> }, payload: unknown): Promise<void>;
-  flushTasks(): Promise<void>;
-}
-
-let fixtureSequence = 0;
-
-/** 裸实例 + 最小 Colyseus 桩，避免拉起完整运行时（与 ddzRoomFailRoom.test.ts 同风格） */
-function createRoomFixture(
-  code: string,
-  response: InternalRoomStateResponse,
-  optionOverrides: RoomCreateOptionOverrides = {}
-): RoomFixture {
-  const room = new DdzRoom();
-  const internals = room as unknown as Record<string, unknown>;
-  const broadcast = vi.fn();
-  const clock = {
-    setTimeout: vi.fn(() => ({ clear: vi.fn() })),
-    setInterval: vi.fn(() => ({ clear: vi.fn() }))
-  };
-  const gameActions: RecordGameActionsInput[] = [];
-  const statusUpdates: string[] = [];
-  const claims: string[] = [];
-  let statusGate: Promise<void> | null = null;
-
-  fixtureSequence += 1;
-  Object.defineProperty(room, "roomId", { value: `colyseus-${fixtureSequence}`, configurable: true });
-  Object.defineProperty(room, "clock", { value: clock, configurable: true });
-  Object.defineProperty(room, "clients", { value: [], configurable: true });
-  internals.broadcast = broadcast;
-  internals.setMetadata = vi.fn();
-  internals.setPrivate = vi.fn();
-  internals.onMessage = vi.fn();
-
-  const options: RoomCreateOptions = {
-    roomCode: code,
-    ...optionOverrides,
-    roomStatusClient: {
-      async createRoom(): Promise<RoomDto> {
-        throw new Error("Not used.");
-      },
-      async getRoomState(): Promise<InternalRoomStateResponse> {
-        return response;
-      },
-      async claimRoom(_code: string, ownerId: string): Promise<void> {
-        claims.push(`claim:${ownerId}`);
-      },
-      async refreshRoomClaim(_code: string, ownerId: string): Promise<void> {
-        claims.push(`refresh:${ownerId}`);
-      },
-      async releaseRoomClaim(_code: string, ownerId: string): Promise<void> {
-        claims.push(`release:${ownerId}`);
-      },
-      async updateRoomStatus(_code: string, status: string, ownerId: string): Promise<void> {
-        if (statusGate) {
-          const gate = statusGate;
-          statusGate = null;
-          await gate;
-        }
-        statusUpdates.push(`${status}:${ownerId}`);
-      }
-    },
-    gameActionClient: {
-      async recordGameActions(input: RecordGameActionsInput): Promise<void> {
-        gameActions.push(input);
-      }
-    }
-  };
-
-  return {
-    room,
-    options,
-    broadcast,
-    clock,
-    gameActions,
-    statusUpdates,
-    claims,
-    gateNextStatusUpdate: (gate: Promise<void>) => {
-      statusGate = gate;
-    },
-    internals: () => internals as ReturnType<RoomFixture["internals"]>,
-    bindHumanClient: (playerId: string) => {
-      const client = { sessionId: `session-${playerId}`, send: vi.fn() };
-      (internals.table as GameTable).addPlayer(playerId);
-      (internals.clientPlayers as Map<string, string>).set(client.sessionId, playerId);
-      return client;
-    },
-    handleCommand: (client, payload) =>
-      (room as unknown as { handleCommand(client: unknown, payload: unknown): Promise<void> }).handleCommand(client, payload),
-    flushTasks: async () => {
-      await (internals.tasks as { enqueue(task: () => Promise<void>): Promise<void> }).enqueue(async () => {});
-    }
-  };
-}
-
-type RuntimeEnv = Record<string, string | undefined>;
-
-function runtimeEnv(): RuntimeEnv {
-  const runtime = globalThis as typeof globalThis & { process?: { env?: RuntimeEnv } };
-  if (!runtime.process?.env) {
-    throw new Error("process.env is required for DdzRoom env tests.");
-  }
-  return runtime.process.env;
-}
-
-function setEnv(name: string, value: string): void {
-  runtimeEnv()[name] = value;
-}
-
-function restoreEnv(name: string, value: string | undefined): void {
-  const env = runtimeEnv();
-  if (value === undefined) {
-    delete env[name];
-    return;
-  }
-  env[name] = value;
 }

@@ -1,10 +1,9 @@
-import { streamText, type JSONValue, type LanguageModel } from "ai";
 import {
-  createLlmHttpTraceScope,
-  finishLlmHttpTraceScope,
-  runWithLlmHttpTraceScope,
-  type LlmHttpTrace
-} from "./httpTrace.js";
+  LlmChoiceRunner,
+  type LlmChoiceRunnerOptions,
+  type MoveDecision,
+  type MoveStreamHooks
+} from "./choiceRunner.js";
 
 /** 其他一家:相对自己的身份(地主/队友/农民)+ 剩牌数 + 当前公开可见的手牌。 */
 export interface OpponentInfo {
@@ -28,8 +27,8 @@ export interface LastPlayInfo {
 export interface RecentActionInfo {
   /** 行动者相对自己的身份,如「你」「地主」「队友」「农民」。 */
   readonly by: string;
-  readonly action: "play" | "pass";
-  /** action=play 时的牌型/牌点简述;pass 时省略。 */
+  readonly action: "play" | "pass" | "bid" | "rob";
+  /** action=play 时的牌型/牌点简述;bid/rob 时为「叫地主/不叫」「抢地主/不抢」;pass 时省略。 */
   readonly description?: string;
 }
 
@@ -70,78 +69,6 @@ export interface MoveSelectionContext {
   readonly candidates: readonly string[];
 }
 
-export interface TokenUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-}
-
-export interface ProviderRequestSummary {
-  readonly provider: {
-    readonly key: string;
-    readonly type: string;
-    readonly baseHost: string | null;
-  } | null;
-  readonly providerOptions: Record<string, Record<string, JSONValue>> | null;
-  readonly requestControls: Record<string, JSONValue> | null;
-  readonly finalBodyControls: Record<string, JSONValue> | null;
-}
-
-/** 本次 LLM 调用经过 provider fetch 看到的上游 HTTP 原始请求/响应。请求头会脱敏,响应体不截断。 */
-export type ProviderHttpTrace = LlmHttpTrace;
-
-/** LLM API/网络错误的结构化留证。只记录无密钥字段,便于定位 provider 路径、状态码与上游错误体。 */
-export interface LlmRequestErrorInfo {
-  readonly name: string | null;
-  readonly message: string;
-  readonly url: string | null;
-  readonly statusCode: number | null;
-  readonly responseHeaders: Record<string, string> | null;
-  readonly responseBody: string | null;
-  readonly data: JSONValue | null;
-  readonly isRetryable: boolean | null;
-}
-
-/**
- * 一次完整请求的全量留证(供排错/优化):请求的 system/prompt、模型思考 reasoning、原始输出、用量、错误。
- * 不含任何密钥。无论解析成功与否,只要发出过请求就有 trace(连 abort/API 错误也连 prompt 一起留)。
- */
-export interface ChooserTrace {
-  readonly modelId: string | null;
-  readonly system: string;
-  readonly prompt: string;
-  readonly rawText: string | null;
-  readonly reasoningText: string | null;
-  readonly finishReason: string | null;
-  readonly usage: TokenUsage | null;
-  readonly requestSummary: ProviderRequestSummary;
-  readonly httpTrace: ProviderHttpTrace | null;
-  /** abort/API/网络错误的消息;成功为 null。错误已被捕获进 trace,但调用方仍应据此抛错暴露(不静默)。 */
-  readonly error: string | null;
-  readonly errorStack: string | null;
-  readonly errorInfo: LlmRequestErrorInfo | null;
-}
-
-export interface MoveDecision {
-  /** 解析出的合法候选内部索引(0 基);模型有响应但解析不出/越界,或请求出错时为 null。 */
-  readonly index: number | null;
-  readonly trace: ChooserTrace;
-}
-
-export type MoveStreamChannel = "reasoning" | "text";
-
-export interface MoveStreamDelta {
-  readonly channel: MoveStreamChannel;
-  readonly text: string;
-}
-
-/**
- * 流式钩子:决策进行中实时吐出模型的 reasoning 与普通文本增量,供上层做「AI 输出流」展示。
- * 可选,不传则只等最终结果(行为与非流式等价)。
- */
-export interface MoveStreamHooks {
-  readonly onDelta?: (delta: MoveStreamDelta) => void;
-}
-
 /**
  * LLM 选牌器:在调用方给出的合法候选里选一个索引。
  * 返回 null 仅表示「没发请求」(model 为 null / 无候选);否则返回带完整 trace 的 MoveDecision。
@@ -152,324 +79,27 @@ export interface MoveChooser {
   choose(ctx: MoveSelectionContext, streamHooks?: MoveStreamHooks): Promise<MoveDecision | null>;
 }
 
-export interface LlmMoveChooserOptions {
-  /** 已由供应商注册表解析好的语言模型;为 null(缺密钥/未配置)时直接返回 null,不发起请求。 */
-  readonly model: LanguageModel | null;
-  readonly timeoutMs?: number;
-  /** 无密钥 provider 元信息,只用于 trace 排错。 */
-  readonly provider?: {
-    readonly key: string;
-    readonly type: string;
-    readonly baseURL?: string | undefined;
-  } | undefined;
-  /**
-   * 透传给 streamText 的 provider 专属选项(如思考强度);由 buildReasoningProviderOptions 产出。
-   * 不设/undefined 表示不干预,跟随模型默认。
-   */
-  readonly providerOptions?: Record<string, Record<string, JSONValue>> | undefined;
-}
+export type LlmMoveChooserOptions = LlmChoiceRunnerOptions;
 
-// 与 config.ts 的 DEFAULT_DECISION_TIMEOUT_MS 对齐:推理模型单步思考偏慢,给足头寸(生产路径总会显式传 timeoutMs)。
-const DEFAULT_TIMEOUT_MS = 60_000;
-// 推理/thinking 模型的「思考」也算进 output token,留足空间避免在思考中途被截断而拿不到最终编号;
-// 普通模型按 prompt「只回复一个数字」会很快停,不会用满。
-const MAX_OUTPUT_TOKENS = 8192;
-
+/** 出牌选择器薄壳:组装出牌 system/prompt,请求管线与编号解析在 LlmChoiceRunner。 */
 export class LlmMoveChooser implements MoveChooser {
-  constructor(private readonly options: LlmMoveChooserOptions) {}
+  private readonly runner: LlmChoiceRunner;
+
+  constructor(options: LlmMoveChooserOptions) {
+    this.runner = new LlmChoiceRunner(options);
+  }
 
   async choose(ctx: MoveSelectionContext, streamHooks?: MoveStreamHooks): Promise<MoveDecision | null> {
-    const model = this.options.model;
-    if (ctx.candidates.length === 0 || !model) {
-      return null;
-    }
-
-    const system = buildSystem(ctx.role);
-    const prompt = formatMoveSelectionPrompt(ctx);
-    const modelId = typeof model === "string" ? model : (model.modelId ?? null);
-    const requestSummary = summarizeRequest(this.options.providerOptions, this.options.provider);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    const httpTraceScope = createLlmHttpTraceScope();
-    // 三条刻意的选择:
-    // 1) 把 API/超时/网络错误捕获进 trace.error(而非直接抛),好连同 system/prompt 一起留证;
-    //    异常本身仍由调用方据 trace.error 抛错暴露(见 LlmBotBrain),不静默。
-    // 2) 不用强制 tool_choice——很多推理模型(deepseek-v4-pro、o1 类)不支持强制工具调用,
-    //    改用最通用的「只回复编号数字」纯文本输出,跨 provider 一致;模型有响应但解析不出有效编号时 index=null。
-    // 3) 用 streamText 而非 generateText:遍历 fullStream 实时把 reasoning/text 增量回调给 streamHooks(牌桌 AI 输出流);
-    //    error part 显式捕获 + allSettled 收尾(消费所有 promise 拒绝,既不静默错误也不留未处理拒绝)。
-    try {
-      return await runWithLlmHttpTraceScope(httpTraceScope, async () => {
-      const result = streamText({
-        model,
-        system,
-        prompt,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        abortSignal: controller.signal,
-        ...(this.options.providerOptions ? { providerOptions: this.options.providerOptions } : {})
-      });
-
-      let streamError: unknown = null;
-      for await (const part of result.fullStream) {
-        if (part.type === "reasoning-delta") {
-          streamHooks?.onDelta?.({ channel: "reasoning", text: part.text });
-        } else if (part.type === "text-delta") {
-          streamHooks?.onDelta?.({ channel: "text", text: part.text });
-        } else if (part.type === "error") {
-          streamError = part.error;
-        }
-      }
-
-      // 用 allSettled 一次性收齐最终值:即便流出错也消费掉每个 promise 的 rejection,
-      // 避免「未处理拒绝」拖垮(服务端)进程;错误优先取 error part,其次取 text 的拒因——保证不静默。
-      const [textR, reasoningR, finishR, usageR, requestR] = await Promise.allSettled([
-        result.text,
-        result.reasoningText,
-        result.finishReason,
-        result.usage,
-        result.request
-      ]);
-      if (streamError === null && textR.status === "rejected") {
-        streamError = textR.reason;
-      }
-      if (streamError !== null) {
-        throw streamError instanceof Error ? streamError : new Error(String(streamError));
-      }
-
-      const text = textR.status === "fulfilled" ? textR.value : "";
-      const reasoningText = reasoningR.status === "fulfilled" ? reasoningR.value : undefined;
-      const finishReason = finishR.status === "fulfilled" ? finishR.value : null;
-      const usage = usageR.status === "fulfilled" ? usageR.value : undefined;
-      const finalRequestSummary =
-        requestR.status === "fulfilled" ? withFinalBodyControls(requestSummary, requestBodyOf(requestR.value)) : requestSummary;
-
-      const httpTrace = await finishLlmHttpTraceScope(httpTraceScope);
-      return {
-        index: parseMoveIndex(text, ctx.candidates.length),
-        trace: {
-          modelId,
-          system,
-          prompt,
-          rawText: text,
-          reasoningText: reasoningText ?? null,
-          finishReason: finishReason ?? null,
-          usage: toUsage(usage),
-          requestSummary: finalRequestSummary,
-          httpTrace,
-          error: null,
-          errorStack: null,
-          errorInfo: null
-        }
-      };
-      });
-    } catch (error) {
-      const errorInfo = toRequestErrorInfo(error);
-      const httpTrace = await finishLlmHttpTraceScope(httpTraceScope);
-      return {
-        index: null,
-        trace: {
-          modelId,
-          system,
-          prompt,
-          rawText: null,
-          reasoningText: null,
-          finishReason: null,
-          usage: null,
-          requestSummary,
-          httpTrace,
-          error: errorInfo.message,
-          errorStack: error instanceof Error ? (error.stack ?? null) : null,
-          errorInfo
-        }
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.runner.run(
+      {
+        system: buildSystem(ctx.role),
+        prompt: formatMoveSelectionPrompt(ctx),
+        candidateCount: ctx.candidates.length,
+        candidateLabels: ctx.candidates
+      },
+      streamHooks
+    );
   }
-}
-
-/**
- * 从模型回复中解析出展示编号(1..count),再映射为内部 0 基索引。导出供单测。
- * - number:按展示编号校验范围。
- * - string:纯数字直接用;夹带解释时取文本里第一个落在展示范围内的整数(prompt 已要求只回数字,这是兜底)。
- * 解析不出有效编号返回 null(由调用方按「模型未给出有效选择」处理)。
- */
-export function parseMoveIndex(raw: unknown, count: number): number | null {
-  if (!Number.isInteger(count) || count <= 0) {
-    return null;
-  }
-  let displayNumber: number | null = null;
-  if (typeof raw === "number") {
-    displayNumber = raw;
-  } else if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (/^\d+$/.test(trimmed)) {
-      displayNumber = Number(trimmed);
-    } else {
-      for (const match of trimmed.match(/-?\d+(?:\.\d+)?/g) ?? []) {
-        const candidate = Number(match);
-        if (Number.isInteger(candidate) && candidate >= 1 && candidate <= count) {
-          displayNumber = candidate;
-          break;
-        }
-      }
-    }
-  }
-  if (displayNumber === null || !Number.isInteger(displayNumber) || displayNumber < 1 || displayNumber > count) {
-    return null;
-  }
-  return displayNumber - 1;
-}
-
-function toUsage(
-  usage: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined
-): TokenUsage | null {
-  if (!usage || typeof usage.inputTokens !== "number" || typeof usage.outputTokens !== "number") {
-    return null;
-  }
-  return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
-}
-
-function toRequestErrorInfo(error: unknown): LlmRequestErrorInfo {
-  const record = isPlainRecord(error) ? error : {};
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    name: error instanceof Error ? error.name : typeof record.name === "string" ? record.name : null,
-    message,
-    url: typeof record.url === "string" ? record.url : null,
-    statusCode: typeof record.statusCode === "number" ? record.statusCode : null,
-    responseHeaders: stringRecordOrNull(record.responseHeaders),
-    responseBody: typeof record.responseBody === "string" ? record.responseBody : null,
-    data: isJsonValue(record.data) ? record.data : null,
-    isRetryable: typeof record.isRetryable === "boolean" ? record.isRetryable : null
-  };
-}
-
-function stringRecordOrNull(value: unknown): Record<string, string> | null {
-  if (!isPlainRecord(value)) {
-    return null;
-  }
-  const result: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") {
-      result[key] = entry;
-    }
-  }
-  return Object.keys(result).length > 0 ? result : null;
-}
-
-function summarizeRequest(
-  providerOptions: Record<string, Record<string, JSONValue>> | undefined,
-  provider: LlmMoveChooserOptions["provider"]
-): ProviderRequestSummary {
-  const providerControls = Object.values(providerOptions ?? {}).find((options) =>
-    Object.hasOwn(options, "thinking") ||
-    Object.hasOwn(options, "reasoning_effort") ||
-    Object.hasOwn(options, "effort") ||
-    Object.hasOwn(options, "output_config")
-  );
-  const controls: Record<string, JSONValue> = {};
-  if (providerControls && Object.hasOwn(providerControls, "thinking")) {
-    const thinking = providerControls.thinking;
-    if (thinking !== undefined) {
-      controls.thinking = thinking;
-    }
-  }
-  if (providerControls && Object.hasOwn(providerControls, "reasoning_effort")) {
-    const reasoningEffort = providerControls.reasoning_effort;
-    if (reasoningEffort !== undefined) {
-      controls.reasoning_effort = reasoningEffort;
-    }
-  }
-  if (providerControls && Object.hasOwn(providerControls, "effort")) {
-    const effort = providerControls.effort;
-    if (effort !== undefined) {
-      controls.effort = effort;
-    }
-  }
-  if (providerControls && Object.hasOwn(providerControls, "output_config")) {
-    const outputConfig = providerControls.output_config;
-    if (outputConfig !== undefined) {
-      controls.output_config = outputConfig;
-    }
-  }
-  return {
-    provider: summarizeProvider(provider),
-    providerOptions: providerOptions ?? null,
-    requestControls: Object.keys(controls).length > 0 ? controls : null,
-    finalBodyControls: null
-  };
-}
-
-function summarizeProvider(provider: LlmMoveChooserOptions["provider"]): ProviderRequestSummary["provider"] {
-  if (!provider) {
-    return null;
-  }
-  return {
-    key: provider.key,
-    type: provider.type,
-    baseHost: provider.baseURL ? hostOf(provider.baseURL) : null
-  };
-}
-
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).host;
-  } catch {
-    return null;
-  }
-}
-
-function requestBodyOf(request: unknown): unknown {
-  return isPlainRecord(request) && Object.hasOwn(request, "body") ? request.body : undefined;
-}
-
-function withFinalBodyControls(summary: ProviderRequestSummary, body: unknown): ProviderRequestSummary {
-  const parsed = parseRequestBody(body);
-  const controls: Record<string, JSONValue> = {};
-  if (parsed && Object.hasOwn(parsed, "thinking") && isJsonValue(parsed.thinking)) {
-    controls.thinking = parsed.thinking;
-  }
-  if (parsed && Object.hasOwn(parsed, "reasoning_effort") && isJsonValue(parsed.reasoning_effort)) {
-    controls.reasoning_effort = parsed.reasoning_effort;
-  }
-  if (parsed && Object.hasOwn(parsed, "output_config") && isJsonValue(parsed.output_config)) {
-    controls.output_config = parsed.output_config;
-  }
-  return {
-    ...summary,
-    finalBodyControls: Object.keys(controls).length > 0 ? controls : null
-  };
-}
-
-function parseRequestBody(body: unknown): Record<string, unknown> | null {
-  if (typeof body === "string") {
-    try {
-      const parsed = JSON.parse(body) as unknown;
-      return isPlainRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  return isPlainRecord(body) ? body : null;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isJsonValue(value: unknown): value is JSONValue {
-  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    return value.every(isJsonValue);
-  }
-  if (isPlainRecord(value)) {
-    return Object.values(value).every(isJsonValue);
-  }
-  return false;
 }
 
 function buildSystem(role: "landlord" | "farmer"): string {
@@ -545,6 +175,15 @@ function formatOpponentInfo(opponent: OpponentInfo): string {
   return `${opponent.label}剩 ${opponent.handCount} 张${revealed}`;
 }
 
-function formatRecentAction(action: RecentActionInfo): string {
-  return action.action === "pass" ? `${action.by}: 不要` : `${action.by}: ${action.description ?? "出牌"}`;
+/** 渲染一条公开动作(出牌/过牌/叫抢),供出牌与叫抢两条 prompt 复用。 */
+export function formatRecentAction(action: RecentActionInfo): string {
+  switch (action.action) {
+    case "pass":
+      return `${action.by}: 不要`;
+    case "bid":
+    case "rob":
+      return `${action.by}: ${action.description ?? ""}`;
+    default:
+      return `${action.by}: ${action.description ?? "出牌"}`;
+  }
 }

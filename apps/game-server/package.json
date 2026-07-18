@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "selfplay": "tsx src/experiments/selfPlay.ts",
+    "arena": "tsx src/experiments/arena.ts",
     "lint": "eslint src test --ext .ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
