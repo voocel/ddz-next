@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { GameTable } from "@ddz/domain";
-import type { RoomLiveStateEnvelope } from "@ddz/protocol";
+import type { GameTable } from "@ddz/domain";
 import { DdzRoom } from "../../src/rooms/DdzRoom";
+import { playingTable } from "./tableFixtures";
 
 interface FakeClient {
   readonly sessionId: string;
@@ -34,6 +34,7 @@ function createFixture(): Fixture {
   internals.persistence = {
     recordMutation: vi.fn(async () => {})
   };
+  internals.botController = { pendingFailureEvent: () => null };
   internals.failed = false;
 
   return {
@@ -106,7 +107,8 @@ describe("DdzRoom spectator", () => {
 
   it("竞技场房的非观战 join 提示只能观战", async () => {
     const fixture = createFixture();
-    fixture.internals.arena = true;
+    // 竞技场语义以 arenaDirector 非空为准;满座文案分支只判空,truthy 桩即可
+    fixture.internals.arenaDirector = {};
     const client: FakeClient = { sessionId: "x-2", send: vi.fn(), auth: { sub: "human-9" } };
 
     await expect(fixture.invoke<Promise<void>>("handleJoin", client, { roomCode: "100031" })).rejects.toThrow(
@@ -126,31 +128,3 @@ describe("DdzRoom spectator", () => {
   });
 });
 
-function playingTable(): GameTable {
-  const table = new GameTable();
-  table.restore({
-    phase: "playing",
-    players: [
-      { id: "human-1", kind: "human", seat: 0, ready: false, connected: true, hand: ["3-diamonds"], score: 0 },
-      { id: "bot:100031:1", kind: "bot", seat: 1, ready: false, connected: true, hand: ["4-diamonds"], score: 0 },
-      { id: "bot:100031:2", kind: "bot", seat: 2, ready: false, connected: true, hand: ["5-diamonds"], score: 0 }
-    ],
-    currentPlayerId: "bot:100031:1",
-    landlordId: "human-1",
-    bidCandidateId: null,
-    firstBidderId: null,
-    landlordCards: ["6-diamonds", "7-diamonds", "8-diamonds"],
-    bottomCards: [],
-    lastPlay: { playerId: "human-1", cards: ["3-diamonds"] },
-    settlement: null,
-    passCount: 0,
-    bidAttempts: 0,
-    robQueue: [],
-    robIndex: 0,
-    robCount: 0,
-    bombCount: 0,
-    playCounts: { "human-1": 1 },
-    playHistory: [{ type: "play", playerId: "human-1", cards: ["3-diamonds"] }]
-  } satisfies RoomLiveStateEnvelope["table"]);
-  return table;
-}

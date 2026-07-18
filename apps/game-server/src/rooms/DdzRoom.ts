@@ -3,21 +3,18 @@ import { Room } from "@colyseus/core";
 import { verifyAccessToken, type AccessTokenClaims, type TokenConfig } from "@ddz/auth";
 import {
   commentaryConfigFromEnv,
-  decisionConfigFromEnv,
-  isAllowedModel,
   LlmArenaCommentator,
   LlmCommentator,
   NullCommentator,
   parseBotProviderRegistry,
   resolveModel,
-  type ArenaCommentaryContext,
   type BotProviderRegistry,
   type Commentator,
   type CommentaryContext,
   type ModelRef
 } from "@ddz/bot-ai";
-import { GameTable, identifyCombination } from "@ddz/domain";
-import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE, ROOM_CODE_REGEX } from "@ddz/protocol";
+import { GameTable } from "@ddz/domain";
+import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
 import type { ClientCommand, GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
@@ -34,20 +31,43 @@ import {
   type BotBrainHooks,
   type ResolvedDecision
 } from "./botDecision.js";
-import { arenaCommentaryModelFromEnv, ArenaCommentaryDirector, type ArenaCommentaryTag } from "./arenaCommentary.js";
-import {
-  LlmBotBrain,
-  LlmDecisionError,
-  takeThinkingChunk,
-  type LlmDecisionChoice,
-  type LlmDecisionTrace
-} from "./llmBotBrain.js";
+import { arenaCommentaryModelFromEnv, ArenaCommentaryDirector } from "./arenaCommentary.js";
+import { ArenaDirector } from "./arenaDirector.js";
+import { LlmBotBrain, type LlmDecisionTrace } from "./llmBotBrain.js";
+import { BotStreamBroadcaster } from "./botStreamBroadcaster.js";
+import { BotTurnController } from "./botTurnController.js";
 import { createLlmTraceSink, type LlmTraceSink } from "./llmTraceSink.js";
 import { combinationLabel, describeCombination } from "./combinationLabels.js";
 import { RoomPersistence, RoomPersistenceError } from "./roomPersistence.js";
 import { SerialTaskQueue } from "./serialTaskQueue.js";
 import { RoomTurnScheduler } from "./roomTurnScheduler.js";
 import { decideTimeoutAction } from "./timeoutAction.js";
+import { releaseAiBattleSlot, reserveAiBattleSlot } from "./aiBattleSlots.js";
+import {
+  arenaBotNicknames,
+  DEFAULT_LLM_BOT_TURN_TIMER_MS,
+  DEFAULT_TURN_TIMEOUT_MS,
+  parseRoomCode,
+  QUICK_START_BOT_COUNT,
+  readArena,
+  readArenaIntermissionMs,
+  readArenaLineup,
+  readArenaMaxRounds,
+  readArenaMaxSpectators,
+  readBotCount,
+  readBotRetryMaxAttempts,
+  readEnvBotReasoningEffort,
+  readFixedBotDelayMs,
+  readLlmBotTurnTimerMs,
+  readMatchBotCount,
+  readQuickStart,
+  readRoomClaimTtlMs,
+  readRoomCode,
+  readSpectate,
+  readTurnTimeoutMs,
+  roomClaimHeartbeatIntervalMs,
+  usesLlmBotDecision
+} from "./roomOptions.js";
 
 interface JoinOptions {
   accessToken?: string;
@@ -81,33 +101,8 @@ interface RoomCreateOptions extends JoinOptions {
   botRegistry?: BotProviderRegistry;
 }
 
-const DEFAULT_TURN_TIMEOUT_MS = 20_000;
-// 大模型机器人展示倒计时默认值:比真人(20s)长,留出推理时间;到点不兜底,可停在 0 继续等模型。
-const DEFAULT_LLM_BOT_TURN_TIMER_MS = 30_000;
-const DEFAULT_ROOM_CLAIM_TTL_MS = 60_000;
-const QUICK_START_BOT_COUNT = 2;
-// 大模型「AI 输出流」节流阈值:增量累积到约一短句(16 字)才广播一条,避免逐 token 的消息风暴。
-const THINKING_MIN_CHARS = 16;
-// LLM 决策失败自动重试:指数退避基数(2s→4s→8s...),上限由 BOT_RETRY_MAX_ATTEMPTS 收口。
-const BOT_RETRY_BACKOFF_BASE_MS = 2000;
-// 连续流局达到该数即 failRoom 止损:挂掉的 API 不值得无限烧钱重试。
-const ARENA_MAX_CONSECUTIVE_ABORTS = 2;
 // 随动作 payload 落库的 reasoning 摘要上限,防止超长思考把 action 行撑爆。
 const AI_TRACE_REASONING_MAX_CHARS = 4096;
-let activeAiBattleRooms = 0;
-type BotStreamChannel = "reasoning" | "text";
-type BotStreamBuffers = Partial<Record<BotStreamChannel, string>> & {
-  readonly choice?: LlmDecisionChoice;
-  readonly emitted?: boolean;
-};
-interface PendingBotDecisionFailure {
-  readonly playerId: PlayerId;
-  readonly message: string;
-  /** 本回合第几次失败(1 基),重连补发时保持一致。 */
-  readonly attempt: number;
-  /** true 表示已安排自动重试。 */
-  readonly willRetry: boolean;
-}
 type RevealedHands = NonNullable<Extract<GameEvent, { type: "round_settled" }>["revealedHands"]>;
 
 /**
@@ -139,19 +134,16 @@ export class DdzRoom extends Room {
   private aiBattleSlotReserved = false;
   // 建房时的决策配置(超时/思考强度),竞技场席位大脑与崩溃恢复重建大脑复用。
   private decisionConfig: ResolvedDecision | null = null;
-  // 竞技场(全 AI 对战)状态:arena 房无真人席位、局间自动推进、打满 maxRounds 收官关房。
-  private arena = false;
-  private arenaRoundsPlayed = 0;
-  private arenaConsecutiveAborts = 0;
+  // 竞技场(全 AI 对战)生命周期导演:非 null 即竞技场语义的唯一真相;非竞技场房保持 null。
+  private arenaDirector: ArenaDirector | null = null;
+  // 两个 env 保持在任意房型构造时即校验(与旧字段同时机),仅竞技场房实际消费。
   private readonly arenaMaxRounds = readArenaMaxRounds();
   private readonly arenaIntermissionMs = readArenaIntermissionMs();
-  private arenaCommentaryDirector: ArenaCommentaryDirector | null = null;
   // 观众会话(不占座、无手牌视角);任何房间都可观战,容量独立于牌桌座位。
   private readonly spectatorSessions = new Set<string>();
   private readonly spectatorCapacity = readArenaMaxSpectators();
-  // LLM 决策失败自动重试:每 bot 的本回合失败次数,成功/手动重试/流局时清零。
+  // LLM 决策失败自动重试上限;env 在任意房型构造时即校验,状态机本体在 BotTurnController。
   private readonly botRetryMaxAttempts = readBotRetryMaxAttempts();
-  private readonly botRetryAttempts = new Map<PlayerId, number>();
   // 成功决策的 trace 摘要(reasoning/延迟/用量),由随后的动作 payload 取走落库(复盘读侧在 P5)。
   private readonly pendingActionTraces = new Map<PlayerId, Record<string, unknown>>();
   // 机器人人格解说:默认关闭(BOT_CHAT_ENABLED=true 才启用);纯装饰,不参与决策、不持有串行锁。
@@ -164,10 +156,13 @@ export class DdzRoom extends Room {
   private turnScheduler!: RoomTurnScheduler;
   // LLM 决策的逐手全量留证(JSONL,常开);onCreate 前为 null。
   private traceSink: LlmTraceSink | null = null;
-  // 大模型「AI 输出流」每个 bot 的待广播片段缓冲(按字数节流);有键即代表本手产生过输出(决定收尾是否发 done)。
-  private readonly streamBuffers = new Map<PlayerId, BotStreamBuffers>();
-  private pendingBotDecisionFailure: PendingBotDecisionFailure | null = null;
-  private readonly botDecisionInFlight = new Set<PlayerId>();
+  // 大模型「AI 输出流」的节流缓冲与广播收尾;闭包动态取 broadcast/failed,bare 实例(测试)亦可用。
+  private readonly aiStream = new BotStreamBroadcaster({
+    broadcast: (event) => this.broadcast("event", event),
+    isFailed: () => this.failed
+  });
+  // bot 回合执行与 LLM 失败/退避重试状态机(锁外决策→锁内应用的并发契约属主)。
+  private botController!: BotTurnController;
   private roomCode!: string;
   // null = 走 botTiming 的拟真区间;非空 = 固定延迟(测试/CI 逃生阀)
   private fixedBotDelayMs: number | null = null;
@@ -228,10 +223,10 @@ export class DdzRoom extends Room {
     // 注册表持有各 provider 的密钥(仅服务端);未注入时按 env 合成默认 anthropic 注册表。
     const registry = options.botRegistry ?? parseBotProviderRegistry(null);
     this.botRegistry = registry;
-    this.arena = readArena(options.arena);
+    const arena = readArena(options.arena);
     // 竞技场阵容即赛事配置:建房时逐项校验(非法即拒,不回退默认),并禁用牌桌内热更命令。
-    const lineup = this.arena ? readArenaLineup(options.lineup, registry) : null;
-    this.botSettingsUpdatesEnabled = !this.arena && usesLlmBotDecision(options);
+    const lineup = arena ? readArenaLineup(options.lineup, registry) : null;
+    this.botSettingsUpdatesEnabled = !arena && usesLlmBotDecision(options);
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
     console.info(`[DdzRoom ${this.roomCode}] LLM decision trace: ${this.traceSink.file}`);
@@ -242,14 +237,14 @@ export class DdzRoom extends Room {
         this.traceSink?.record(trace);
         this.storePendingActionTrace(trace);
       },
-      onStreamStart: (playerId) => this.startAiStream(playerId),
-      onStreamDelta: (playerId, delta) => this.appendAiStream(playerId, delta.channel, delta.text),
-      onChoice: (playerId, choice) => this.setAiStreamChoice(playerId, choice)
+      onStreamStart: (playerId) => this.aiStream.start(playerId),
+      onStreamDelta: (playerId, delta) => this.aiStream.append(playerId, delta.channel, delta.text),
+      onChoice: (playerId, choice) => this.aiStream.setChoice(playerId, choice)
     };
     this.botBrainHooks = hooks;
     // 竞技场以 reasoning 直播为核心观赏点:客户端与环境变量都未显式指定思考档位时,默认开中档
     const decisionOptions =
-      this.arena && options.botReasoningEffort === undefined && process.env.BOT_REASONING_EFFORT === undefined
+      arena && options.botReasoningEffort === undefined && readEnvBotReasoningEffort() === undefined
         ? { ...options, botReasoningEffort: "medium" }
         : options;
     const decision = resolveDecisionConfig(decisionOptions, registry);
@@ -263,21 +258,10 @@ export class DdzRoom extends Room {
         maxChars: this.commentary.maxChars
       });
     }
-    if (this.arena) {
+    if (arena) {
       // 竞技场房不因空场销毁(无人观战也继续打),生命周期由 maxRounds/failRoom 显式收口。
       this.autoDispose = false;
-      const commentaryModel = arenaCommentaryModelFromEnv(registry);
-      this.arenaCommentaryDirector = new ArenaCommentaryDirector({
-        // 解说模型缺 key/显式关闭时传 null,LlmArenaCommentator 静默沉默(纯装饰,不影响对局)。
-        commentator: new LlmArenaCommentator({
-          model: commentaryModel ? resolveModel(commentaryModel, registry) : null
-        }),
-        broadcast: (text, tag) => {
-          if (!this.failed) {
-            this.broadcast("event", { type: "commentary", text, tag } satisfies GameEvent);
-          }
-        }
-      });
+      this.ensureArenaDirector();
     }
     const claimTtlMs = readRoomClaimTtlMs();
     this.persistence = new RoomPersistence(
@@ -298,7 +282,7 @@ export class DdzRoom extends Room {
     }
     // 观战不建房:spectate 触发的 joinOrCreate 只有在存在可恢复牌局(旧进程崩溃)时才允许拉起房间;
     // arena 建房例外——创建者建房后自身就是首位观众。
-    if (!state && readSpectate(options.spectate) && !this.arena) {
+    if (!state && readSpectate(options.spectate) && !arena) {
       throw new Error(`房间 ${this.roomCode} 不在直播中。`);
     }
 
@@ -308,7 +292,7 @@ export class DdzRoom extends Room {
       if (room.status !== "open") {
         throw new Error(`Room ${this.roomCode} is ${room.status} with no recoverable state.`);
       }
-      if (this.arena && lineup) {
+      if (arena && lineup) {
         // 全 AI 房:3 个席位按阵容各挂独立大脑;不在建房时 ready,开局走 readyBots 的完整 round_started 链路。
         this.addBots(3, { autoReady: false, lineup });
         this.maxClients = this.spectatorCapacity;
@@ -320,6 +304,35 @@ export class DdzRoom extends Room {
         this.addBots(botCount);
       }
     }
+
+    // 竞技场耗尽重试即流局(入队 + 失败兜底);真人房传 null = 等待手动重试
+    const director = this.arenaDirector;
+    this.botController = new BotTurnController({
+      roomCode: this.roomCode,
+      table: this.table,
+      brainFor: (playerId) => this.botBrains.get(playerId),
+      retryMaxAttempts: this.botRetryMaxAttempts,
+      clock: this.clock,
+      enqueue: (task) => this.tasks.enqueue(task),
+      isFailed: () => this.failed,
+      broadcast: (event) => this.broadcast("event", event),
+      toSnapshotDto: (snapshot) => this.snapshotDto(snapshot),
+      scheduleTurnTimer: (snapshot) => this.turnScheduler.scheduleTurnTimer(snapshot),
+      onApplyAction: (playerId, action) => this.applyBotAction(playerId, action),
+      onRetriesExhausted: director
+        ? (playerId, message) => {
+            void this.tasks.enqueue(async () => {
+              try {
+                await director.abortRound(playerId, message);
+              } catch (abortError) {
+                await this.failRoom(abortError, "Failed to abort arena round.");
+              }
+            });
+          }
+        : null,
+      onFailure: (error, reason) => this.failRoom(error, reason),
+      onDecisionSettled: (playerId) => this.aiStream.end(playerId)
+    });
 
     this.turnScheduler = new RoomTurnScheduler({
       botIds: this.botIds,
@@ -335,7 +348,7 @@ export class DdzRoom extends Room {
           await task();
         });
       },
-      onBotTurn: (playerId, isValid) => this.handleBotTurn(playerId, isValid),
+      onBotTurn: (playerId, isValid) => this.botController.handleTurn(playerId, isValid),
       onFailure: (error, reason) => this.failRoom(error, reason),
       onTurnTimeout: (playerId) => this.handleTurnTimeout(playerId),
       onTurnTimer: (event) => {
@@ -368,7 +381,7 @@ export class DdzRoom extends Room {
     if (state) {
       // scheduler 就绪后才能恢复牌局推进
       this.resumeRestoredGame();
-    } else if (this.arena) {
+    } else if (arena) {
       // 全 AI 房无真人可点准备:仿恢复路径入队 readyBots,走完整的 round_started 持久化+调度链路。
       void this.tasks.enqueue(() => this.readyBots());
     }
@@ -446,8 +459,62 @@ export class DdzRoom extends Room {
       nicknames: Object.fromEntries(this.nicknames),
       // 模型身份随信封落库:恢复时按此重建各席位大脑,防止崩溃后被恢复方 options 静默换脑(规则 bot 顶替 LLM)。
       ...(this.botIdentities.size > 0 ? { botModels: this.botPlayersPayload() } : {}),
-      ...(this.arena ? { arena: true } : {})
+      ...(this.arenaDirector ? { arena: true } : {})
     };
+  }
+
+  /**
+   * 竞技场语义的唯一开关:建房分支与恢复信封共用,幂等。
+   * 局数/连败计数不落库,恢复即归零(全新局数额度与流局容忍度)——既有行为,见 ArenaDirector 类注释。
+   */
+  private ensureArenaDirector(): void {
+    if (this.arenaDirector) {
+      return;
+    }
+    const registry = this.botRegistry;
+    if (!registry) {
+      throw new Error("Bot registry is not initialized.");
+    }
+    const commentaryModel = arenaCommentaryModelFromEnv(registry);
+    this.arenaDirector = new ArenaDirector({
+      roomCode: this.roomCode,
+      maxRounds: this.arenaMaxRounds,
+      intermissionMs: this.arenaIntermissionMs,
+      commentary: new ArenaCommentaryDirector({
+        // 解说模型缺 key/显式关闭时传 null,LlmArenaCommentator 静默沉默(纯装饰,不影响对局)。
+        commentator: new LlmArenaCommentator({
+          model: commentaryModel ? resolveModel(commentaryModel, registry) : null
+        }),
+        broadcast: (text, tag) => {
+          if (!this.failed) {
+            this.broadcast("event", { type: "commentary", text, tag } satisfies GameEvent);
+          }
+        }
+      }),
+      table: this.table,
+      clock: this.clock,
+      enqueue: (task) => this.tasks.enqueue(task),
+      isFailed: () => this.failed,
+      nickname: (playerId) => this.nicknames.get(playerId),
+      botModel: (playerId) => this.botIdentities.get(playerId)?.model,
+      botPlayersPayload: () => this.botPlayersPayload(),
+      recordMutation: (input) => this.persistence.recordMutation(input),
+      broadcast: (event) => this.broadcast("event", event),
+      toSnapshotDto: (snapshot) => this.snapshotDto(snapshot),
+      cancelTimers: () => this.turnScheduler.cancelAll(),
+      clearBotFailure: (playerId) => this.botController.clearRetryState(playerId),
+      readyBots: () => this.readyBots(),
+      closeRoom: async () => {
+        await this.persistence.closeRoom();
+        this.roomClaimed = false;
+      },
+      disconnect: () => {
+        void this.disconnect().catch((error) => {
+          console.error(`[DdzRoom ${this.roomCode}] Failed to disconnect arena room.`, error);
+        });
+      },
+      onFailure: (error, reason) => this.failRoom(error, reason)
+    });
   }
 
   /** 崩溃恢复：还原牌桌、bot 名单(含各席位模型大脑)、昵称表与座位容量；真人连接需等待重连 */
@@ -455,7 +522,7 @@ export class DdzRoom extends Room {
     this.table.restore(state.table);
     if (state.arena) {
       // 恢复方可能只是普通观众(join options 无 arena 标记),以信封为准还原竞技场语义。
-      this.arena = true;
+      this.ensureArenaDirector();
       this.autoDispose = false;
       this.botSettingsUpdatesEnabled = false;
     }
@@ -497,10 +564,7 @@ export class DdzRoom extends Room {
         return;
       case "settled":
         // 竞技场恢复到结算态:按局间节奏自动推进;真人房等待真人点击准备。
-        if (this.arena) {
-          this.scheduleArenaRoundTransition();
-          return;
-        }
+        this.arenaDirector?.scheduleRoundTransition();
         return;
       case "waiting":
       case "ready":
@@ -565,7 +629,7 @@ export class DdzRoom extends Room {
     const reconnecting = this.table.hasPlayer(playerId);
     // 座位容量与观战容量解耦后,满座必须显式拒绝(maxClients 不再挡人),并提示可观战。
     if (!reconnecting && this.table.snapshot().players.length >= 3) {
-      throw new Error(this.arena ? "竞技场房间是全 AI 对战,只能以观战模式加入。" : "牌桌已满员,可以以观战模式加入。");
+      throw new Error(this.arenaDirector ? "竞技场房间是全 AI 对战,只能以观战模式加入。" : "牌桌已满员,可以以观战模式加入。");
     }
     const seat = this.table.addPlayer(playerId);
     this.table.setConnected(playerId, true);
@@ -790,46 +854,7 @@ export class DdzRoom extends Room {
     if (!player || player.kind !== "human") {
       throw new Error("只有房间内真人玩家可以重新请求 AI 出牌。");
     }
-    const pending = this.pendingBotDecisionFailure;
-    if (!pending) {
-      throw new Error("当前没有可重试的 AI 出牌错误。");
-    }
-    const snapshot = this.table.snapshot();
-    if (snapshot.currentPlayerId !== pending.playerId) {
-      this.pendingBotDecisionFailure = null;
-      throw new Error("AI 回合已经变化，不能重试上一手错误。");
-    }
-    if (this.botDecisionInFlight.has(pending.playerId)) {
-      throw new Error("AI 正在重新请求中。");
-    }
-
-    // 手动重试重置自动重试计数:用户显式介入后重新给满退避额度
-    this.botRetryAttempts.delete(pending.playerId);
-    this.restartBotTurn(pending.playerId);
-  }
-
-  /** 清除待重试标记并重新发起该 bot 的决策;手动重试与自动退避重试共用。 */
-  private restartBotTurn(playerId: PlayerId): void {
-    this.pendingBotDecisionFailure = null;
-    this.turnScheduler.scheduleTurnTimer(this.table.snapshot());
-    void this.handleBotTurn(playerId, () => this.table.snapshot().currentPlayerId === playerId).catch((error) => {
-      void this.failRoom(error, "Bot retry failed.");
-    });
-  }
-
-  /** 退避定时器到点的自动重试:房间失败/局面已变化/手动已抢先重试时直接放弃。 */
-  private autoRetryBotTurn(playerId: PlayerId): void {
-    if (this.failed) {
-      return;
-    }
-    const pending = this.pendingBotDecisionFailure;
-    if (!pending || pending.playerId !== playerId) {
-      return;
-    }
-    if (this.table.snapshot().currentPlayerId !== playerId || this.botDecisionInFlight.has(playerId)) {
-      return;
-    }
-    this.restartBotTurn(playerId);
+    this.botController.retryManually();
   }
 
   private handleBotSettingsUpdate(
@@ -904,12 +929,7 @@ export class DdzRoom extends Room {
       this.broadcastPersonalSnapshot("round_started", result.snapshot);
       this.turnScheduler.scheduleTurnTimer(result.snapshot);
       this.turnScheduler.scheduleBotTurn(result.snapshot);
-      this.fireArenaCommentary(
-        this.arenaRoundsPlayed === 0 ? "opening" : "round_start",
-        this.arenaRoundsPlayed === 0
-          ? "比赛开始!三位 AI 选手入座,第 1 局发牌完毕,进入叫地主阶段"
-          : `第 ${this.arenaRoundsPlayed + 1} 局发牌完毕,进入叫地主阶段`
-      );
+      this.arenaDirector?.announceRoundStart();
       return;
     }
 
@@ -989,7 +1009,7 @@ export class DdzRoom extends Room {
     this.turnScheduler.scheduleBotTurn(result.snapshot);
     if (result.decided && result.landlordId) {
       const nickname = this.nicknames.get(result.landlordId) ?? result.landlordId;
-      this.fireArenaCommentary("landlord", `${nickname} 成为地主,拿走 3 张底牌,当前 ${result.snapshot.multiplier} 倍`);
+      this.arenaDirector?.fireCommentary("landlord", `${nickname} 成为地主,拿走 3 张底牌,当前 ${result.snapshot.multiplier} 倍`);
     }
   }
 
@@ -1029,14 +1049,13 @@ export class DdzRoom extends Room {
         revealedHands: this.revealedHandsDto(snapshot)
       }));
       this.turnScheduler.cancelAll();
-      // 正常结算重置连续流局计数;竞技场按局间节奏自动开下一局
-      this.arenaConsecutiveAborts = 0;
       const winnerName = this.nicknames.get(settlement.winnerId) ?? settlement.winnerId;
-      this.fireArenaCommentary(
+      this.arenaDirector?.fireCommentary(
         "settlement",
         `本局结束:${winnerName} 率先出完,${settlement.landlordWon ? "地主胜" : "农民胜"}${settlement.spring ? "(春天!)" : ""},${settlement.multiplier} 倍结算`
       );
-      this.scheduleArenaRoundTransition();
+      // 正常结算重置连续流局计数;竞技场按局间节奏自动开下一局
+      this.arenaDirector?.onRoundSettled();
       return;
     }
 
@@ -1065,14 +1084,14 @@ export class DdzRoom extends Room {
 
     const playerName = this.nicknames.get(play.playerId) ?? play.playerId;
     if (play.combination.kind === "bomb" || play.combination.kind === "rocket") {
-      this.fireArenaCommentary(
+      this.arenaDirector?.fireCommentary(
         "bomb",
         `${playerName} 打出${combinationLabel(play.combination.kind)},倍数翻到 ${snapshot.multiplier} 倍`
       );
     } else {
       const remaining = snapshot.players.find((player) => player.id === play.playerId)?.handCount;
       if (remaining !== undefined && remaining <= 2) {
-        this.fireArenaCommentary("endgame", `${playerName} 打出${describeCombination(play.combination)},只剩 ${remaining} 张牌`);
+        this.arenaDirector?.fireCommentary("endgame", `${playerName} 打出${describeCombination(play.combination)},只剩 ${remaining} 张牌`);
       }
     }
   }
@@ -1162,250 +1181,11 @@ export class DdzRoom extends Room {
     return this.botBrain instanceof LlmBotBrain || [...this.botBrains.values()].some((brain) => brain instanceof LlmBotBrain);
   }
 
-  private async handleBotTurn(playerId: PlayerId, isValid: () => boolean): Promise<void> {
-    // 锁外:只读快照决策(LLM 等慢速实现不持有串行锁,避免卡住整个房间)。
-    const snapshot = this.table.snapshot();
-    if (!isValid() || snapshot.currentPlayerId !== playerId) {
-      return;
-    }
-    if (this.pendingBotDecisionFailure?.playerId === playerId || this.botDecisionInFlight.has(playerId)) {
-      return;
-    }
-
-    const brain = this.botBrains.get(playerId);
-    if (!brain) {
-      throw new Error(`No bot brain registered for ${playerId}.`);
-    }
-
-    let action: BotAction;
-    this.botDecisionInFlight.add(playerId);
-    try {
-      action = await brain.decide(
-        snapshot,
-        playerId,
-        this.table.getHand(playerId),
-        this.table.playedCards(),
-        this.table.history()
-      );
-    } catch (error) {
-      if (error instanceof LlmDecisionError) {
-        this.handleBotDecisionFailure(playerId, error);
-        return;
-      }
-      throw error;
-    } finally {
-      this.botDecisionInFlight.delete(playerId);
-      // 无论决策成功/抛错(失败将关房),都收尾本手 AI 输出流:flush 剩余片段 + done,清缓冲。
-      this.endAiStream(playerId);
-    }
-
-    // 锁内:应用权威动作 + 落库 + 广播。await 期间局面可能已推进,入队后再校验一次。
-    await this.tasks.enqueue(async () => {
-      if (this.failed || !isValid() || this.table.snapshot().currentPlayerId !== playerId) {
-        return;
-      }
-      await this.applyBotAction(playerId, action);
-    });
-  }
-
-  private handleBotDecisionFailure(playerId: PlayerId, error: LlmDecisionError): void {
-    if (this.failed) {
-      return;
-    }
-    const snapshot = this.table.snapshot();
-    if (snapshot.currentPlayerId !== playerId) {
-      return;
-    }
-
-    const attempt = (this.botRetryAttempts.get(playerId) ?? 0) + 1;
-    this.botRetryAttempts.set(playerId, attempt);
-    const willRetry = attempt < this.botRetryMaxAttempts;
-    const message = error.message;
-    this.pendingBotDecisionFailure = { playerId, message, attempt, willRetry };
-    const nextStep = willRetry ? "auto retry scheduled" : this.arena ? "aborting round" : "waiting for manual retry";
-    console.error(
-      `[DdzRoom ${this.roomCode}] Bot decision failed (attempt ${attempt}/${this.botRetryMaxAttempts}); ${nextStep}.`,
-      error
-    );
-    this.broadcast("event", {
-      type: "bot_decision_failed",
-      playerId,
-      message,
-      retryable: true,
-      attempt,
-      willRetry,
-      snapshot: this.snapshotDto(snapshot)
-    } satisfies GameEvent);
-
-    if (willRetry) {
-      // 指数退避自动重跑(2s→4s→...);全房型统一,真人房仍可手动抢先重试
-      const backoffMs = BOT_RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 1);
-      this.clock.setTimeout(() => this.autoRetryBotTurn(playerId), backoffMs);
-      return;
-    }
-    if (this.arena) {
-      // 竞技场重试耗尽:流局(房内没有真人可手动重试;不伪造结算,技术负记到失败模型本人)
-      void this.tasks.enqueue(async () => {
-        try {
-          await this.abortArenaRound(playerId, message);
-        } catch (abortError) {
-          await this.failRoom(abortError, "Failed to abort arena round.");
-        }
-      });
-    }
-    // 真人房:维持等待手动重试
-  }
-
   /** playerId → {provider, model},只含 LLM bot。 */
   private botPlayersPayload(): Record<string, { provider: string; model: string }> {
     return Object.fromEntries(
       [...this.botIdentities].map(([playerId, ref]) => [playerId, { provider: ref.provider, model: ref.model }])
     );
-  }
-
-  /**
-   * 竞技场流局(串行队列内执行):LLM 决策耗尽重试后放弃本局——不伪造结算(保护 domain 零和不变量),
-   * Round 以 round_aborted 收尾,技术负记到失败模型本人;连续流局达到上限即 failRoom 止损。
-   */
-  private async abortArenaRound(failedPlayerId: PlayerId, reason: string): Promise<void> {
-    if (this.failed) {
-      return;
-    }
-    const phase = this.table.snapshot().phase;
-    if (phase !== "bidding" && phase !== "robbing" && phase !== "playing") {
-      // 迟到的流局任务(局面已被其他路径推进),放弃
-      return;
-    }
-
-    const snapshot = this.table.abortRound();
-    this.pendingBotDecisionFailure = null;
-    this.botRetryAttempts.delete(failedPlayerId);
-    this.turnScheduler.cancelAll();
-    await this.persistence.recordMutation({
-      actions: [
-        {
-          type: "round_aborted",
-          playerId: failedPlayerId,
-          payload: {
-            reason,
-            failedPlayerId,
-            players: snapshot.players.map((player) => ({ playerId: player.id, seat: player.seat })),
-            ...(this.botIdentities.size > 0 ? { botPlayers: this.botPlayersPayload() } : {})
-          }
-        }
-      ],
-      snapshot
-    });
-    this.broadcast("event", {
-      type: "round_aborted",
-      reason,
-      failedPlayerId,
-      snapshot: this.snapshotDto(snapshot)
-    } satisfies GameEvent);
-
-    this.arenaConsecutiveAborts += 1;
-    if (this.arenaConsecutiveAborts >= ARENA_MAX_CONSECUTIVE_ABORTS) {
-      await this.failRoom(new Error(`连续 ${this.arenaConsecutiveAborts} 局流局: ${reason}`), "Arena aborted repeatedly.");
-      return;
-    }
-    this.scheduleArenaRoundTransition();
-  }
-
-  /** 结算/流局后的竞技场推进:局间休息后自动开下一局;打满 ARENA_MAX_ROUNDS 后收官关房。非竞技场为空操作。 */
-  private scheduleArenaRoundTransition(): void {
-    if (!this.arena || this.failed) {
-      return;
-    }
-    this.arenaRoundsPlayed += 1;
-    if (this.arenaRoundsPlayed >= this.arenaMaxRounds) {
-      this.clock.setTimeout(() => {
-        void this.tasks.enqueue(() => this.closeArenaRoom());
-      }, this.arenaIntermissionMs);
-      return;
-    }
-    this.clock.setTimeout(() => {
-      void this.tasks.enqueue(() => this.startNextArenaRound());
-    }, this.arenaIntermissionMs);
-  }
-
-  private async startNextArenaRound(): Promise<void> {
-    if (this.failed) {
-      return;
-    }
-    const phase = this.table.snapshot().phase;
-    if (phase === "settled") {
-      this.table.resetForNextRound();
-    } else if (phase !== "ready" && phase !== "waiting") {
-      // 理论不可达:牌局已被其他路径推进,不强行重置
-      return;
-    }
-    await this.readyBots();
-  }
-
-  /** 打满场次后的收官:优雅关房(closed 落库→断开全部连接),与 failRoom 的故障关房区分。 */
-  private async closeArenaRoom(): Promise<void> {
-    if (this.failed) {
-      return;
-    }
-    this.turnScheduler.cancelAll();
-    try {
-      await this.persistence.closeRoom();
-      this.roomClaimed = false;
-    } catch (error) {
-      console.error(`[DdzRoom ${this.roomCode}] Failed to close arena room.`, error);
-    }
-    // 与 failRoom 同理:不在串行队列内等待 disconnect(onLeave 同队列,等待会死锁)
-    void this.disconnect().catch((error) => {
-      console.error(`[DdzRoom ${this.roomCode}] Failed to disconnect arena room.`, error);
-    });
-  }
-
-  /** 触发一次竞技场解说;非竞技场/已失败时为空操作,节流与吞错由 director 收口。 */
-  private fireArenaCommentary(tag: ArenaCommentaryTag, event: string): void {
-    if (!this.arenaCommentaryDirector || this.failed) {
-      return;
-    }
-    this.arenaCommentaryDirector.notify(tag, this.arenaCommentaryContext(event));
-  }
-
-  /** 把当前公开局面映射成解说上下文(席位/身份/剩牌/累计分 + 最近动作)。 */
-  private arenaCommentaryContext(event: string): ArenaCommentaryContext {
-    const snapshot = this.table.snapshot();
-    return {
-      seats: snapshot.players.map((player) => ({
-        nickname: this.nicknames.get(player.id) ?? player.id,
-        model: this.botIdentities.get(player.id)?.model ?? "",
-        role:
-          snapshot.landlordId === null ? "undecided" : snapshot.landlordId === player.id ? "landlord" : "farmer",
-        handCount: player.handCount,
-        score: player.score
-      })),
-      event,
-      multiplier: snapshot.multiplier,
-      recentActions: this.recentActionTexts(5)
-    };
-  }
-
-  /** 最近几手的中文描述(带昵称),供解说 prompt 使用。 */
-  private recentActionTexts(limit: number): string[] {
-    return this.table
-      .history()
-      .slice(-limit)
-      .map((entry) => {
-        const name = this.nicknames.get(entry.playerId) ?? entry.playerId;
-        switch (entry.type) {
-          case "play": {
-            const combination = identifyCombination([...entry.cards]);
-            return `${name} 出了${combination ? describeCombination(combination) : `${entry.cards.length} 张牌`}`;
-          }
-          case "pass":
-            return `${name} 过牌`;
-          case "bid":
-            return `${name} ${entry.called ? "叫地主" : "不叫"}`;
-          case "rob":
-            return `${name} ${entry.robbed ? "抢地主" : "不抢"}`;
-        }
-      });
   }
 
   /** 暂存成功决策的 trace 摘要,随后由该 bot 动作的 payload 取走落库(P2.5 写侧;失败结局不落)。 */
@@ -1433,11 +1213,6 @@ export class DdzRoom extends Room {
 
   private async applyBotAction(playerId: PlayerId, action: BotAction): Promise<void> {
     try {
-      if (this.pendingBotDecisionFailure?.playerId === playerId) {
-        this.pendingBotDecisionFailure = null;
-      }
-      // 决策成功落地,本回合失败计数清零
-      this.botRetryAttempts.delete(playerId);
       switch (action.type) {
         case "bid_landlord":
           await this.afterBid(this.table.bidLandlord(playerId, action.called));
@@ -1460,90 +1235,6 @@ export class DdzRoom extends Room {
       throw new Error(error instanceof Error ? error.message : "Bot action failed.", {
         cause: error
       });
-    }
-  }
-
-  /**
-   * AI 输出流:累积该 bot 的 reasoning/text 增量,按字数节流广播 bot_ai_stream(done:false)。
-   * 锁外回调(决策在锁外流式产出);只要被调用过就在 streamBuffers 留键,作为「本手产生过输出」的标记。
-   */
-  private startAiStream(playerId: PlayerId): void {
-    if (this.failed) {
-      return;
-    }
-    this.streamBuffers.set(playerId, { text: "", emitted: false });
-    this.broadcast("event", {
-      type: "bot_ai_stream",
-      playerId,
-      channel: "text",
-      text: "",
-      done: false
-    } satisfies GameEvent);
-  }
-
-  private appendAiStream(playerId: PlayerId, channel: BotStreamChannel, delta: string): void {
-    if (this.failed) {
-      return;
-    }
-    const buffers = this.streamBuffers.get(playerId) ?? {};
-    const pending = (buffers[channel] ?? "") + delta;
-    const firstVisibleChunk = !buffers.emitted && pending.trim().length > 0;
-    const { chunk, rest } = firstVisibleChunk ? { chunk: pending, rest: "" } : takeThinkingChunk(pending, THINKING_MIN_CHARS);
-    this.streamBuffers.set(playerId, { ...buffers, [channel]: rest, emitted: buffers.emitted || chunk !== null });
-    if (chunk !== null) {
-      this.broadcast("event", {
-        type: "bot_ai_stream",
-        playerId,
-        channel,
-        text: chunk,
-        done: false
-      } satisfies GameEvent);
-    }
-  }
-
-  /** 记录本手 LLM 最终选择的候选动作;作为 AI 输出流的收尾元数据展示给前端。 */
-  private setAiStreamChoice(playerId: PlayerId, choice: LlmDecisionChoice): void {
-    if (this.failed) {
-      return;
-    }
-    const buffers = this.streamBuffers.get(playerId) ?? {};
-    this.streamBuffers.set(playerId, { ...buffers, choice });
-  }
-
-  /** 收尾本手 AI 输出流:把剩余片段/最终选择连同 done:true 一并广播,清缓冲。本手没产生过输出(无键)则什么都不发。 */
-  private endAiStream(playerId: PlayerId): void {
-    const buffers = this.streamBuffers.get(playerId);
-    if (!buffers) {
-      return;
-    }
-    this.streamBuffers.delete(playerId);
-    if (this.failed) {
-      return;
-    }
-    let sent = false;
-    for (const channel of ["reasoning", "text"] as const) {
-      if (!(channel in buffers)) {
-        continue;
-      }
-      this.broadcast("event", {
-        type: "bot_ai_stream",
-        playerId,
-        channel,
-        text: buffers[channel] ?? "",
-        done: true,
-        ...(buffers.choice ? { choice: buffers.choice } : {})
-      } satisfies GameEvent);
-      sent = true;
-    }
-    if (!sent && buffers.choice) {
-      this.broadcast("event", {
-        type: "bot_ai_stream",
-        playerId,
-        channel: "text",
-        text: "",
-        done: true,
-        choice: buffers.choice
-      } satisfies GameEvent);
     }
   }
 
@@ -1693,25 +1384,10 @@ export class DdzRoom extends Room {
   }
 
   private sendPendingBotDecisionFailure(client: Client): void {
-    const pending = this.pendingBotDecisionFailure;
-    if (!pending) {
-      return;
+    const event = this.botController.pendingFailureEvent();
+    if (event) {
+      client.send("event", event);
     }
-    const snapshot = this.table.snapshot();
-    if (snapshot.currentPlayerId !== pending.playerId) {
-      this.pendingBotDecisionFailure = null;
-      return;
-    }
-
-    client.send("event", {
-      type: "bot_decision_failed",
-      playerId: pending.playerId,
-      message: pending.message,
-      retryable: true,
-      attempt: pending.attempt,
-      willRetry: pending.willRetry,
-      snapshot: this.snapshotDto(snapshot)
-    } satisfies GameEvent);
   }
 
   private broadcastPersonalSnapshot(type: "snapshot" | "round_started", snapshot: GameSnapshot): void {
@@ -1782,244 +1458,4 @@ export class DdzRoom extends Room {
       console.error(`[DdzRoom ${this.roomCode}] Failed to disconnect room.`, disconnectError);
     });
   }
-}
-
-function readRoomCode(options: { roomCode?: unknown }): string {
-  return parseRoomCode(options.roomCode);
-}
-
-function readTurnTimeoutMs(value: unknown): number {
-  if (value === undefined) {
-    return DEFAULT_TURN_TIMEOUT_MS;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new Error("Turn timeout must be a positive integer in milliseconds.");
-  }
-  return value;
-}
-
-function readLlmBotTurnTimerMs(value: unknown): number {
-  if (value === undefined) {
-    return DEFAULT_LLM_BOT_TURN_TIMER_MS;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new Error("LLM bot turn timer must be a positive integer in milliseconds.");
-  }
-  return value;
-}
-
-function readRoomClaimTtlMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.ROOM_CLAIM_TTL_MS?.trim();
-  if (!raw) {
-    return DEFAULT_ROOM_CLAIM_TTL_MS;
-  }
-
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 5_000 || value > 30 * 60_000) {
-    throw new Error("ROOM_CLAIM_TTL_MS must be an integer between 5000 and 1800000 milliseconds.");
-  }
-  return value;
-}
-
-function roomClaimHeartbeatIntervalMs(claimTtlMs: number): number {
-  return Math.floor(claimTtlMs / 2);
-}
-
-function usesLlmBotDecision(
-  options: Pick<RoomCreateOptions, "botDecisionMode">,
-  env: NodeJS.ProcessEnv = process.env
-): boolean {
-  if (options.botDecisionMode === "llm") {
-    return true;
-  }
-  if (options.botDecisionMode === "rule") {
-    return false;
-  }
-  return decisionConfigFromEnv(env).useLlm;
-}
-
-function reserveAiBattleSlot(env: NodeJS.ProcessEnv = process.env): void {
-  if (env.AI_BATTLE_ENABLED !== "true") {
-    throw new Error("AI 对战当前未开启。请设置 AI_BATTLE_ENABLED=true 后重试。");
-  }
-
-  const maxActive = readAiBattleMaxActive(env);
-  if (activeAiBattleRooms >= maxActive) {
-    throw new Error(`AI 对战房间已达上限(${maxActive})，请稍后再试。`);
-  }
-  activeAiBattleRooms += 1;
-}
-
-function releaseAiBattleSlot(): void {
-  if (activeAiBattleRooms <= 0) {
-    throw new Error("AI battle slot release underflow.");
-  }
-  activeAiBattleRooms -= 1;
-}
-
-function readAiBattleMaxActive(env: NodeJS.ProcessEnv): number {
-  const raw = env.AI_BATTLE_MAX_ACTIVE?.trim();
-  if (!raw) {
-    return 1;
-  }
-
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error("AI_BATTLE_MAX_ACTIVE must be a positive integer.");
-  }
-  return parsed;
-}
-
-function readBotCount(value: unknown): number {
-  if (value === undefined) {
-    return 0;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
-    throw new Error("Bot count must be an integer between 0 and 2.");
-  }
-  return value;
-}
-
-/** 撮合房专用 bot 数：与 define 注入的 botCount 区分，避免被 handler options 覆盖 */
-function readMatchBotCount(value: unknown): number | null {
-  if (value === undefined) {
-    return null;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
-    throw new Error("Match bot count must be an integer between 0 and 2.");
-  }
-  return value;
-}
-
-function readQuickStart(value: unknown): boolean {
-  if (value === undefined) {
-    return false;
-  }
-  if (typeof value !== "boolean") {
-    throw new Error("Quick start must be a boolean.");
-  }
-  return value;
-}
-
-function readArena(value: unknown): boolean {
-  if (value === undefined) {
-    return false;
-  }
-  if (typeof value !== "boolean") {
-    throw new Error("Arena flag must be a boolean.");
-  }
-  return value;
-}
-
-function readSpectate(value: unknown): boolean {
-  if (value === undefined) {
-    return false;
-  }
-  if (typeof value !== "boolean") {
-    throw new Error("Spectate flag must be a boolean.");
-  }
-  return value;
-}
-
-/** 竞技场阵容(不可信输入):恰好 3 个 {provider, model},逐项经注册表校验,非法即拒绝建房(不回退默认)。 */
-function readArenaLineup(value: unknown, registry: BotProviderRegistry): ModelRef[] {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new Error("竞技场建房必须提供 lineup: 恰好 3 个 {provider, model}。");
-  }
-  return value.map((entry, index) => {
-    const seat = index + 1;
-    if (typeof entry !== "object" || entry === null) {
-      throw new Error(`竞技场阵容第 ${seat} 席必须是 {provider, model} 对象。`);
-    }
-    const { provider, model } = entry as Record<string, unknown>;
-    if (typeof provider !== "string" || !provider.trim() || typeof model !== "string" || !model.trim()) {
-      throw new Error(`竞技场阵容第 ${seat} 席的 provider/model 必须是非空字符串。`);
-    }
-    const ref: ModelRef = { provider, model };
-    if (!isAllowedModel(registry, ref)) {
-      throw new Error(`竞技场阵容第 ${seat} 席 ${provider}/${model} 不在服务端允许的模型列表中——已拒绝建房。`);
-    }
-    return ref;
-  });
-}
-
-/** 竞技场 bot 昵称直接用模型名;同模型对打时追加 #2/#3 以区分席位。 */
-function arenaBotNicknames(lineup: readonly ModelRef[]): string[] {
-  const counts = new Map<string, number>();
-  return lineup.map((ref) => {
-    const seen = (counts.get(ref.model) ?? 0) + 1;
-    counts.set(ref.model, seen);
-    return seen === 1 ? ref.model : `${ref.model}#${seen}`;
-  });
-}
-
-function readArenaMaxSpectators(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.ARENA_MAX_SPECTATORS?.trim();
-  if (!raw) {
-    return 20;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0 || value > 1000) {
-    throw new Error("ARENA_MAX_SPECTATORS must be an integer between 0 and 1000.");
-  }
-  return value;
-}
-
-function readArenaIntermissionMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.ARENA_INTERMISSION_MS?.trim();
-  if (!raw) {
-    return 15_000;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1000 || value > 10 * 60_000) {
-    throw new Error("ARENA_INTERMISSION_MS must be an integer between 1000 and 600000 milliseconds.");
-  }
-  return value;
-}
-
-function readArenaMaxRounds(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.ARENA_MAX_ROUNDS?.trim();
-  if (!raw) {
-    return 12;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > 1000) {
-    throw new Error("ARENA_MAX_ROUNDS must be an integer between 1 and 1000.");
-  }
-  return value;
-}
-
-function readBotRetryMaxAttempts(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.BOT_RETRY_MAX_ATTEMPTS?.trim();
-  if (!raw) {
-    return 3;
-  }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > 10) {
-    throw new Error("BOT_RETRY_MAX_ATTEMPTS must be an integer between 1 and 10.");
-  }
-  return value;
-}
-
-function readFixedBotDelayMs(value: unknown): number | null {
-  if (value === undefined) {
-    return null;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error("Bot move delay must be a non-negative integer in milliseconds.");
-  }
-  return value;
-}
-
-function parseRoomCode(value: unknown): string {
-  if (typeof value !== "string") {
-    throw new Error("Room code is required to join the game room.");
-  }
-
-  // 严格校验：只接受规范格式（6 位数字），不做 trim 之类的静默修正
-  if (!ROOM_CODE_REGEX.test(value)) {
-    throw new Error("Room code must be 6 digits.");
-  }
-
-  return value;
 }

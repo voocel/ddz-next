@@ -1,8 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseBotProviderRegistry } from "@ddz/bot-ai";
-import { GameTable } from "@ddz/domain";
-import { DdzRoom } from "../../src/rooms/DdzRoom";
-import { SerialTaskQueue } from "../../src/rooms/serialTaskQueue";
 import { createRoomFixture, restoreEnv, runtimeEnv, setEnv, stateResponse } from "./roomCreateFixture";
 
 const originalAiBattleEnabled = runtimeEnv().AI_BATTLE_ENABLED;
@@ -62,6 +59,9 @@ describe("DdzRoom arena", () => {
     expect(Object.keys(lastState?.botModels ?? {})).toHaveLength(3);
     // 阵容即赛事配置,禁用牌桌内热更
     expect(internals.botSettingsUpdatesEnabled).toBe(false);
+    // 竞技场协作者接线完成:生命周期导演与 bot 回合控制器都已装配
+    expect(internals.arenaDirector).toBeDefined();
+    expect(internals.botController).toBeDefined();
 
     await fixture.room.onDispose();
   });
@@ -92,103 +92,5 @@ describe("DdzRoom arena", () => {
     await expect(fixture.room.onCreate(fixture.options)).rejects.toThrow(/不在直播中/);
   });
 
-  it("局间推进:settled 后自动重置并把三个 bot 直接推进到下一局", async () => {
-    const { room, table, recordMutation, invoke } = bareArenaRoom(settledArenaTable("100045"), "100045");
-
-    await invoke("startNextArenaRound");
-
-    expect(table.snapshot().phase).toBe("bidding");
-    expect(
-      recordMutation.mock.calls.flatMap((call) => (call[0] as { actions: Array<{ type: string }> }).actions.map((a) => a.type))
-    ).toContain("round_started");
-    expect(room).toBeInstanceOf(DdzRoom);
-  });
-
-  it("打满 ARENA_MAX_ROUNDS 后收官:closed 落库并断开房间", async () => {
-    const fixture = bareArenaRoom(settledArenaTable("100046"), "100046");
-    fixture.internals.arenaRoundsPlayed = 11; // 默认 12 局,本局是最后一局
-
-    fixture.invoke("scheduleArenaRoundTransition");
-
-    expect(fixture.internals.arenaRoundsPlayed).toBe(12);
-    expect(fixture.clock.setTimeout).toHaveBeenCalledTimes(1);
-    // 触发局间定时回调 → 收官
-    (fixture.clock.setTimeout.mock.calls[0]![0] as () => void)();
-    await vi.waitFor(() => {
-      expect(fixture.closeRoom).toHaveBeenCalledTimes(1);
-    });
-    expect(fixture.disconnect).toHaveBeenCalled();
-  });
+  // 局间推进/收官/流局的行为细节已随 ArenaDirector 抽取迁至 arenaDirector.test.ts(隔离测试)
 });
-
-/** 三个 bot 打完一整局的 settled 牌桌(domain 不关心是否有真人)。 */
-function settledArenaTable(code: string): GameTable {
-  const table = new GameTable();
-  const bots = [1, 2, 3].map((index) => `bot:${code}:${index}`);
-  for (const bot of bots) {
-    table.addBot(bot);
-  }
-  for (const bot of bots) {
-    table.setReady(bot);
-  }
-  const bidder = table.snapshot().currentPlayerId!;
-  table.bidLandlord(bidder, true);
-  for (let i = 0; i < 2; i += 1) {
-    table.robLandlord(table.snapshot().currentPlayerId!, false);
-  }
-  while (table.snapshot().phase === "playing") {
-    const snapshot = table.snapshot();
-    const current = snapshot.currentPlayerId!;
-    if (current === snapshot.landlordId) {
-      table.playCards(current, [table.getHand(current)[0]!.id]);
-    } else {
-      table.pass(current);
-    }
-  }
-  return table;
-}
-
-interface BareArenaRoom {
-  readonly room: DdzRoom;
-  readonly table: GameTable;
-  readonly internals: Record<string, unknown>;
-  readonly recordMutation: ReturnType<typeof vi.fn>;
-  readonly closeRoom: ReturnType<typeof vi.fn>;
-  readonly disconnect: ReturnType<typeof vi.fn>;
-  readonly clock: { setTimeout: ReturnType<typeof vi.fn> };
-  readonly invoke: (method: string, ...args: unknown[]) => Promise<void>;
-}
-
-/** 裸实例 + 最小桩:只测竞技场局间推进/收官,不拉起 onCreate。 */
-function bareArenaRoom(table: GameTable, code: string): BareArenaRoom {
-  const room = new DdzRoom();
-  const internals = room as unknown as Record<string, unknown>;
-  const recordMutation = vi.fn(async () => {});
-  const closeRoom = vi.fn(async () => {});
-  const disconnect = vi.fn(async () => {});
-  const clock = { setTimeout: vi.fn(() => ({ clear: vi.fn() })), setInterval: vi.fn(() => ({ clear: vi.fn() })) };
-
-  Object.defineProperty(room, "clock", { value: clock, configurable: true });
-  internals.roomCode = code;
-  internals.table = table;
-  internals.tasks = new SerialTaskQueue();
-  internals.arena = true;
-  internals.botIds = [1, 2, 3].map((index) => `bot:${code}:${index}`);
-  internals.nicknames = new Map();
-  internals.broadcast = vi.fn();
-  internals.disconnect = disconnect;
-  internals.persistence = { recordMutation, closeRoom };
-  internals.turnScheduler = { scheduleTurnTimer: vi.fn(), scheduleBotTurn: vi.fn(), cancelAll: vi.fn() };
-
-  return {
-    room,
-    table,
-    internals,
-    recordMutation,
-    closeRoom,
-    disconnect,
-    clock,
-    invoke: (method, ...args) =>
-      Promise.resolve((room as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!(...args)) as Promise<void>
-  };
-}

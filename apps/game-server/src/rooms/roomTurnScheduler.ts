@@ -1,10 +1,11 @@
 import type { GameSnapshot, PlayerId } from "@ddz/domain";
 
-interface TimerHandle {
+export interface TimerHandle {
   clear(): void;
 }
 
-interface RoomClock {
+/** 房间时钟窄端口(Colyseus clock 的结构子集);兄弟协作者(arenaDirector/botTurnController)复用同一定义。 */
+export interface RoomClock {
   setTimeout(callback: () => void, delayMs: number): TimerHandle;
 }
 
