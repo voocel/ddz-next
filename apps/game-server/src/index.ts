@@ -8,7 +8,6 @@ import { readApiSyncConfig } from "./api/config.js";
 import { HttpGameActionClient } from "./api/gameActionClient.js";
 import { HttpRoomStatusClient } from "./api/roomStatusClient.js";
 import { DdzRoom } from "./rooms/DdzRoom.js";
-import { MatchmakingRoom } from "./rooms/MatchmakingRoom.js";
 
 /** /bot-models 路由只用到 express Response 的这两个方法,结构化标注避免引入 @types/express。 */
 interface ExpressJsonResponse {
@@ -53,24 +52,18 @@ const gameServer = new Server({
 
 // static onAuth 在房间创建前就会执行，token 配置需在进程启动时注入
 DdzRoom.authTokenConfig = tokenConfig;
-MatchmakingRoom.authTokenConfig = tokenConfig;
 
 gameServer.define("ddz", DdzRoom, {
   roomStatusClient,
   gameActionClient,
   botCount,
-  botMoveDelayMs,
+  // Colyseus 合并时 define 侧优先,值为 undefined 的键也会覆盖客户端 options——
+  // env 未设置时必须省略该键,否则测试/CI 传入的 botMoveDelayMs 逃生阀永远失效
+  ...(botMoveDelayMs !== undefined ? { botMoveDelayMs } : {}),
   turnTimeoutMs,
   llmBotTurnTimerMs,
   botRegistry
 }).filterBy(["roomCode"]);
-
-gameServer.define("matchmaking", MatchmakingRoom, {
-  roomStatusClient,
-  matchTimeoutMs: readIntegerEnv("MATCH_TIMEOUT_MS", 8_000, {
-    min: 1000
-  })
-});
 
 await gameServer.listen(port);
 

@@ -111,7 +111,7 @@ export class SeatLayer {
       const meta = this.scene.add.text(
         position.x - 42,
         position.y - 4,
-        `分 ${player.score}  流水 ${formatScore(player.coinDelta)}`,
+        `分 ${formatScore(player.score)}`,
         {
           ...TABLE_TEXT_STYLE,
           fontSize: "12px",

@@ -2,7 +2,6 @@ import { Client, type Room } from "@colyseus/sdk";
 import type { CardId } from "@ddz/domain";
 import {
   type CardDto,
-  coinLedgerResponseSchema,
   gameEventSchema,
   loginResponseSchema,
   roomResponseSchema,
@@ -79,11 +78,6 @@ async function main(): Promise<void> {
     throw new Error(`Smoke replay action sequence is not contiguous: ${actionSeqs.join(",")}`);
   }
 
-  const ledgers = await getAuthed("/me/coin-ledgers", session.accessToken, coinLedgerResponseSchema);
-  if (!ledgers.ledgers.some((ledger) => ledger.roundId === completedRound.id)) {
-    throw new Error("Smoke coin ledger was not written.");
-  }
-
   console.log(
     JSON.stringify(
       {
@@ -91,8 +85,7 @@ async function main(): Promise<void> {
         roomCode: room.code,
         roundId: completedRound.id,
         events: events.length,
-        actions: replay.round.actions.length,
-        ledgers: ledgers.ledgers.length
+        actions: replay.round.actions.length
       },
       null,
       2

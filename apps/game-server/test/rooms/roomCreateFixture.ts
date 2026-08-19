@@ -78,9 +78,6 @@ export function createRoomFixture(
     roomCode: code,
     ...optionOverrides,
     roomStatusClient: {
-      async createRoom(): Promise<RoomDto> {
-        throw new Error("Not used.");
-      },
       async getRoomState(): Promise<InternalRoomStateResponse> {
         return response;
       },

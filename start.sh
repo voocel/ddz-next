@@ -53,23 +53,57 @@ redact_database_url() {
   echo "$value"
 }
 
-check_port() {
+# 监听指定端口的 PID 列表（unix 走 lsof，Windows/Git Bash 走 netstat）
+listening_pids() {
+  local port="$1"
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ano 2>/dev/null | awk -v addr=":${port}" '/LISTENING/ && $2 ~ addr"$" {print $NF}' | sort -u || true
+  fi
+}
+
+stop_pid() {
+  local pid="$1"
+  local force="$2"
+
+  if command -v taskkill >/dev/null 2>&1; then
+    taskkill //F //PID "$pid" >/dev/null 2>&1 || true
+  elif [[ "$force" == "force" ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+  else
+    kill "$pid" 2>/dev/null || true
+  fi
+}
+
+# 端口被占则自动停掉旧进程（多为上次残留的 dev server）；两轮（先温和后强杀）仍占用才报错
+free_port() {
   local port="$1"
   local label="$2"
+  local force="" pid pids
 
-  if ! command -v lsof >/dev/null 2>&1; then
+  pids="$(listening_pids "$port")"
+  if [[ -z "$pids" ]]; then
     return
   fi
 
-  local listeners
-  listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-  if [[ -z "$listeners" ]]; then
-    return
-  fi
+  echo "[start] ${label} port ${port} is in use; stopping old process(es): ${pids//$'\n'/ }"
+  for _ in 1 2; do
+    for pid in $pids; do
+      stop_pid "$pid" "$force"
+    done
+    for _ in 1 2 3 4 5 6; do
+      pids="$(listening_pids "$port")"
+      if [[ -z "$pids" ]]; then
+        return
+      fi
+      sleep 0.5
+    done
+    force="force"
+  done
 
-  echo "[start] ${label} port ${port} is already in use:" >&2
-  echo "$listeners" >&2
-  echo "[start] stop the existing process or change the port in .env, then run ./start.sh again." >&2
+  echo "[start] could not free ${label} port ${port}; still held by: ${pids//$'\n'/ }" >&2
   exit 1
 }
 
@@ -102,9 +136,9 @@ API_PORT="${API_PORT:-3000}"
 GAME_PORT="${GAME_PORT:-2567}"
 WEB_PORT="5173"
 
-check_port "$API_PORT" "API"
-check_port "$GAME_PORT" "Game Server"
-check_port "$WEB_PORT" "Web"
+free_port "$API_PORT" "API"
+free_port "$GAME_PORT" "Game Server"
+free_port "$WEB_PORT" "Web"
 
 start_service "api" pnpm --filter @ddz/api dev
 start_service "game" pnpm --filter @ddz/game-server dev

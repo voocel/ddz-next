@@ -1,12 +1,10 @@
 import {
-  coinLedgerResponseSchema,
   leaderboardResponseSchema,
   roomListResponseSchema,
   roomResponseSchema,
   loginResponseSchema,
   roundHistoryResponseSchema,
   roundReplayResponseSchema,
-  type CoinLedgerResponse,
   type LeaderboardResponse,
   type LoginRequest,
   type LoginResponse,
@@ -24,6 +22,8 @@ export interface ApiClientOptions {
   readonly onUnauthorized?: () => void;
 }
 
+export type ApiClient = ReturnType<typeof createApiClient>;
+
 export function createApiClient(options: ApiClientOptions) {
   return {
     login(input: LoginRequest): Promise<LoginResponse> {
@@ -31,11 +31,6 @@ export function createApiClient(options: ApiClientOptions) {
     },
     register(input: RegisterRequest): Promise<LoginResponse> {
       return postAuth(options.endpoint, "/auth/register", input);
-    },
-    listRooms(): Promise<RoomListResponse> {
-      return requestJson(options, "/rooms", {
-        method: "GET"
-      }).then((body) => parseRoomList(body));
     },
     listArenaRooms(): Promise<RoomListResponse> {
       return requestJson(options, "/arena/rooms", {
@@ -76,12 +71,6 @@ export function createApiClient(options: ApiClientOptions) {
       return requestJson(options, "/replays/recent", {
         method: "GET"
       }).then((body) => parseRoundHistory(body));
-    },
-    listCoinLedgers(accessToken: string): Promise<CoinLedgerResponse> {
-      return requestJson(options, "/me/coin-ledgers", {
-        method: "GET",
-        headers: authHeaders(accessToken)
-      }).then((body) => parseCoinLedgers(body));
     },
     getLeaderboard(): Promise<LeaderboardResponse> {
       return requestJson(options, "/leaderboard", {
@@ -165,15 +154,6 @@ function parseLeaderboard(body: unknown): LeaderboardResponse {
   const parsed = leaderboardResponseSchema.safeParse(body);
   if (!parsed.success) {
     throw new Error(`Invalid leaderboard response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
-  }
-
-  return parsed.data;
-}
-
-function parseCoinLedgers(body: unknown): CoinLedgerResponse {
-  const parsed = coinLedgerResponseSchema.safeParse(body);
-  if (!parsed.success) {
-    throw new Error(`Invalid coin ledger response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   }
 
   return parsed.data;

@@ -1,9 +1,8 @@
-import { themeAsset } from "../../theme";
-import type { DdzApp } from "../useDdzApp";
+import { themeAsset, type ThemeId } from "../../theme";
+import type { AuthSession } from "../useAuthSession";
 
-export function AuthScreen({ app }: { app: DdzApp }) {
+export function AuthScreen({ auth, theme }: { readonly auth: AuthSession; readonly theme: ThemeId }) {
   const {
-    theme,
     authMode,
     authStatus,
     authStatusTone,
@@ -15,14 +14,14 @@ export function AuthScreen({ app }: { app: DdzApp }) {
     setPassword,
     setAuthMode,
     submitAuth
-  } = app;
+  } = auth;
 
   return (
     <main className="auth-screen">
       <img className="auth-mascot mascot-left" src={themeAsset(theme, "mascot_left.png")} alt="" />
       <img className="auth-mascot mascot-right" src={themeAsset(theme, "mascot_right.png")} alt="" />
       <section className="auth-card">
-        <img className="auth-logo" src="/assets/images/hall_logo_pic.png" alt="斗地主" />
+        <img className="auth-logo" src="/assets/images/hall_logo_hd.png" alt="斗地主" />
         <form className="auth-form" onSubmit={submitAuth}>
           <label>
             用户名

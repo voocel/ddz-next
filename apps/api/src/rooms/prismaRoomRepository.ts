@@ -17,21 +17,6 @@ const roomSelect = {
 export class PrismaRoomRepository implements RoomRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
-    return this.prisma.room.findMany({
-      where: {
-        status: "open",
-        // 竞技场房不能入座，不进普通大厅列表（走 /arena/rooms）
-        mode: "standard"
-      },
-      orderBy: {
-        createdAt: "desc"
-      },
-      take: limit,
-      select: roomSelect
-    }) as Promise<RoomRecord[]>;
-  }
-
   async listArenaRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.prisma.room.findMany({
       where: {

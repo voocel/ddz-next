@@ -1,0 +1,116 @@
+/* ===== AI 竞技场观战 ===== */
+
+.arena-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--red);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.arena-live-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: arena-live-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes arena-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+.arena-hud-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--cream);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.arena-hud-status {
+  opacity: 0.85;
+}
+
+/* 解说字幕条：顶栏下方居中，短句入场后停留展示 */
+.arena-commentary {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(760px, 86vw);
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(20, 14, 6, 0.78);
+  border: 1px solid rgba(255, 214, 120, 0.35);
+  color: var(--cream);
+  font-size: 15px;
+  line-height: 1.5;
+  animation: arena-commentary-in 0.35s var(--pop);
+  pointer-events: none;
+}
+
+.arena-commentary-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sun-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@keyframes arena-commentary-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* 直播终结遮罩 */
+.arena-ended {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 7, 3, 0.6);
+}
+
+.arena-ended-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 40px;
+  border-radius: var(--r-l);
+  background: rgba(24, 16, 7, 0.94);
+  border: 2px solid rgba(255, 214, 120, 0.3);
+  color: var(--cream);
+  font-size: 16px;
+}

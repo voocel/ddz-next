@@ -121,7 +121,7 @@ describe("GameActionService", () => {
     });
   });
 
-  it("applies coin settlement from round_settled actions", async () => {
+  it("applies settlement from round_settled actions", async () => {
     const repository = new InMemoryGameActionRepository();
     repository.seedRoom("100002", "room-2");
     await repository.seedRound("room-2");
@@ -166,7 +166,6 @@ describe("GameActionService", () => {
         ]
       }
     ]);
-    expect(repository.coinLedgerPlayerIds).toEqual(["p0", "p1", "p2"]);
   });
 
   it("merges botPlayers model identity into settlement players (LLM bot 身份落库)", async () => {
@@ -230,8 +229,6 @@ describe("GameActionService", () => {
         ]
       }
     ]);
-    // 真人照常入账;bot 无 User 行,不产生金币流水
-    expect(repository.coinLedgerPlayerIds).toEqual(["p2"]);
   });
 
   it("round_aborted 关闭当前局并保留参局模型身份(技术负归属 failedPlayerId)", async () => {
@@ -279,10 +276,9 @@ describe("GameActionService", () => {
         ]
       }
     ]);
-    // 流局终结当前局:无结算、无金币流水
+    // 流局终结当前局:无结算
     expect(repository.rounds[0]?.endedAt).not.toBeNull();
     expect(repository.settlements).toHaveLength(0);
-    expect(repository.coinLedgerPlayerIds).toEqual([]);
   });
 
   it("round_aborted 后可开新一局;无未结束局时流局报 409", async () => {
@@ -382,7 +378,6 @@ describe("GameActionService", () => {
     expect(second).toEqual(first);
     expect(repository.actions).toHaveLength(1);
     expect(repository.settlements).toHaveLength(1);
-    expect(repository.coinLedgerPlayerIds).toEqual(["p0", "p1", "p2"]);
   });
 
   it("rejects reused mutation ids with different actions", async () => {
@@ -429,7 +424,7 @@ describe("GameActionService", () => {
     expect(repository.roomEvents).toHaveLength(1);
   });
 
-  it("keeps bot settlement players out of human coin ledgers", async () => {
+  it("derives settlement playerKind from the bot id prefix", async () => {
     const repository = new InMemoryGameActionRepository();
     repository.seedRoom("100004", "room-4");
     await repository.seedRound("room-4");
@@ -466,7 +461,6 @@ describe("GameActionService", () => {
       { playerId: "p1", playerKind: "human", seat: 1, scoreDelta: -1, botProvider: null, botModel: null },
       { playerId: "bot:100004:2", playerKind: "bot", seat: 2, scoreDelta: -1, botProvider: null, botModel: null }
     ]);
-    expect(repository.coinLedgerPlayerIds).toEqual(["p1"]);
   });
 
   it("rejects a duplicate settlement carried by a different mutation id", async () => {
@@ -489,7 +483,7 @@ describe("GameActionService", () => {
       ]
     });
 
-    // 不同 mutationId 二次结算同一局：该局已结束、不存在 open round → 拒绝，金币不重复入账
+    // 不同 mutationId 二次结算同一局：该局已结束、不存在 open round → 拒绝
     await expect(
       service.record({
         roomCode: "100008",
@@ -509,7 +503,6 @@ describe("GameActionService", () => {
     });
 
     expect(repository.settlements).toHaveLength(1);
-    expect(repository.coinLedgerPlayerIds).toEqual(["p0", "p1", "p2"]);
   });
 
   it("rejects round actions without an open round", async () => {

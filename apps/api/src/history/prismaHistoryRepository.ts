@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import type { CoinLedgerRecord, HistoryRepository, RoundHistoryRecord, RoundReplayRecord } from "./service.js";
+import type { HistoryRepository, RoundHistoryRecord, RoundReplayRecord } from "./service.js";
 
 const roundHistorySelect = {
   id: true,
@@ -20,7 +20,6 @@ const roundHistorySelect = {
       playerKind: true,
       seat: true,
       score: true,
-      coinDelta: true,
       botProvider: true,
       botModel: true
     }
@@ -155,41 +154,4 @@ export class PrismaHistoryRepository implements HistoryRepository {
     }));
   }
 
-  async listCoinLedgersByUserId(userId: string, limit: number): Promise<readonly CoinLedgerRecord[]> {
-    const ledgers = await this.prisma.coinLedger.findMany({
-      where: {
-        userId
-      },
-      // createdAt 相同时以 id 作次键，保证排序确定性
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: limit,
-      select: {
-        id: true,
-        roundId: true,
-        delta: true,
-        balance: true,
-        reason: true,
-        createdAt: true,
-        round: {
-          select: {
-            room: {
-              select: {
-                code: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    return ledgers.map((ledger) => ({
-      id: ledger.id,
-      roundId: ledger.roundId,
-      roomCode: ledger.round.room.code,
-      delta: ledger.delta,
-      balance: ledger.balance,
-      reason: ledger.reason,
-      createdAt: ledger.createdAt
-    }));
-  }
 }

@@ -76,17 +76,6 @@ export function readBotCount(value: unknown): number {
   return value;
 }
 
-/** 撮合房专用 bot 数：与 define 注入的 botCount 区分，避免被 handler options 覆盖 */
-export function readMatchBotCount(value: unknown): number | null {
-  if (value === undefined) {
-    return null;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) {
-    throw new Error("Match bot count must be an integer between 0 and 2.");
-  }
-  return value;
-}
-
 export function readQuickStart(value: unknown): boolean {
   if (value === undefined) {
     return false;
@@ -117,30 +106,30 @@ export function readSpectate(value: unknown): boolean {
   return value;
 }
 
-/** 竞技场阵容(不可信输入):恰好 3 个 {provider, model},逐项经注册表校验,非法即拒绝建房(不回退默认)。 */
-export function readArenaLineup(value: unknown, registry: BotProviderRegistry): ModelRef[] {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new Error("竞技场建房必须提供 lineup: 恰好 3 个 {provider, model}。");
+/** 阵容(不可信输入):恰好 seats 个 {provider, model}(竞技场 3 席/挑战桌 2 席),逐项经注册表校验,非法即拒绝建房(不回退默认)。 */
+export function readLineup(value: unknown, registry: BotProviderRegistry, seats: 2 | 3): ModelRef[] {
+  if (!Array.isArray(value) || value.length !== seats) {
+    throw new Error(`建房必须提供 lineup: 恰好 ${seats} 个 {provider, model}。`);
   }
   return value.map((entry, index) => {
     const seat = index + 1;
     if (typeof entry !== "object" || entry === null) {
-      throw new Error(`竞技场阵容第 ${seat} 席必须是 {provider, model} 对象。`);
+      throw new Error(`阵容第 ${seat} 席必须是 {provider, model} 对象。`);
     }
     const { provider, model } = entry as Record<string, unknown>;
     if (typeof provider !== "string" || !provider.trim() || typeof model !== "string" || !model.trim()) {
-      throw new Error(`竞技场阵容第 ${seat} 席的 provider/model 必须是非空字符串。`);
+      throw new Error(`阵容第 ${seat} 席的 provider/model 必须是非空字符串。`);
     }
     const ref: ModelRef = { provider, model };
     if (!isAllowedModel(registry, ref)) {
-      throw new Error(`竞技场阵容第 ${seat} 席 ${provider}/${model} 不在服务端允许的模型列表中——已拒绝建房。`);
+      throw new Error(`阵容第 ${seat} 席 ${provider}/${model} 不在服务端允许的模型列表中——已拒绝建房。`);
     }
     return ref;
   });
 }
 
-/** 竞技场 bot 昵称直接用模型名;同模型对打时追加 #2/#3 以区分席位。 */
-export function arenaBotNicknames(lineup: readonly ModelRef[]): string[] {
+/** lineup 席位 bot 昵称直接用模型名;同模型对打时追加 #2/#3 以区分席位。 */
+export function lineupBotNicknames(lineup: readonly ModelRef[]): string[] {
   const counts = new Map<string, number>();
   return lineup.map((ref) => {
     const seen = (counts.get(ref.model) ?? 0) + 1;

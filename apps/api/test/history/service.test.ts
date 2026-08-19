@@ -15,9 +15,9 @@ function botRound(overrides: Partial<RoundReplayRecord> = {}): RoundReplayRecord
     startedAt,
     endedAt,
     players: [
-      { playerId: "bot:a", playerKind: "bot", seat: 0, score: 4, coinDelta: 4, botProvider: "anthropic", botModel: "model-a" },
-      { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2, coinDelta: -2, botProvider: "openai", botModel: "model-b" },
-      { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2, coinDelta: -2, botProvider: "google", botModel: "model-c" }
+      { playerId: "bot:a", playerKind: "bot", seat: 0, score: 4, botProvider: "anthropic", botModel: "model-a" },
+      { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2, botProvider: "openai", botModel: "model-b" },
+      { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2, botProvider: "google", botModel: "model-c" }
     ],
     actions: [
       {
@@ -64,9 +64,9 @@ describe("HistoryService public replays", () => {
       botRound({
         id: "round-2",
         players: [
-          { playerId: "user-1", playerKind: "human", seat: 0, score: 4, coinDelta: 4 },
-          { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2, coinDelta: -2 },
-          { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2, coinDelta: -2 }
+          { playerId: "user-1", playerKind: "human", seat: 0, score: 4 },
+          { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2 },
+          { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2 }
         ]
       })
     );

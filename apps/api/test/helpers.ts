@@ -16,12 +16,7 @@ import type {
   RoundActionInput,
   RoundRecord
 } from "../src/actions/service";
-import type {
-  CoinLedgerRecord,
-  HistoryRepository,
-  RoundHistoryRecord,
-  RoundReplayRecord
-} from "../src/history/service";
+import type { HistoryRepository, RoundHistoryRecord, RoundReplayRecord } from "../src/history/service";
 import type { CreateRoomInput, RoomRecord, RoomRepository } from "../src/rooms/service";
 import type { LeaderboardRepository } from "../src/leaderboard/service";
 import { assertRoomStatusTransition } from "../src/rooms/status";
@@ -113,13 +108,6 @@ export class InMemoryRoomRepository implements RoomRepository {
   /** 崩溃恢复状态：code → { state, updatedAt } */
   readonly liveStates = new Map<string, { state: unknown; updatedAt: Date }>();
   readonly claims = new Map<string, { ownerId: string; expiresAt: Date; updatedAt: Date }>();
-
-  async listOpenRooms(limit: number): Promise<readonly RoomRecord[]> {
-    return this.records
-      .filter((room) => room.status === "open" && room.mode === "standard")
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, limit);
-  }
 
   async listArenaRooms(limit: number): Promise<readonly RoomRecord[]> {
     return this.records
@@ -277,7 +265,6 @@ export class InMemoryGameActionRepository implements GameActionRepository {
       botModel: string | null;
     }>;
   }> = [];
-  readonly coinLedgerPlayerIds: string[] = [];
 
   async findRoomIdByCode(code: string): Promise<string | null> {
     return this.rooms.get(code) ?? null;
@@ -337,7 +324,7 @@ export class InMemoryGameActionRepository implements GameActionRepository {
       }
       actions.push(this.createAction(round.id, action));
       if (action.settlement) {
-        // 镜像 Prisma applySettlement 的 endedAt IS NULL 守卫：已结算的 round 不得二次结算（防金币重复入账）
+        // 镜像 Prisma applySettlement 的 endedAt IS NULL 守卫：已结算的 round 不得二次结算
         const persisted = this.rounds.find((item) => item.id === round?.id);
         if (persisted?.endedAt) {
           throw new GameActionError("Round was already settled.", 409);
@@ -347,9 +334,6 @@ export class InMemoryGameActionRepository implements GameActionRepository {
           landlordId: action.settlement.landlordId,
           players: action.settlement.players.map((player) => ({ ...player }))
         });
-        this.coinLedgerPlayerIds.push(
-          ...action.settlement.players.filter((player) => player.playerKind === "human").map((player) => player.playerId)
-        );
         round = {
           ...round,
           endedAt: new Date(Date.UTC(2026, 0, this.actions.length + 1))
@@ -440,16 +424,11 @@ export class InMemoryGameActionRepository implements GameActionRepository {
 export class InMemoryHistoryRepository implements HistoryRepository {
   readonly rounds = new Map<string, readonly RoundHistoryRecord[]>();
   readonly replays = new Map<string, RoundReplayRecord>();
-  readonly ledgers = new Map<string, readonly CoinLedgerRecord[]>();
   /** 公开复盘（全 bot 局）：按 roundId 直取；带真人的局不应放进来（镜像仓储层过滤语义） */
   readonly publicReplays = new Map<string, RoundReplayRecord>();
 
   async listRoundsByUserId(userId: string): Promise<readonly RoundHistoryRecord[]> {
     return this.rounds.get(userId) ?? [];
-  }
-
-  async listCoinLedgersByUserId(userId: string): Promise<readonly CoinLedgerRecord[]> {
-    return this.ledgers.get(userId) ?? [];
   }
 
   async findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null> {

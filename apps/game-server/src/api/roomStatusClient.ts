@@ -2,14 +2,12 @@ import {
   internalRoomStateResponseSchema,
   roomResponseSchema,
   type InternalRoomStateResponse,
-  type RoomDto,
   type RoomStatus
 } from "@ddz/protocol";
 import type { ApiSyncConfig } from "./config.js";
 import { fetchWithRetry } from "./httpRetry.js";
 
 export interface RoomStatusClient {
-  createRoom(): Promise<RoomDto>;
   claimRoom(roomCode: string, ownerId: string, ttlMs: number): Promise<void>;
   /** 崩溃恢复查询：房间当前状态 + 最近一次落库的完整牌局状态（无则 null） */
   getRoomState(roomCode: string): Promise<InternalRoomStateResponse>;
@@ -20,33 +18,6 @@ export interface RoomStatusClient {
 
 export class HttpRoomStatusClient implements RoomStatusClient {
   constructor(private readonly config: ApiSyncConfig) {}
-
-  async createRoom(): Promise<RoomDto> {
-    const response = await fetchWithRetry(
-      new URL("/internal/rooms", this.config.endpoint),
-      {
-        method: "POST",
-        headers: {
-          "x-ddz-internal-token": this.config.internalToken
-        }
-      },
-      this.config
-    );
-
-    const body = await readJsonOrText(response);
-    if (!response.ok) {
-      throw new Error(`Failed to create matched room: ${response.status} ${formatResponseBody(body)}`);
-    }
-
-    const parsed = roomResponseSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new Error(
-        `Invalid create room response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`
-      );
-    }
-
-    return parsed.data.room;
-  }
 
   async getRoomState(roomCode: string): Promise<InternalRoomStateResponse> {
     const response = await fetchWithRetry(

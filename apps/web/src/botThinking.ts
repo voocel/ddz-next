@@ -32,7 +32,7 @@ export const EMPTY_THINKING: BotThinkingState = {};
 const EMPTY_CHANNELS: Readonly<Record<BotAiStreamChannel, string>> = { reasoning: "", text: "" };
 
 /**
- * 把一个 bot_ai_stream 事件并入输出状态(纯函数,供 useDdzApp reducer 与单测复用):
+ * 把一个 bot_ai_stream 事件并入输出状态(纯函数,供房间域 reducer 与单测复用):
  * - done=false:上轮已收尾(active=false)或不存在 → 新一轮,从空开始追加;否则在原文本上追加。
  * - done=true:追加剩余片段并冻结(active=false),文本保留;下一轮该 bot 新增量到来时再覆盖。
  * 服务端只在本手确有 reasoning/text 增量时才发事件。

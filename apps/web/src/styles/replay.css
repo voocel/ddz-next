@@ -1,0 +1,68 @@
+/* ===== 公开复盘 ===== */
+
+/* 复盘 AI 思考面板：停靠在 AI 侧栏内，展示当前步的模型 reasoning；与直播卡同套奶油/木边质感 */
+.replay-reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-m);
+  background: linear-gradient(180deg, #fffdf2, var(--cream-2));
+  border: 2px solid var(--ai-accent, var(--wood-2));
+  box-shadow: 0 3px 0 var(--wood-3);
+  color: var(--ink);
+}
+
+.replay-reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay-reasoning-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--ai-accent, rgba(255, 214, 120, 0.4));
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.replay-reasoning-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.replay-reasoning-title strong {
+  font-size: 14px;
+}
+
+.replay-reasoning-title span {
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.replay-reasoning-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.92;
+  scrollbar-width: thin;
+}
+
+.replay-reasoning-empty {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.6;
+}

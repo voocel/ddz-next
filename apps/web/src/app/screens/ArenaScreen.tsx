@@ -1,10 +1,9 @@
-import { Suspense, lazy, useEffect, useRef, type CSSProperties } from "react";
-import type { BotModelRefDto, GameSnapshotDto, LoginResponse } from "@ddz/protocol";
+import { Suspense, lazy } from "react";
+import type { BotModelRefDto, LoginResponse } from "@ddz/protocol";
 import type { AudioLevels } from "../../audio";
-import type { ReasoningEffort } from "../../botPreferences";
+import type { ReasoningEffort } from "../../lineupDefaults";
 import type { ThemeId } from "../../theme";
-import type { BotThinkingEntry } from "../../botThinking";
-import { modelProfile } from "../../modelProfiles";
+import { AiThinkingCard } from "../components/AiThinkingCard";
 import { SeatThinkCloud } from "../components/SeatThinkCloud";
 import { SeatTurnClock } from "../components/SeatTurnClock";
 import { useArenaSpectator } from "../useArenaSpectator";
@@ -104,69 +103,16 @@ export function ArenaScreen({
       {players.length ? (
         <aside className="ai-dock">
           {players.map((player) => (
-            <ArenaSeatPanel
+            <AiThinkingCard
               key={player.id}
               player={player}
               entry={arena.thinking[player.id]}
-              landlordId={arena.snapshot?.landlordId ?? null}
-              isCurrent={arena.snapshot?.currentPlayerId === player.id}
+              snapshot={arena.snapshot}
+              showMeta
             />
           ))}
         </aside>
       ) : null}
     </main>
-  );
-}
-
-type ArenaPlayer = GameSnapshotDto["players"][number];
-
-function ArenaSeatPanel({
-  player,
-  entry,
-  landlordId,
-  isCurrent
-}: {
-  readonly player: ArenaPlayer;
-  readonly entry: BotThinkingEntry | undefined;
-  readonly landlordId: string | null;
-  readonly isCurrent: boolean;
-}) {
-  const profile = modelProfile(player.model?.model ?? player.nickname ?? "", player.model?.provider);
-  const reasoning = entry ? entry.channels.reasoning || entry.channels.text : "";
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-
-  // 直播 reasoning 持续增长，保持滚动条贴底跟随最新输出
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (body) {
-      body.scrollTop = body.scrollHeight;
-    }
-  }, [reasoning]);
-
-  return (
-    <section
-      className={`arena-panel${isCurrent ? " is-current" : ""}${entry?.active ? " is-active" : ""}`}
-      style={{ "--ai-accent": profile.accent } as CSSProperties}
-    >
-      <header className="arena-panel-head">
-        <img src={profile.avatar} alt="" />
-        <div className="arena-panel-title">
-          <strong>{player.nickname ?? profile.alias}</strong>
-          <span>{player.model ? player.model.model : profile.tagline}</span>
-        </div>
-        {landlordId === player.id ? <em className="arena-panel-role">地主</em> : null}
-      </header>
-      <div className="arena-panel-meta">
-        <span>剩 {player.handCount} 张</span>
-        <span>{player.score} 分</span>
-        {entry?.active ? <span className="arena-panel-live">思考中…</span> : null}
-      </div>
-      <div ref={bodyRef} className="arena-panel-body">
-        {reasoning || (entry?.active ? "…" : "等待出手")}
-        {entry?.active ? <span className="bot-think-caret" aria-hidden="true" /> : null}
-      </div>
-      {entry?.choice ? <div className="arena-panel-choice">出手 {entry.choice.index + 1}: {entry.choice.label}</div> : null}
-      {entry?.error ? <div className="arena-panel-error">{entry.error.message}</div> : null}
-    </section>
   );
 }

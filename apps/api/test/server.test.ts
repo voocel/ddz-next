@@ -141,13 +141,6 @@ describe("API auth routes", () => {
     expect(created.statusCode).toBe(200);
     expect(created.json().room.code).toBe("100001");
 
-    const list = await app.inject({
-      method: "GET",
-      url: "/rooms"
-    });
-    expect(list.statusCode).toBe(200);
-    expect(list.json().rooms).toHaveLength(1);
-
     // 公开查房：直连 /table/:code 分享链接的入口
     const fetched = await app.inject({
       method: "GET",
@@ -168,7 +161,7 @@ describe("API auth routes", () => {
     });
     expect(invalidCode.statusCode).toBe(400);
 
-    // 竞技场房不进普通大厅列表，走 /arena/rooms 直播列表
+    // 竞技场房走 /arena/rooms 直播列表
     const arenaCreated = await app.inject({
       method: "POST",
       url: "/rooms",
@@ -183,34 +176,12 @@ describe("API auth routes", () => {
     expect(arenaCreated.statusCode).toBe(200);
     expect(arenaCreated.json().room.mode).toBe("arena");
 
-    const listAfterArena = await app.inject({
-      method: "GET",
-      url: "/rooms"
-    });
-    expect(listAfterArena.json().rooms.map((room: { code: string }) => room.code)).toEqual(["100001"]);
-
     const arenaList = await app.inject({
       method: "GET",
       url: "/arena/rooms"
     });
     expect(arenaList.statusCode).toBe(200);
     expect(arenaList.json().rooms.map((room: { code: string }) => room.code)).toEqual(["100002"]);
-
-    const internalCreated = await app.inject({
-      method: "POST",
-      url: "/internal/rooms",
-      headers: {
-        "x-ddz-internal-token": "internal-test-token"
-      }
-    });
-    expect(internalCreated.statusCode).toBe(200);
-    expect(internalCreated.json().room.status).toBe("open");
-
-    const anonymousInternalCreate = await app.inject({
-      method: "POST",
-      url: "/internal/rooms"
-    });
-    expect(anonymousInternalCreate.statusCode).toBe(401);
 
     await app.close();
   });
@@ -431,7 +402,7 @@ describe("API auth routes", () => {
     await app.close();
   });
 
-  it("returns authenticated player round history and coin ledgers", async () => {
+  it("returns authenticated player round history and replays", async () => {
     const users = new InMemoryUserRepository();
     const history = new InMemoryHistoryRepository();
     const app = buildServer({
@@ -468,9 +439,9 @@ describe("API auth routes", () => {
         startedAt: new Date(Date.UTC(2026, 0, 1, 10)),
         endedAt: new Date(Date.UTC(2026, 0, 1, 10, 5)),
         players: [
-          { playerId: userId, playerKind: "human", seat: 0, score: 2, coinDelta: 2 },
-          { playerId: "other-1", playerKind: "human", seat: 1, score: -1, coinDelta: -1 },
-          { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
+          { playerId: userId, playerKind: "human", seat: 0, score: 2 },
+          { playerId: "other-1", playerKind: "human", seat: 1, score: -1 },
+          { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1 }
         ]
       }
     ]);
@@ -483,9 +454,9 @@ describe("API auth routes", () => {
       startedAt: new Date(Date.UTC(2026, 0, 1, 10)),
       endedAt: new Date(Date.UTC(2026, 0, 1, 10, 5)),
       players: [
-        { playerId: userId, playerKind: "human", seat: 0, score: 2, coinDelta: 2 },
-        { playerId: "other-1", playerKind: "human", seat: 1, score: -1, coinDelta: -1 },
-        { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1, coinDelta: -1 }
+        { playerId: userId, playerKind: "human", seat: 0, score: 2 },
+        { playerId: "other-1", playerKind: "human", seat: 1, score: -1 },
+        { playerId: "bot:100099:1", playerKind: "bot", seat: 2, score: -1 }
       ],
       actions: [
         {
@@ -542,18 +513,6 @@ describe("API auth routes", () => {
         }
       ]
     });
-    history.ledgers.set(userId, [
-      {
-        id: "ledger-1",
-        roundId: "round-1",
-        roomCode: "100099",
-        delta: 2,
-        balance: 1002,
-        reason: "round_settled",
-        createdAt: new Date(Date.UTC(2026, 0, 1, 10, 5))
-      }
-    ]);
-
     const rejected = await app.inject({
       method: "GET",
       url: "/me/rounds"
@@ -624,20 +583,6 @@ describe("API auth routes", () => {
       }
     });
     expect(missingReplay.statusCode).toBe(404);
-
-    const ledgers = await app.inject({
-      method: "GET",
-      url: "/me/coin-ledgers",
-      headers: {
-        authorization: `Bearer ${accessToken}`
-      }
-    });
-    expect(ledgers.statusCode).toBe(200);
-    expect(ledgers.json().ledgers[0]).toMatchObject({
-      id: "ledger-1",
-      delta: 2,
-      balance: 1002
-    });
 
     await app.close();
   });

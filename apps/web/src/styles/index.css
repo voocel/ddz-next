@@ -1,0 +1,7 @@
+/* 按屏拆分的样式聚合入口：base 先行（令牌/元素/通用件），各屏其后 */
+@import "./base.css";
+@import "./auth.css";
+@import "./home.css";
+@import "./table.css";
+@import "./arena.css";
+@import "./replay.css";

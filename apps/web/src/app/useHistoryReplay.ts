@@ -1,27 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CoinLedgerItemDto, LoginResponse, RoundHistoryItemDto, RoundReplayDto } from "@ddz/protocol";
+import type { LoginResponse, RoundHistoryItemDto, RoundReplayDto } from "@ddz/protocol";
 import type { createApiClient } from "../net/apiClient";
-import { useReplayPlayback } from "./useReplayPlayback";
 
 type ApiClient = ReturnType<typeof createApiClient>;
 
 /**
- * 战绩与回放域：个人战绩列表、金币流水、单局回放的加载与步进播放。
+ * 战绩与回放域：个人战绩列表、单局回放数据的加载。
  * 仅依赖 api + session：session 置空时自清空；round_settled 后由房间域调用 refreshHistory 刷新。
+ * 步进/播放属展示状态,归 ReplayScreen 自持。
  */
 export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) {
   const [roundHistory, setRoundHistory] = useState<RoundHistoryItemDto[]>([]);
-  const [coinLedgers, setCoinLedgers] = useState<CoinLedgerItemDto[]>([]);
   const [historyStatus, setHistoryStatus] = useState("等待登录");
   const [replayStatus, setReplayStatus] = useState("未选择对局");
   const [selectedReplay, setSelectedReplay] = useState<RoundReplayDto | null>(null);
-  const [replayStep, setReplayStep] = useState(0);
-  const [replayPlaying, setReplayPlaying] = useState(false);
 
   const clearReplay = useCallback((): void => {
     setSelectedReplay(null);
-    setReplayStep(0);
-    setReplayPlaying(false);
     setReplayStatus("未选择对局");
   }, []);
 
@@ -32,12 +27,8 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
 
     setHistoryStatus("加载战绩中");
     try {
-      const [rounds, ledgers] = await Promise.all([
-        api.listRoundHistory(session.accessToken),
-        api.listCoinLedgers(session.accessToken)
-      ]);
+      const rounds = await api.listRoundHistory(session.accessToken);
       setRoundHistory(rounds.rounds);
-      setCoinLedgers(ledgers.ledgers);
       setSelectedReplay((current) => {
         if (!current) {
           return null;
@@ -48,7 +39,7 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
         }
         return rounds.rounds.some((round) => round.id === current.id) ? current : null;
       });
-      setHistoryStatus(rounds.rounds.length || ledgers.ledgers.length ? "已更新" : "暂无战绩");
+      setHistoryStatus(rounds.rounds.length ? "已更新" : "暂无战绩");
     } catch (error) {
       setHistoryStatus(error instanceof Error ? error.message : "加载战绩失败");
     }
@@ -63,8 +54,6 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
           ? await api.getRoundReplay(session.accessToken, roundId).catch(() => api.getPublicRoundReplay(roundId))
           : await api.getPublicRoundReplay(roundId);
         setSelectedReplay(response.round);
-        setReplayStep(0);
-        setReplayPlaying(false);
         setReplayStatus(`${response.round.actions.length} 条事件`);
         return true;
       } catch (error) {
@@ -80,7 +69,6 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
   useEffect(() => {
     if (!session) {
       setRoundHistory([]);
-      setCoinLedgers([]);
       setHistoryStatus("等待登录");
       clearReplay();
       return;
@@ -89,26 +77,13 @@ export function useHistoryReplay(api: ApiClient, session: LoginResponse | null) 
     void refreshHistory();
   }, [session, refreshHistory, clearReplay]);
 
-  useReplayPlayback({
-    replayPlaying,
-    replayStep,
-    selectedReplay,
-    setReplayPlaying,
-    setReplayStep
-  });
-
   return {
     roundHistory,
-    coinLedgers,
     historyStatus,
     replayStatus,
     selectedReplay,
-    replayStep,
-    replayPlaying,
     refreshHistory,
     loadReplay,
-    clearReplay,
-    setReplayStep,
-    setReplayPlaying
+    clearReplay
   };
 }

@@ -1,6 +1,5 @@
 import type {
   CardDto,
-  CoinLedgerResponse,
   RoundActionType,
   RoundHistoryItemDto,
   RoundHistoryResponse,
@@ -25,7 +24,6 @@ export interface RoundHistoryPlayerRecord {
   readonly playerKind: "human" | "bot";
   readonly seat: 0 | 1 | 2;
   readonly score: number;
-  readonly coinDelta: number;
   readonly botProvider?: string | null;
   readonly botModel?: string | null;
 }
@@ -45,16 +43,6 @@ export interface RoundReplayRecord extends RoundHistoryRecord {
   readonly actions: readonly RoundHistoryActionRecord[];
 }
 
-export interface CoinLedgerRecord {
-  readonly id: string;
-  readonly roundId: string;
-  readonly roomCode: string;
-  readonly delta: number;
-  readonly balance: number;
-  readonly reason: string;
-  readonly createdAt: Date;
-}
-
 export interface HistoryRepository {
   listRoundsByUserId(userId: string, limit: number): Promise<readonly RoundHistoryRecord[]>;
   findRoundByIdForUser(userId: string, roundId: string): Promise<RoundReplayRecord | null>;
@@ -62,7 +50,6 @@ export interface HistoryRepository {
   findPublicBotRoundById(roundId: string): Promise<RoundReplayRecord | null>;
   /** 最近的全 bot 已结算局（流局不含），公开对局列表用 */
   listRecentBotRounds(limit: number): Promise<readonly RoundHistoryRecord[]>;
-  listCoinLedgersByUserId(userId: string, limit: number): Promise<readonly CoinLedgerRecord[]>;
 }
 
 export class HistoryService {
@@ -109,20 +96,6 @@ export class HistoryService {
     };
   }
 
-  async listCoinLedgers(userId: string): Promise<CoinLedgerResponse> {
-    const ledgers = await this.history.listCoinLedgersByUserId(userId, 30);
-    return {
-      ledgers: ledgers.map((ledger) => ({
-        id: ledger.id,
-        roundId: ledger.roundId,
-        roomCode: ledger.roomCode,
-        delta: ledger.delta,
-        balance: ledger.balance,
-        reason: ledger.reason,
-        createdAt: ledger.createdAt.toISOString()
-      }))
-    };
-  }
 }
 
 function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
@@ -140,8 +113,7 @@ function toRoundHistoryDto(round: RoundHistoryRecord): RoundHistoryItemDto {
         : {}),
       playerKind: player.playerKind,
       seat: player.seat,
-      score: player.score,
-      coinDelta: player.coinDelta
+      score: player.score
     }))
   };
 }

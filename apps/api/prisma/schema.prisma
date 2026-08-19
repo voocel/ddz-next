@@ -8,14 +8,12 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  username     String        @unique
+  id           String   @id @default(cuid())
+  username     String   @unique
   nickname     String
   passwordHash String
-  coin         Int           @default(1000)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  coinLedgers  CoinLedger[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 model Room {
@@ -60,7 +58,7 @@ model RoomEvent {
 
 // 注意：Round 上还有一个 Prisma 无法表达的部分唯一索引
 // "Round_roomId_open_round_key"（roomId WHERE endedAt IS NULL），
-// 保证同一房间同时只有一局未结束，见迁移 add_settlement_constraints
+// 保证同一房间同时只有一局未结束，见 init 迁移末尾的手写 SQL
 model Round {
   id         String        @id @default(cuid())
   roomId     String
@@ -73,7 +71,6 @@ model Round {
   failedPlayerId String?
   players    RoundPlayer[]
   actions    GameAction[]
-  coinLedgers CoinLedger[]
 }
 
 model RoundPlayer {
@@ -84,7 +81,6 @@ model RoundPlayer {
   playerKind String
   seat       Int
   score      Int    @default(0)
-  coinDelta  Int    @default(0)
   // LLM bot 的模型身份(真人与规则 bot 为 NULL),排行榜按 (botProvider, botModel) 聚合
   botProvider String?
   botModel    String?
@@ -123,22 +119,6 @@ model GameActionMutation {
 
   @@unique([roomId, mutationId])
   @@index([roomId, createdAt])
-}
-
-model CoinLedger {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  roundId   String
-  round     Round    @relation(fields: [roundId], references: [id])
-  delta     Int
-  balance   Int
-  reason    String
-  createdAt DateTime @default(now())
-
-  // 同一局对同一用户只允许一条流水，防止重复结算入账
-  @@unique([roundId, userId])
-  @@index([userId, createdAt])
 }
 
 // game-server 对房间实例的显式租约。用于多进程部署时避免同一 roomCode 被多个实例同时恢复/运行。

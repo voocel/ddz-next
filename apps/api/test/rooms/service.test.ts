@@ -4,17 +4,17 @@ import { RoomService } from "../../src/rooms/service";
 import { InMemoryRoomRepository } from "../helpers";
 
 describe("RoomService", () => {
-  it("creates and lists open rooms", async () => {
+  it("creates rooms that are findable by code", async () => {
     const service = new RoomService(new InMemoryRoomRepository());
 
     const created = await service.createRoom({
       code: "100012"
     });
-    const list = await service.listOpenRooms();
+    const found = await service.getRoomByCode("100012");
 
     expect(created.room.code).toBe("100012");
     expect(created.room.status).toBe("open");
-    expect(list.rooms.map((room) => room.code)).toEqual(["100012"]);
+    expect(found.room.id).toBe(created.room.id);
   });
 
   it("rejects duplicate open room codes", async () => {

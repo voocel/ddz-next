@@ -8,25 +8,18 @@ interface GameClientOptions {
   readonly accessToken: string;
   readonly roomCode: string;
   readonly quickStart?: boolean;
-  /** 以观众身份入房（不占座位）；观战下 quickStart/bot 设置不生效 */
+  /** 以观众身份入房（不占座位）；观战下 quickStart/lineup 不生效 */
   readonly spectate?: boolean;
-  /** 创建竞技场房的三席阵容（joinOrCreate 首次创建时生效；观战已存在的房省略） */
-  readonly arenaLineup?: readonly BotModelRefDto[] | null;
-  /** 创建竞技场房的思考强度（随 arenaLineup 首次创建时生效）；缺省由服务端定默认 */
-  readonly arenaReasoningEffort?: string | null;
-  /** 当前 AI 房间的机器人设置:连接时作为初始值,连接后也可通过 update_bot_settings 热更新。 */
-  readonly getBotSettings?: (() => BotSettings | null) | undefined;
+  /** true 创建全 AI 竞技场房（3 席对战，真人只能观战）；随 lineup 首次创建时生效 */
+  readonly arena?: boolean;
+  /** 建房阵容（竞技场 3 席 / 挑战桌 2 席对手），joinOrCreate 首次创建时生效；进入已存在的房省略 */
+  readonly lineup?: readonly BotModelRefDto[] | null;
+  /** 随 lineup 首次创建时生效的思考强度；缺省由服务端定默认 */
+  readonly reasoningEffort?: string | null;
   readonly onEvent: (event: GameEvent) => void;
   readonly onStatus: (status: string) => void;
   /** 房间被服务端/网络异常关闭（非本地主动离开）时回调 */
   readonly onDropped: (code: number) => void;
-}
-
-interface BotSettings {
-  readonly mode: string;
-  readonly provider: string;
-  readonly model: string;
-  readonly reasoningEffort: string;
 }
 
 /** Colyseus 主动离开的正常关闭码 */
@@ -46,23 +39,6 @@ export function createGameClient(options: GameClientOptions) {
   let generation = 0;
   // 快速开始只在首次入房时自动准备；断线重连回到牌局中再补发会被拒绝；观众不占座无准备一说
   let quickStartPending = options.quickStart === true && options.spectate !== true;
-
-  const sendBotSettings = (settings: {
-    readonly provider: string;
-    readonly model: string;
-    readonly reasoningEffort: string;
-  }): boolean => {
-    if (!room) {
-      return false;
-    }
-    room.send("command", {
-      type: "update_bot_settings",
-      provider: settings.provider,
-      model: settings.model,
-      reasoningEffort: settings.reasoningEffort
-    });
-    return true;
-  };
 
   const disconnect = (): void => {
     generation += 1;
@@ -87,23 +63,18 @@ export function createGameClient(options: GameClientOptions) {
 
         options.onStatus("连接中");
         const client = new Client(options.endpoint);
-        const botSettings = options.getBotSettings?.() ?? null;
         const joined = await client.joinOrCreate("ddz", {
           accessToken: options.accessToken,
           roomCode: options.roomCode,
           quickStart: options.quickStart === true && options.spectate !== true,
           ...(options.spectate ? { spectate: true } : {}),
-          ...(options.arenaLineup?.length
+          ...(options.lineup?.length
             ? {
-                arena: true,
-                lineup: options.arenaLineup,
-                ...(options.arenaReasoningEffort ? { botReasoningEffort: options.arenaReasoningEffort } : {})
+                ...(options.arena ? { arena: true } : {}),
+                lineup: options.lineup,
+                ...(options.reasoningEffort ? { botReasoningEffort: options.reasoningEffort } : {})
               }
-            : {}),
-          ...(botSettings?.mode ? { botDecisionMode: botSettings.mode } : {}),
-          ...(botSettings?.provider ? { botProvider: botSettings.provider } : {}),
-          ...(botSettings?.model ? { botModel: botSettings.model } : {}),
-          ...(botSettings?.reasoningEffort ? { botReasoningEffort: botSettings.reasoningEffort } : {})
+            : {})
         });
         if (gen !== generation) {
           // 等待期间已被新的 connect/disconnect 取代，丢弃这条旧连接
@@ -150,11 +121,6 @@ export function createGameClient(options: GameClientOptions) {
           options.onStatus(`房间错误 ${code}: ${message}`);
         });
 
-        const latestBotSettings = options.getBotSettings?.() ?? null;
-        if (options.spectate !== true && latestBotSettings?.mode === "llm") {
-          sendBotSettings(latestBotSettings);
-        }
-
         if (quickStartPending) {
           quickStartPending = false;
           joined.send("command", {
@@ -198,9 +164,6 @@ export function createGameClient(options: GameClientOptions) {
         type: "play_cards",
         cards
       });
-    },
-    updateBotSettings(settings: { readonly provider: string; readonly model: string; readonly reasoningEffort: string }): boolean {
-      return sendBotSettings(settings);
     },
     retryBotTurn() {
       room?.send("command", {

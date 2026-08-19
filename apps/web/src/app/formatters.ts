@@ -2,7 +2,7 @@ import type { RoundHistoryItemDto } from "@ddz/protocol";
 
 export function formatRoundDelta(round: RoundHistoryItemDto, userId: string): string {
   const player = round.players.find((item) => item.playerId === userId);
-  return player ? formatDelta(player.coinDelta) : "-";
+  return player ? formatDelta(player.score) : "-";
 }
 
 export function formatDelta(value: number): string {

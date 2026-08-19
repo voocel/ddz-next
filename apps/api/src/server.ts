@@ -113,8 +113,6 @@ export function buildServer(dependencies: ServerDependencies) {
     });
   });
 
-  app.get("/rooms", async () => dependencies.roomService.listOpenRooms());
-
   // 竞技场直播列表（公开）：open/playing 的全 AI 对战房
   app.get("/arena/rooms", async () => dependencies.roomService.listArenaRooms());
 
@@ -153,11 +151,6 @@ export function buildServer(dependencies: ServerDependencies) {
     }
 
     return dependencies.roomService.createRoom(parsed.data);
-  });
-
-  app.post("/internal/rooms", async (request) => {
-    requireInternal(request.headers, dependencies.internalConfig.token);
-    return dependencies.roomService.createRoom();
   });
 
   // 崩溃恢复查询：state 含手牌，绝不能挪到公开路由
@@ -236,11 +229,6 @@ export function buildServer(dependencies: ServerDependencies) {
     }
 
     return dependencies.historyService.getRoundReplay(claims.sub, roundId);
-  });
-
-  app.get("/me/coin-ledgers", async (request) => {
-    const claims = requireAuth(request.headers, dependencies.tokenConfig);
-    return dependencies.historyService.listCoinLedgers(claims.sub);
   });
 
   app.patch("/internal/rooms/:code/status", async (request) => {

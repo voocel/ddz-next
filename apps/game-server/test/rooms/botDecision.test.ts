@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseBotProviderRegistry, type BotProviderRegistry, type DecisionConfig } from "@ddz/bot-ai";
 import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 import { LlmBotBrain } from "../../src/rooms/llmBotBrain";
-import { resolveBotBrain, resolveBotBrainUpdate, resolveDecisionConfig } from "../../src/rooms/botDecision";
+import { resolveBotBrain, resolveDecisionConfig } from "../../src/rooms/botDecision";
 
 // 两 provider 注册表:default = anthropic/claude-haiku-4-5;另含 deepseek 以验证跨 provider 选择。
 const registry: BotProviderRegistry = parseBotProviderRegistry(
@@ -115,31 +115,5 @@ describe("resolveBotBrain", () => {
       })
     );
     expect(resolveBotBrain({}, noKeyRegistry, ruleEnv)).toBeInstanceOf(RuleBotBrain);
-  });
-});
-
-describe("resolveBotBrainUpdate", () => {
-  it("动态更新合法模型时造大模型大脑,并返回生效模型供房间登记身份", () => {
-    const result = resolveBotBrainUpdate({ provider: "deepseek", model: "deepseek-v4-pro", reasoningEffort: "off" }, registry);
-    expect(result.brain).toBeInstanceOf(LlmBotBrain);
-    expect(result.model).toEqual({ provider: "deepseek", model: "deepseek-v4-pro" });
-  });
-
-  it("动态更新空 provider/model 时切回服务端默认模型", () => {
-    const result = resolveBotBrainUpdate({ provider: "", model: "", reasoningEffort: "high" }, registry);
-    expect(result.brain).toBeInstanceOf(LlmBotBrain);
-    expect(result.model).toEqual(registry.default);
-  });
-
-  it("动态更新非法 provider/model 时显式拒绝,不静默回退默认模型", () => {
-    expect(() =>
-      resolveBotBrainUpdate({ provider: "deepseek", model: "missing", reasoningEffort: "off" }, registry)
-    ).toThrow(/不在服务端允许的模型列表/);
-  });
-
-  it("动态更新只给 provider 或只给 model 时显式拒绝", () => {
-    expect(() => resolveBotBrainUpdate({ provider: "deepseek", model: "", reasoningEffort: "off" }, registry)).toThrow(
-      /必须同时为空或同时提供/
-    );
   });
 });

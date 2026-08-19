@@ -40,6 +40,10 @@ const PROFILES: ReadonlyArray<{ readonly match: RegExp; readonly profile: ModelP
     profile: { alias: "Kimi", avatar: "/assets/models/kimi.png", tagline: "月之暗面的冷静杀手", accent: "#38bdf8" }
   },
   {
+    match: /mimo|xiaomi/i,
+    profile: { alias: "MiMo", avatar: "/assets/models/mimo.png", tagline: "小身板大算力的闪电兔", accent: "#ff6900" }
+  },
+  {
     match: /grok|xai/i,
     profile: { alias: "Grok", avatar: "/assets/models/grok.png", tagline: "不按套路出牌的狂想家", accent: "#ef4444" }
   }

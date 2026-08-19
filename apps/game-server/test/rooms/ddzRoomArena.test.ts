@@ -57,8 +57,6 @@ describe("DdzRoom arena", () => {
     const lastState = fixture.gameActions.at(-1)?.state as { arena?: boolean; botModels?: Record<string, unknown> } | undefined;
     expect(lastState?.arena).toBe(true);
     expect(Object.keys(lastState?.botModels ?? {})).toHaveLength(3);
-    // 阵容即赛事配置,禁用牌桌内热更
-    expect(internals.botSettingsUpdatesEnabled).toBe(false);
     // 竞技场协作者接线完成:生命周期导演与 bot 回合控制器都已装配
     expect(internals.arenaDirector).toBeDefined();
     expect(internals.botController).toBeDefined();
@@ -83,6 +81,53 @@ describe("DdzRoom arena", () => {
       botRegistry: registry
     });
     await expect(missing.room.onCreate(missing.options)).rejects.toThrow(/必须提供 lineup/);
+  });
+
+  it("挑战桌建房:非 arena + 2 席 lineup,对手各挂模型身份,座位只留 1 真人并占用 AI 对战名额", async () => {
+    setEnv("AI_BATTLE_MAX_ACTIVE", "1");
+    const code = "100045";
+    const fixture = createRoomFixture(code, stateResponse(code, "open", null), {
+      lineup: [
+        { provider: "anthropic", model: "model-a" },
+        { provider: "anthropic", model: "model-b" }
+      ],
+      botRegistry: registry
+    });
+
+    await fixture.room.onCreate(fixture.options);
+    await fixture.flushTasks();
+
+    const internals = fixture.internals() as unknown as Record<string, unknown>;
+    expect(fixture.internals().botIds).toHaveLength(2);
+    expect((internals.botIdentities as Map<string, { model: string }>).size).toBe(2);
+    expect([...fixture.internals().nicknames.values()]).toEqual(["model-a", "model-b"]);
+    // 3 座位余 1 给建桌真人 + 默认 20 观战名额
+    expect(fixture.room.maxClients).toBe(21);
+    // 真人未入座不开局;挑战桌不是竞技场,无生命周期导演
+    expect(fixture.gameActions.flatMap((record) => record.actions.map((action) => action.type))).not.toContain(
+      "round_started"
+    );
+    expect(internals.arenaDirector).toBeNull();
+
+    // 与竞技场/LLM 决策房共用同一容量闸门:额度用尽时第二张挑战桌被拒
+    const second = createRoomFixture("100046", stateResponse("100046", "open", null), {
+      lineup: [
+        { provider: "anthropic", model: "model-a" },
+        { provider: "anthropic", model: "model-a" }
+      ],
+      botRegistry: registry
+    });
+    await expect(second.room.onCreate(second.options)).rejects.toThrow("AI 对战房间已达上限");
+
+    await fixture.room.onDispose();
+  });
+
+  it("挑战桌 lineup 席数必须恰好 2(3 席阵容仅竞技场可用)", async () => {
+    const bad = createRoomFixture("100047", stateResponse("100047", "open", null), {
+      lineup,
+      botRegistry: registry
+    });
+    await expect(bad.room.onCreate(bad.options)).rejects.toThrow(/恰好 2 个/);
   });
 
   it("观战 join 不能凭空拉起房间(无可恢复牌局即拒绝)", async () => {

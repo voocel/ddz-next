@@ -110,9 +110,9 @@ function publicReplay(): RoundReplayDto {
     startedAt: "2026-07-17T00:00:00.000Z",
     endedAt: "2026-07-17T00:05:00.000Z",
     players: [
-      { playerId: "bot:a", playerKind: "bot", seat: 0, score: 4, coinDelta: 4 },
-      { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2, coinDelta: -2 },
-      { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2, coinDelta: -2 }
+      { playerId: "bot:a", playerKind: "bot", seat: 0, score: 4 },
+      { playerId: "bot:b", playerKind: "bot", seat: 1, score: -2 },
+      { playerId: "bot:c", playerKind: "bot", seat: 2, score: -2 }
     ],
     actions: [
       {

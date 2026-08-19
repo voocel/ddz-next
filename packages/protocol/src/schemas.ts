@@ -165,17 +165,6 @@ export const passCommandSchema = z.object({
   type: z.literal("pass")
 });
 
-export const leaveCommandSchema = z.object({
-  type: z.literal("leave_room")
-});
-
-export const updateBotSettingsCommandSchema = z.object({
-  type: z.literal("update_bot_settings"),
-  provider: z.string(),
-  model: z.string(),
-  reasoningEffort: z.enum(["auto", "off", "low", "medium", "high"])
-});
-
 export const retryBotTurnCommandSchema = z.object({
   type: z.literal("retry_bot_turn")
 });
@@ -186,8 +175,6 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   robLandlordCommandSchema,
   playCardsCommandSchema,
   passCommandSchema,
-  leaveCommandSchema,
-  updateBotSettingsCommandSchema,
   retryBotTurnCommandSchema
 ]);
 
@@ -273,12 +260,6 @@ export const gameEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("command_rejected"),
     reason: z.string().min(1)
-  }),
-  z.object({
-    type: z.literal("bot_settings_updated"),
-    provider: z.string(),
-    model: z.string(),
-    reasoningEffort: z.enum(["auto", "off", "low", "medium", "high"])
   }),
   z.object({
     type: z.literal("room_failed"),
@@ -562,23 +543,6 @@ export const internalRoomStateResponseSchema = z.object({
   state: roomLiveStateEnvelopeSchema.nullable()
 });
 
-// 匹配通道服务端推送：排队状态 / 撮合成功 / 撮合失败
-export const matchmakingEventSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("queue_status"),
-    waiting: z.number().int().min(0),
-    position: z.number().int().min(1)
-  }),
-  z.object({
-    type: z.literal("matched"),
-    room: roomSchema
-  }),
-  z.object({
-    type: z.literal("match_failed"),
-    message: z.string().min(1)
-  })
-]);
-
 export const roundHistoryActionSchema = z.object({
   id: z.string().min(1),
   seq: z.number().int().positive(),
@@ -596,8 +560,7 @@ export const roundHistoryPlayerSchema = z.object({
   model: botModelRefSchema.optional(),
   playerKind: z.enum(["human", "bot"]),
   seat: z.union([z.literal(0), z.literal(1), z.literal(2)]),
-  score: z.number().int(),
-  coinDelta: z.number().int()
+  score: z.number().int()
 });
 
 export const roundHistoryItemSchema = z.object({
@@ -630,20 +593,6 @@ export const roundReplaySchema = roundHistoryItemSchema.extend({
 
 export const roundReplayResponseSchema = z.object({
   round: roundReplaySchema
-});
-
-export const coinLedgerItemSchema = z.object({
-  id: z.string().min(1),
-  roundId: z.string().min(1),
-  roomCode: z.string().min(4).max(12),
-  delta: z.number().int(),
-  balance: z.number().int(),
-  reason: z.string().min(1),
-  createdAt: z.string().datetime()
-});
-
-export const coinLedgerResponseSchema = z.object({
-  ledgers: z.array(coinLedgerItemSchema)
 });
 
 /**
@@ -701,7 +650,6 @@ export type RoomDto = z.infer<typeof roomSchema>;
 export type RoomListResponse = z.infer<typeof roomListResponseSchema>;
 export type RoomResponse = z.infer<typeof roomResponseSchema>;
 export type InternalRoomStateResponse = z.infer<typeof internalRoomStateResponseSchema>;
-export type MatchmakingEvent = z.infer<typeof matchmakingEventSchema>;
 export type RoomStatus = z.infer<typeof roomStatusSchema>;
 export type RoomMode = z.infer<typeof roomModeSchema>;
 export type SettlementDto = z.infer<typeof settlementSchema>;
@@ -711,8 +659,6 @@ export type RoundHistoryItemDto = z.infer<typeof roundHistoryItemSchema>;
 export type RoundHistoryResponse = z.infer<typeof roundHistoryResponseSchema>;
 export type RoundReplayDto = z.infer<typeof roundReplaySchema>;
 export type RoundReplayResponse = z.infer<typeof roundReplayResponseSchema>;
-export type CoinLedgerItemDto = z.infer<typeof coinLedgerItemSchema>;
-export type CoinLedgerResponse = z.infer<typeof coinLedgerResponseSchema>;
 export type LeaderboardEntryDto = z.infer<typeof leaderboardEntrySchema>;
 export type LeaderboardResponse = z.infer<typeof leaderboardResponseSchema>;
 export type AiTracePayloadDto = z.infer<typeof aiTracePayloadSchema>;

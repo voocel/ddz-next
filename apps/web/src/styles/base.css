@@ -1,0 +1,495 @@
+:root {
+  /* 欢乐卡通 Q 版设计 token */
+  --sun-1: #ffd54a;
+  --sun-2: #ffb300;
+  --sun-3: #ff8a00;
+  --sun-edge: #c96a00;
+  --grass-1: #9fdb5c;
+  --grass-2: #7dc242;
+  --grass-3: #4e9e2f;
+  --grass-edge: #38761d;
+  --sky-1: #aee4ff;
+  --sky-2: #5fb6f0;
+  --ink: #5b3a1e;
+  --ink-soft: rgba(91, 58, 30, 0.66);
+  --cream: #fff6e0;
+  --cream-2: #ffeec6;
+  --wood-1: #d99a4e;
+  --wood-2: #b9772f;
+  --wood-3: #8c5318;
+  --red: #ff5a45;
+  --r-s: 10px;
+  --r-m: 16px;
+  --r-l: 24px;
+  --pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --asset-bg-lobby: url("/assets/images/themes/cartoon/bg_lobby.jpg");
+  --asset-ribbon: url("/assets/images/themes/cartoon/ribbon_title.png");
+  --asset-btn-orange: url("/assets/images/themes/cartoon/btn_pill_orange.png");
+  --asset-btn-green: url("/assets/images/themes/cartoon/btn_pill_green.png");
+  --asset-btn-blue: url("/assets/images/themes/cartoon/btn_pill_blue.png");
+  --asset-btn-wood: url("/assets/images/themes/cartoon/btn_pill_wood.png");
+  --asset-btn-ai: url("/assets/images/themes/cartoon/btn_pill_ai.png");
+  --asset-ai-bubble-cloud: url("/assets/images/themes/cartoon/ai_bubble_cloud.svg");
+  --asset-ai-bubble-tail: url("/assets/images/themes/cartoon/ai_bubble_tail.svg");
+
+  color: #f5f1e6;
+  background: #101915;
+  font-family:
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Inter, ui-sans-serif, system-ui,
+    -apple-system, sans-serif;
+}
+
+/* ===== 田园像素主题：覆写 token，硬边像素质感 ===== */
+
+:root[data-theme="pixel"] {
+  --sun-1: #ffd95e;
+  --sun-2: #f5a623;
+  --sun-3: #e07b00;
+  --sun-edge: #8a4a00;
+  --grass-1: #8fd45a;
+  --grass-2: #63ab3f;
+  --grass-3: #3f7d2c;
+  --grass-edge: #2a5a1c;
+  --sky-1: #9adcf0;
+  --sky-2: #4aa3d4;
+  --ink: #3a2a18;
+  --ink-soft: rgba(58, 42, 24, 0.72);
+  --cream: #f8efd4;
+  --cream-2: #efe2b8;
+  --wood-1: #c08b4a;
+  --wood-2: #91612a;
+  --wood-3: #5e3d14;
+  --red: #d9442e;
+  --r-s: 2px;
+  --r-m: 3px;
+  --r-l: 4px;
+  --pop: steps(3, end);
+  --asset-bg-lobby: url("/assets/images/themes/pixel/bg_lobby.jpg");
+  --asset-ribbon: url("/assets/images/themes/pixel/ribbon_title.png");
+  --asset-btn-orange: url("/assets/images/themes/pixel/btn_pill_orange.png");
+  --asset-btn-green: url("/assets/images/themes/pixel/btn_pill_green.png");
+  --asset-btn-blue: url("/assets/images/themes/pixel/btn_pill_blue.png");
+  --asset-btn-wood: url("/assets/images/themes/pixel/btn_pill_wood.png");
+  --asset-btn-ai: url("/assets/images/themes/pixel/btn_pill_ai.png");
+  --asset-ai-bubble-cloud: url("/assets/images/themes/pixel/ai_bubble_cloud.svg");
+  --asset-ai-bubble-tail: url("/assets/images/themes/pixel/ai_bubble_tail.svg");
+}
+
+:root[data-theme="pixel"] img {
+  image-rendering: pixelated;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 16px;
+  background: #f4c542;
+  color: #17130a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: #f5f1e6;
+  background: #0f1814;
+}
+
+h1,
+h2 {
+  margin: 0;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+/* 图片素材按钮：牌桌内相位操作（叫/抢/准备/返回）复用与手牌区一致的 PNG 药丸 */
+.btn-img {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 150px;
+  height: 66px;
+  padding: 0 24px 6px;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  text-indent: 3px;
+  text-shadow: 0 2px 0 var(--ink);
+  background: var(--btn-face) center / 100% 100% no-repeat;
+  border: 0;
+  cursor: pointer;
+  transition:
+    transform 110ms var(--pop),
+    filter 110ms ease;
+}
+
+/* 尺寸分级：sm=角落工具按钮（返回/退出/刷新/回放控制），lg=主行动与次级动作（统一一档） */
+.btn-img-sm {
+  min-width: 76px;
+  height: 42px;
+  padding: 0 16px 4px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  text-indent: 1px;
+}
+
+.btn-img-lg {
+  min-width: 210px;
+  height: 76px;
+  padding: 0 36px 6px;
+  font-size: 24px;
+  letter-spacing: 4px;
+}
+
+.btn-img:hover {
+  filter: brightness(1.06);
+  transform: translateY(-2px);
+}
+
+.btn-img:active {
+  transform: translateY(3px);
+  filter: brightness(0.94);
+}
+
+.btn-img-orange {
+  --btn-face: var(--asset-btn-orange);
+}
+
+.btn-img-green {
+  --btn-face: var(--asset-btn-green);
+}
+
+.btn-img-blue {
+  --btn-face: var(--asset-btn-blue);
+}
+
+.btn-img-wood {
+  --btn-face: var(--asset-btn-wood);
+}
+
+.btn-img-ai {
+  --btn-face: var(--asset-btn-ai);
+}
+
+:root[data-theme="pixel"] .btn-img {
+  image-rendering: pixelated;
+  letter-spacing: 2px;
+  text-indent: 2px;
+  text-shadow: 2px 2px 0 var(--ink);
+}
+
+/* 路由过渡占位：直连 /table/:code、/replay/:id 时的加载态 */
+.route-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100svh;
+  color: var(--cream);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+
+.hud-spacer {
+  flex: 1;
+}
+
+.empty-state {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Phaser 舞台宿主（牌桌/观战/回放共用） */
+.game-host {
+  min-width: 0;
+  min-height: 0;
+  background: #0e1713;
+}
+
+.loading-host {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+/* ===== 卡通弹窗 ===== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  padding: 24px;
+  place-items: center;
+  background: rgba(43, 24, 8, 0.55);
+  backdrop-filter: blur(3px);
+  animation: overlay-in 160ms ease;
+}
+
+.modal-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(560px, 100%);
+  max-height: min(640px, 86vh);
+  padding: 34px 22px 22px;
+  background: linear-gradient(180deg, var(--cream), var(--cream-2));
+  border: 5px solid var(--wood-2);
+  border-radius: var(--r-l);
+  box-shadow:
+    0 8px 0 var(--wood-3),
+    0 30px 60px rgba(20, 10, 2, 0.5),
+    inset 0 2px 0 rgba(255, 255, 255, 0.8);
+  animation: modal-pop 240ms var(--pop);
+}
+
+.modal-ribbon {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  display: grid;
+  width: 252px;
+  height: 64px;
+  padding-bottom: 8px;
+  place-items: center;
+  color: #fff;
+  font-size: 19px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  text-shadow: 0 2px 0 rgba(80, 40, 0, 0.45);
+  white-space: nowrap;
+  background: var(--asset-ribbon) center / 100% 100% no-repeat;
+  filter: drop-shadow(0 5px 10px rgba(50, 28, 4, 0.35));
+  transform: translateX(-50%);
+}
+
+.modal-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  place-items: center;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1;
+  background: linear-gradient(180deg, #ff8a76, var(--red));
+  border: 3px solid #ffd2c9;
+  border-radius: 50%;
+  box-shadow:
+    0 4px 0 #c33823,
+    0 8px 14px rgba(50, 28, 4, 0.3);
+  transition: transform 110ms var(--pop);
+}
+
+.modal-close:hover {
+  transform: scale(1.1) rotate(90deg);
+}
+
+.modal-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 120px;
+  overflow: auto;
+  padding: 4px 4px 0;
+}
+
+.modal-hint {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 设置弹窗内的音量面板：音乐/音效各一行，纵向排列 */
+.audio-settings {
+  display: grid;
+  gap: 12px;
+}
+
+/* 一行音量：图标 | 名称 | 滑块（占满剩余） | 百分比 */
+.volume-row {
+  display: grid;
+  grid-template-columns: 24px auto minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #fffdf6, var(--cream-2));
+  border: 2px solid var(--wood-1);
+  border-radius: var(--r-m);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+}
+
+.volume-icon {
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+}
+
+.volume-name {
+  color: var(--ink);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* 自绘轨道：input 高度给到圆钮、轨道交给 runnable-track，圆钮才能相对轨道垂直居中 */
+.volume-row input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  cursor: pointer;
+  background: transparent;
+}
+
+/* 填充宽度跟随 --fill，0% 时左侧为干净空轨（不再有原生强调色那一小段） */
+.volume-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--wood-3) 0 var(--fill, 0%),
+    rgba(140, 83, 24, 0.18) var(--fill, 0%) 100%
+  );
+}
+
+.volume-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -4px; /* (轨道 10 - 圆钮 18) / 2，使圆钮中心对齐轨道中心 */
+  border-radius: 50%;
+  background: var(--cream);
+  border: 2px solid var(--wood-3);
+  box-shadow: 0 1px 2px rgba(50, 28, 4, 0.35);
+}
+
+.volume-row input[type="range"]::-moz-range-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(140, 83, 24, 0.18);
+}
+
+.volume-row input[type="range"]::-moz-range-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--wood-3);
+}
+
+.volume-row input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--cream);
+  border: 2px solid var(--wood-3);
+  box-shadow: 0 1px 2px rgba(50, 28, 4, 0.35);
+}
+
+/* 键盘聚焦用主题暖色描边，替代浏览器默认蓝框 */
+.volume-row input[type="range"]:focus-visible {
+  outline: 2px solid var(--sun-2);
+  outline-offset: 3px;
+}
+
+.volume-value {
+  color: var(--ink);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.volume-value.is-muted {
+  color: var(--ink-soft);
+}
+
+/* ===== 动画 ===== */
+
+@keyframes gentle-float {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(-9px);
+  }
+}
+
+@keyframes stage-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* ===== 田园像素主题：跨屏硬边覆写（药丸件/小按钮转为像素方块） ===== */
+
+:root[data-theme="pixel"] .player-plate,
+:root[data-theme="pixel"] .table-chip,
+:root[data-theme="pixel"] .room-medal,
+:root[data-theme="pixel"] .room-enter,
+:root[data-theme="pixel"] .modal-close,
+:root[data-theme="pixel"] .player-plate img {
+  border-radius: 4px;
+}
+
+/* 状态药丸（已进入房间/重连中）：去渐变，扁平奶油方块 */
+:root[data-theme="pixel"] .table-chip {
+  background: var(--cream);
+}

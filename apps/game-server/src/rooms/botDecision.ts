@@ -30,12 +30,6 @@ export interface BotDecisionOptions {
   readonly botReasoningEffort?: string | undefined;
 }
 
-export interface BotSettingsUpdate {
-  readonly provider: string;
-  readonly model: string;
-  readonly reasoningEffort: ReasoningEffort;
-}
-
 /** LLM bot 的可观测钩子(可选);仅 LLM bot 用,规则 bot 忽略。 */
 export interface BotBrainHooks {
   readonly onTrace?: (trace: LlmDecisionTrace) => void;
@@ -132,44 +126,4 @@ export function resolveBotBrain(
   envConfig?: DecisionConfig
 ): BotBrain {
   return createBotBrain(resolveDecisionConfig(options, registry, envConfig), registry, hooks);
-}
-
-/** 热更新结果:大脑实例 + 实际生效的模型(供房间登记 bot 身份落库)。 */
-export interface BotBrainUpdateResult {
-  readonly brain: BotBrain;
-  readonly model: ModelRef;
-}
-
-/**
- * 牌桌内热更新必须显式失败:provider/model 非空时必须命中注册表,否则告诉客户端更新被拒。
- * provider/model 皆空表示切回服务端默认模型。
- */
-export function resolveBotBrainUpdate(
-  update: BotSettingsUpdate,
-  registry: BotProviderRegistry,
-  hooks?: BotBrainHooks,
-  envConfig: DecisionConfig = decisionConfigFromEnv()
-): BotBrainUpdateResult {
-  const hasProvider = update.provider.trim().length > 0;
-  const hasModel = update.model.trim().length > 0;
-  if (hasProvider !== hasModel) {
-    throw new Error("AI 模型更新失败: provider 和 model 必须同时为空或同时提供。");
-  }
-
-  const model: ModelRef = hasProvider ? { provider: update.provider, model: update.model } : registry.default;
-  if (hasProvider && !isAllowedModel(registry, model)) {
-    throw new Error(`AI 模型更新失败: ${model.provider}/${model.model} 不在服务端允许的模型列表中。`);
-  }
-
-  const brain = createBotBrain(
-    {
-      useLlm: true,
-      model,
-      timeoutMs: envConfig.timeoutMs,
-      reasoningEffort: parseReasoningEffort(update.reasoningEffort)
-    },
-    registry,
-    hooks
-  );
-  return { brain, model };
 }

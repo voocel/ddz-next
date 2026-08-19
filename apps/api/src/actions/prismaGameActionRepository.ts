@@ -353,7 +353,7 @@ async function updateRoomStatus(tx: PrismaTransaction, roomId: string, status: R
 
 /**
  * 流局:带 endedAt 守卫关闭 Round(记 abortReason/failedPlayerId),写零分 RoundPlayer 行保留模型身份
- * (供排行把技术负关联到具体模型)。不产生结算、不动金币——事故与牌局结果分离,统计层定责。
+ * (供排行把技术负关联到具体模型)。不产生结算——事故与牌局结果分离,统计层定责。
  */
 async function applyAbort(tx: PrismaTransaction, roundId: string, abort: RoundAbortInput): Promise<void> {
   const aborted = await tx.round.updateMany({
@@ -393,7 +393,6 @@ async function applyAbort(tx: PrismaTransaction, roundId: string, abort: RoundAb
         playerKind: player.playerKind,
         seat: player.seat,
         score: 0,
-        coinDelta: 0,
         botProvider: player.botProvider,
         botModel: player.botModel
       }
@@ -431,7 +430,6 @@ async function applySettlement(tx: PrismaTransaction, roundId: string, settlemen
         playerKind: player.playerKind,
         seat: player.seat,
         score: player.scoreDelta,
-        coinDelta: player.scoreDelta,
         botProvider: player.botProvider,
         botModel: player.botModel
       },
@@ -441,48 +439,9 @@ async function applySettlement(tx: PrismaTransaction, roundId: string, settlemen
         playerKind: player.playerKind,
         seat: player.seat,
         score: player.scoreDelta,
-        coinDelta: player.scoreDelta,
         botProvider: player.botProvider,
         botModel: player.botModel
       }
     });
-
-    if (player.playerKind === "human") {
-      // 脏/已删除的 userId 不应让整批结算事务回滚：跳过其入账，RoundPlayer 已保留、其余玩家照常结算
-      const exists = await tx.user.findUnique({
-        where: {
-          id: player.playerId
-        },
-        select: {
-          id: true
-        }
-      });
-
-      if (exists) {
-        const user = await tx.user.update({
-          where: {
-            id: player.playerId
-          },
-          data: {
-            coin: {
-              increment: player.scoreDelta
-            }
-          },
-          select: {
-            coin: true
-          }
-        });
-
-        await tx.coinLedger.create({
-          data: {
-            userId: player.playerId,
-            roundId,
-            delta: player.scoreDelta,
-            balance: user.coin,
-            reason: "round_settled"
-          }
-        });
-      }
-    }
   }
 }

@@ -4,14 +4,14 @@ import type { PhaserTableHandle } from "../../PhaserTable";
 import type { TableControlsState } from "../../game/controlsState";
 import type { ThemeId } from "../../theme";
 import type { TurnTimerState } from "../types";
-import type { DdzApp } from "../useDdzApp";
+import type { createGameClient } from "../../net/gameClient";
 
 interface TableControlRowProps {
   readonly controls: TableControlsState;
   readonly turnTimer: TurnTimerState | null;
   readonly localId: string;
   readonly theme: ThemeId;
-  readonly client: DdzApp["client"];
+  readonly client: ReturnType<typeof createGameClient>;
   readonly tableRef: RefObject<PhaserTableHandle | null>;
 }
 

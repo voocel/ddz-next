@@ -1,0 +1,692 @@
+/* ===== AI 首页：单屏游戏大厅 =====
+   中央主入口(logo/标语/图片药丸按钮 + 两侧吉祥物),排行榜/直播/回放/战绩收进右侧图标 dock,
+   点击弹木质绶带弹窗查看;窄屏 dock 落到底部横排。 */
+
+.home-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+  background:
+    var(--asset-bg-lobby) center / cover no-repeat,
+    linear-gradient(180deg, var(--sky-1), var(--sky-2));
+}
+
+.home-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px clamp(14px, 3vw, 36px) 0;
+}
+
+.home-plate img {
+  width: 40px;
+  height: 40px;
+}
+
+/* ===== 中央主入口 ===== */
+
+.home-center {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.home-hero-core {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.home-hero-logo {
+  width: min(340px, 30vw);
+  filter: drop-shadow(0 10px 14px rgba(60, 30, 5, 0.4));
+  animation: stage-float 3.6s ease-in-out infinite;
+}
+
+/* 标语：HUD 风深棕半透明胶囊，任意背景上都稳 */
+.home-hero-tagline {
+  margin: 0;
+  padding: 7px 22px 8px;
+  color: #ffe9c4;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-shadow: 0 2px 0 rgba(40, 20, 2, 0.6);
+  background: rgba(62, 36, 10, 0.62);
+  border: 2px solid rgba(255, 226, 168, 0.4);
+  border-radius: 999px;
+  backdrop-filter: blur(2px);
+}
+
+.home-hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+/* 主入口大按钮:整图素材(文字画在图里),裸按钮只做交互反馈 */
+.hero-btn {
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  filter: drop-shadow(0 8px 12px rgba(60, 30, 5, 0.35));
+  transition: transform 130ms var(--pop), filter 130ms ease;
+}
+
+.hero-btn:hover {
+  transform: scale(1.05);
+  filter: drop-shadow(0 10px 16px rgba(60, 30, 5, 0.4)) brightness(1.06);
+}
+
+.hero-btn:active {
+  transform: scale(0.97) translateY(2px);
+}
+
+.hero-btn img {
+  display: block;
+  width: min(330px, 28vw);
+}
+
+.home-status {
+  margin: 0;
+  padding: 4px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  background: rgba(255, 250, 235, 0.85);
+  border-radius: 999px;
+}
+
+/* 吉祥物立在中央区底部两侧 */
+.stage-mascot {
+  position: absolute;
+  bottom: -6px;
+  z-index: 1;
+  width: min(13vw, 210px);
+  filter: drop-shadow(0 14px 18px rgba(60, 30, 5, 0.35));
+  pointer-events: none;
+}
+
+.stage-mascot.mascot-left {
+  left: 0;
+}
+
+.stage-mascot.mascot-right {
+  right: 0;
+}
+
+/* ===== 功能图标 dock(右缘竖排):图片图标 + 描边字标签 ===== */
+
+.home-dock {
+  position: absolute;
+  top: 50%;
+  right: clamp(12px, 2.5vw, 34px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 2.2vh, 22px);
+  transform: translateY(-50%);
+}
+
+.dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: transform 130ms var(--pop);
+}
+
+.dock-btn:hover {
+  transform: scale(1.1);
+}
+
+.dock-btn:active {
+  transform: scale(0.94);
+}
+
+.dock-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: clamp(60px, 6.2vw, 84px);
+  height: clamp(60px, 6.2vw, 84px);
+  filter: drop-shadow(0 6px 10px rgba(60, 30, 5, 0.35));
+}
+
+.dock-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 直播数角标 */
+.dock-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  color: #fff;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  background: linear-gradient(180deg, #ff8a76, var(--red));
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 2px 0 #c33823;
+}
+
+.dock-label {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-shadow:
+    -1px 0 0 #6b3e0e,
+    1px 0 0 #6b3e0e,
+    0 -1px 0 #6b3e0e,
+    0 2px 0 #6b3e0e,
+    0 4px 6px rgba(0, 0, 0, 0.35);
+}
+
+/* ===== 弹窗内列表(奶油弹窗配暖色卡) ===== */
+
+.leaderboard-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: var(--ink);
+  background: rgba(255, 253, 246, 0.9);
+  border: 2px solid #e8d2a8;
+  border-radius: var(--r-m);
+  box-shadow: 0 3px 0 rgba(139, 94, 42, 0.18);
+}
+
+.leaderboard-rank {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: #9a7350;
+  border-radius: 50%;
+  background: #f5ead2;
+  border: 2px solid #e8d2a8;
+  font-weight: 900;
+}
+
+.leaderboard-rank.is-top {
+  color: #fff;
+  background: linear-gradient(180deg, #ffd54a, #ff9d2e);
+  border-color: #fff;
+  text-shadow: 0 1px 0 rgba(160, 90, 0, 0.5);
+  box-shadow: 0 2px 0 rgba(200, 120, 20, 0.45);
+}
+
+.leaderboard-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid #e8d2a8;
+  object-fit: cover;
+  background: #fff;
+}
+
+.leaderboard-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.leaderboard-name strong {
+  font-size: 15px;
+}
+
+.leaderboard-name span {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.leaderboard-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 62px;
+}
+
+.leaderboard-stat strong {
+  font-size: 14px;
+  color: #c8681f;
+}
+
+.leaderboard-stat span {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.leaderboard-flaw {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #c03e2e;
+  background: rgba(255, 90, 69, 0.14);
+  border: 1px solid rgba(255, 90, 69, 0.4);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 直播房卡 */
+.room-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.room-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 12px;
+  text-align: left;
+  background: rgba(255, 253, 246, 0.9);
+  border: 2px solid #e8d2a8;
+  border-radius: var(--r-m);
+  box-shadow: 0 3px 0 rgba(139, 94, 42, 0.18);
+  transition: transform 110ms var(--pop), box-shadow 110ms ease;
+}
+
+.room-row:hover {
+  border-color: #d99a3e;
+  box-shadow: 0 5px 0 rgba(139, 94, 42, 0.3);
+  transform: translateY(-2px);
+}
+
+.room-row strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.room-copy span {
+  color: #9a7350;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.room-medal {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #fff;
+  background: radial-gradient(circle at 50% 32%, #ff8566, var(--red) 72%);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 900;
+  text-shadow: 0 1px 1px rgba(120, 20, 10, 0.55);
+  box-shadow: 0 2px 0 rgba(150, 35, 18, 0.45);
+}
+
+.room-enter {
+  padding: 6px 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  background: linear-gradient(180deg, #7ede72, #3fae4a);
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 3px 0 rgba(40, 120, 50, 0.45);
+}
+
+/* 最近对局 / 我的战绩 */
+.recent-replays-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recent-replay-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: var(--ink);
+  background: rgba(255, 253, 246, 0.9);
+  border: 2px solid #e8d2a8;
+  border-radius: var(--r-m);
+  box-shadow: 0 3px 0 rgba(139, 94, 42, 0.18);
+}
+
+.recent-replay-players {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recent-replay-player {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.recent-replay-player img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid #e8d2a8;
+  object-fit: cover;
+  background: #fff;
+}
+
+.recent-replay-player.is-landlord {
+  color: #c8681f;
+}
+
+.recent-replay-result {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: #9a7350;
+}
+
+.round-history {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--ink);
+  text-align: left;
+  background: rgba(255, 253, 246, 0.9);
+  border: 2px solid #e8d2a8;
+  border-radius: var(--r-m);
+  box-shadow: 0 3px 0 rgba(139, 94, 42, 0.18);
+  transition: transform 110ms var(--pop);
+}
+
+.history-row:hover {
+  border-color: #d99a3e;
+  transform: translateY(-2px);
+}
+
+.history-row div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.history-row strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.history-row span {
+  overflow: hidden;
+  color: #9a7350;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row em {
+  color: #c8681f;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+/* 弹窗内空态 */
+.empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  margin: 0;
+  padding: 20px 12px;
+  color: #9a7350;
+  font-weight: 800;
+  text-align: center;
+  background: rgba(139, 94, 42, 0.07);
+  border: 2px dashed #d9bd8c;
+  border-radius: var(--r-m);
+}
+
+/* ===== 用户牌(头像 + 昵称,顶栏用):奶油木风 ===== */
+
+.player-plate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px 5px 5px;
+  background: linear-gradient(180deg, var(--cream), var(--cream-2));
+  border: 3px solid var(--wood-2);
+  border-radius: 999px;
+  box-shadow:
+    0 4px 0 var(--wood-3),
+    0 8px 14px rgba(40, 22, 4, 0.25);
+}
+
+.player-plate img {
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--wood-1);
+  border-radius: 50%;
+  object-fit: cover;
+  background: #fff;
+}
+
+.player-plate div {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.player-plate strong {
+  overflow: hidden;
+  max-width: 140px;
+  color: var(--ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-plate span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ===== 建房弹窗:阵容选择(挑战桌 2 席 / 竞技场 3 席共用) ===== */
+
+.section-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.arena-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-seat-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arena-seat-pick img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid rgba(140, 83, 24, 0.45);
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.arena-seat-pick select,
+.arena-effort-pick select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-s);
+  border: 2px solid var(--wood-2);
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.arena-effort-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arena-effort-pick > span {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.arena-create-button {
+  align-self: center;
+  margin-top: 6px;
+}
+
+/* ===== 像素主题:硬边覆写 ===== */
+
+:root[data-theme="pixel"] .home-hero-tagline,
+:root[data-theme="pixel"] .dock-badge,
+:root[data-theme="pixel"] .room-enter,
+:root[data-theme="pixel"] .home-status {
+  border-radius: 4px;
+}
+
+:root[data-theme="pixel"] .dock-icon img,
+:root[data-theme="pixel"] .hero-btn img {
+  image-rendering: pixelated;
+}
+
+/* ===== 窄屏回退:dock 落底横排 ===== */
+
+@media (max-width: 1080px) {
+  .home-dock {
+    top: auto;
+    right: auto;
+    bottom: 12px;
+    left: 50%;
+    flex-direction: row;
+    gap: clamp(16px, 5vw, 34px);
+    transform: translateX(-50%);
+  }
+
+  .home-center {
+    padding-bottom: 110px;
+  }
+
+  .stage-mascot {
+    width: min(22vw, 170px);
+  }
+}
+
+@media (max-width: 720px) {
+  .stage-mascot {
+    display: none;
+  }
+
+  .player-plate strong {
+    max-width: 90px;
+  }
+
+  .home-hero-logo {
+    width: min(280px, 62vw);
+  }
+
+  .hero-btn img {
+    width: min(300px, 74vw);
+  }
+
+  .dock-icon {
+    width: 56px;
+    height: 56px;
+  }
+
+  .dock-label {
+    font-size: 12px;
+  }
+
+  .leaderboard-row,
+  .recent-replay-row {
+    flex-wrap: wrap;
+  }
+}

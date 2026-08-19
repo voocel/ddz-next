@@ -1,8 +1,10 @@
 import { Suspense, lazy, type RefObject } from "react";
+import type { AudioLevels } from "../../audio";
+import type { ThemeId } from "../../theme";
 import { AiDock } from "../components/AiDock";
 import { TableOverlay } from "../components/TableOverlay";
 import type { PhaserTableHandle } from "../../PhaserTable";
-import type { DdzApp } from "../useDdzApp";
+import type { RoomSession } from "../useRoomSession";
 
 const PhaserTable = lazy(async () => {
   const module = await import("../../PhaserTable");
@@ -11,52 +13,51 @@ const PhaserTable = lazy(async () => {
   };
 });
 
-export function TableScreen({
-  app,
-  tableRef,
-  onOpenSettings
-}: {
-  app: DdzApp;
-  tableRef: RefObject<PhaserTableHandle | null>;
-  onOpenSettings: () => void;
-}) {
-  const {
-    session,
-    events,
-    handlePass,
-    handlePlay,
-    selectedReplay,
-    replayStep,
-    theme,
-    audioLevels
-  } = app;
+interface TableScreenProps {
+  readonly room: RoomSession;
+  readonly localPlayerId: string;
+  readonly theme: ThemeId;
+  readonly audioLevels: AudioLevels;
+  readonly tableRef: RefObject<PhaserTableHandle | null>;
+  readonly onLeave: () => void;
+  readonly onOpenSettings: () => void;
+}
 
-  // 牌桌仅在已登录时渲染（App 已据 session 分屏），此处守卫满足类型收窄
-  if (!session) {
-    return null;
-  }
-
+/** 挑战桌实况屏：Phaser 舞台 + DOM 覆盖层 + AI 思考侧栏（回放另走 ReplayScreen） */
+export function TableScreen({ room, localPlayerId, theme, audioLevels, tableRef, onLeave, onOpenSettings }: TableScreenProps) {
   return (
     <main className="table-screen">
       <section className="table-stage">
         <Suspense fallback={<section className="game-host loading-host">加载牌桌</section>}>
           <PhaserTable
             ref={tableRef}
-            events={events}
-            localPlayerId={session.user.id}
-            onPass={handlePass}
-            replay={selectedReplay}
-            replayStep={replayStep}
+            events={room.events}
+            localPlayerId={localPlayerId}
+            onPass={() => room.client.pass()}
+            replay={null}
+            replayStep={0}
             theme={theme}
             audioLevels={audioLevels}
-            onPlay={handlePlay}
+            onPlay={(cards) => room.client.playCards(cards)}
           />
         </Suspense>
 
-        <TableOverlay app={app} tableRef={tableRef} onOpenSettings={onOpenSettings} />
+        <TableOverlay
+          room={room}
+          localPlayerId={localPlayerId}
+          theme={theme}
+          tableRef={tableRef}
+          onLeave={onLeave}
+          onOpenSettings={onOpenSettings}
+        />
       </section>
 
-      <AiDock app={app} />
+      <AiDock
+        thinking={room.thinking}
+        snapshot={room.snapshot}
+        localPlayerId={localPlayerId}
+        onRetryBotTurn={() => room.client.retryBotTurn()}
+      />
     </main>
   );
 }

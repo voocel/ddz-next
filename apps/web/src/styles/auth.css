@@ -1,0 +1,126 @@
+/* ===== 登录页 ===== */
+
+.auth-screen {
+  position: relative;
+  display: grid;
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: 28px;
+  place-items: center;
+  overflow: hidden;
+  background:
+    var(--asset-bg-lobby) center / cover no-repeat,
+    linear-gradient(180deg, var(--sky-1) 0%, var(--sky-2) 52%, var(--grass-2) 52%, var(--grass-3) 100%);
+}
+
+.auth-mascot {
+  position: absolute;
+  bottom: -12px;
+  z-index: 1;
+  width: min(26vw, 280px);
+  filter: drop-shadow(0 18px 20px rgba(50, 28, 4, 0.35));
+}
+
+.auth-mascot.mascot-left {
+  left: clamp(-20px, 4vw, 80px);
+}
+
+.auth-mascot.mascot-right {
+  right: clamp(-20px, 4vw, 80px);
+}
+
+.auth-card {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: min(420px, 100%);
+  gap: 8px;
+  padding: 64px 36px 30px;
+  background: linear-gradient(180deg, var(--cream), var(--cream-2));
+  border: 5px solid var(--wood-2);
+  border-radius: var(--r-l);
+  box-shadow:
+    0 8px 0 var(--wood-3),
+    0 26px 48px rgba(50, 28, 4, 0.4),
+    inset 0 2px 0 rgba(255, 255, 255, 0.8);
+}
+
+.auth-logo {
+  position: absolute;
+  top: -58px;
+  left: 50%;
+  width: min(250px, 70%);
+  transform: translateX(-50%);
+  filter: drop-shadow(0 8px 12px rgba(50, 28, 4, 0.35));
+  animation: gentle-float 3.6s ease-in-out infinite;
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 6px;
+  color: rgba(245, 241, 230, 0.68);
+  font-size: 12px;
+}
+
+.auth-screen .auth-form label {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.auth-screen input {
+  padding: 12px 14px;
+  color: var(--ink);
+  background: #fff;
+  border: 2px solid var(--wood-1);
+  border-radius: var(--r-m);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.auth-screen input:focus {
+  outline: 3px solid rgba(255, 179, 0, 0.45);
+  outline-offset: 0;
+}
+
+.auth-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+  justify-items: stretch;
+}
+
+.form-status {
+  min-height: 18px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.form-status-loading {
+  color: var(--wood-3);
+}
+
+.form-status-success {
+  color: var(--grass-edge);
+}
+
+.form-status-error {
+  color: #b3261e;
+}
+
+@media (max-width: 720px) {
+  .auth-screen {
+    padding: 14px;
+  }
+
+  .auth-mascot {
+    display: none;
+  }
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GameSnapshot } from "@ddz/domain";
-import type { InternalRoomStateResponse, RoomDto, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
+import type { InternalRoomStateResponse, RoomLiveStateEnvelope, RoomStatus } from "@ddz/protocol";
 import type { GameActionClient } from "../../src/api/gameActionClient";
 import type { RoomStatusClient } from "../../src/api/roomStatusClient";
 import { RoomPersistence, RoomPersistenceError } from "../../src/rooms/roomPersistence";
@@ -173,10 +173,6 @@ class FakeRoomStatusClient implements RoomStatusClient {
   readonly claims: { readonly roomCode: string; readonly ownerId: string; readonly ttlMs: number }[] = [];
   readonly claimRefreshes: { readonly roomCode: string; readonly ownerId: string; readonly ttlMs: number }[] = [];
   readonly claimReleases: { readonly roomCode: string; readonly ownerId: string; readonly ttlMs: number }[] = [];
-
-  async createRoom(): Promise<RoomDto> {
-    throw new Error("Not used in these tests.");
-  }
 
   async getRoomState(roomCode: string): Promise<InternalRoomStateResponse> {
     throw new Error(`Not used in these tests: ${roomCode}`);

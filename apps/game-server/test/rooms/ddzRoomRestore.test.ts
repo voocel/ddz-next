@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseBotProviderRegistry } from "@ddz/bot-ai";
 import { GameTable } from "@ddz/domain";
 import type { RoomLiveStateEnvelope } from "@ddz/protocol";
-import { RuleBotBrain } from "../../src/rooms/ruleBotBrain";
 import {
   createRoomFixture,
   restoreEnv,
@@ -166,7 +165,7 @@ describe("DdzRoom crash recovery", () => {
     await third.room.onDispose();
   });
 
-  it("treats BOT_DECISION=llm rooms as AI rooms and allows bot settings updates", async () => {
+  it("treats BOT_DECISION=llm rooms as AI rooms that occupy a battle slot", async () => {
     setEnv("AI_BATTLE_ENABLED", "true");
     setEnv("AI_BATTLE_MAX_ACTIVE", "1");
     setEnv("BOT_DECISION", "llm");
@@ -174,16 +173,6 @@ describe("DdzRoom crash recovery", () => {
     const code = "100026";
     const fixture = createRoomFixture(code, stateResponse(code, "open", null), { botRegistry: llmRegistry });
     await fixture.room.onCreate(fixture.options);
-    const client = fixture.bindHumanClient("human-1");
-
-    await fixture.handleCommand(client, {
-      type: "update_bot_settings",
-      provider: "",
-      model: "",
-      reasoningEffort: "off"
-    });
-
-    expect(client.send).toHaveBeenCalledWith("event", expect.objectContaining({ type: "bot_settings_updated" }));
 
     const second = createRoomFixture("100027", stateResponse("100027", "open", null), { botRegistry: llmRegistry });
     await expect(second.room.onCreate(second.options)).rejects.toThrow("AI 对战房间已达上限");
@@ -227,27 +216,6 @@ describe("DdzRoom crash recovery", () => {
     await third.room.onDispose();
   });
 
-  it("rejects bot settings updates in non-AI rooms", async () => {
-    const code = "100021";
-    const fixture = createRoomFixture(code, stateResponse(code, "open", null));
-    await fixture.room.onCreate(fixture.options);
-    const client = fixture.bindHumanClient("human-1");
-
-    await fixture.handleCommand(client, {
-      type: "update_bot_settings",
-      provider: "",
-      model: "",
-      reasoningEffort: "off"
-    });
-
-    expect(client.send).toHaveBeenCalledWith(
-      "event",
-      expect.objectContaining({ type: "command_rejected", reason: "当前房间不支持动态更新 AI 配置。" })
-    );
-    expect(fixture.internals().botBrain).toBeInstanceOf(RuleBotBrain);
-
-    await fixture.room.onDispose();
-  });
 });
 
 /** 真人地主 + 双 bot 的确定性 playing 局面 */

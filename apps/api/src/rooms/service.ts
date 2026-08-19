@@ -19,7 +19,6 @@ export interface CreateRoomInput {
 }
 
 export interface RoomRepository {
-  listOpenRooms(limit: number): Promise<readonly RoomRecord[]>;
   /** 竞技场直播列表：mode='arena' 且 open/playing，按活跃度（updatedAt）倒序 */
   listArenaRooms(limit: number): Promise<readonly RoomRecord[]>;
   findRoomByCode(code: string): Promise<RoomRecord | null>;
@@ -38,13 +37,6 @@ export interface RoomRepository {
 
 export class RoomService {
   constructor(private readonly rooms: RoomRepository) {}
-
-  async listOpenRooms(): Promise<RoomListResponse> {
-    const rooms = await this.rooms.listOpenRooms(20);
-    return {
-      rooms: rooms.map(toRoomDto)
-    };
-  }
 
   async listArenaRooms(): Promise<RoomListResponse> {
     const rooms = await this.rooms.listArenaRooms(20);

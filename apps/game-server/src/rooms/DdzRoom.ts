@@ -16,7 +16,7 @@ import {
 import { GameTable } from "@ddz/domain";
 import { clientCommandSchema, DUPLICATE_SESSION_CLOSE_CODE } from "@ddz/protocol";
 import type { CardId, GameSnapshot, PlayerId, PublicPlay, ReadyResult } from "@ddz/domain";
-import type { ClientCommand, GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
+import type { GameEvent, RoomLiveStateEnvelope } from "@ddz/protocol";
 import type { GameActionClient } from "../api/gameActionClient.js";
 import type { RoomStatusClient } from "../api/roomStatusClient.js";
 import { readPlayerKind, toCardsDto, toPublicPlayDto, toSettlementDto, toSnapshotDto } from "../dto.js";
@@ -26,7 +26,6 @@ import { botTurnDelayMs } from "./botTiming.js";
 import { pickBotNicknames } from "./botNames.js";
 import {
   createBotBrain,
-  resolveBotBrainUpdate,
   resolveDecisionConfig,
   type BotBrainHooks,
   type ResolvedDecision
@@ -44,22 +43,21 @@ import { RoomTurnScheduler } from "./roomTurnScheduler.js";
 import { decideTimeoutAction } from "./timeoutAction.js";
 import { releaseAiBattleSlot, reserveAiBattleSlot } from "./aiBattleSlots.js";
 import {
-  arenaBotNicknames,
   DEFAULT_LLM_BOT_TURN_TIMER_MS,
   DEFAULT_TURN_TIMEOUT_MS,
+  lineupBotNicknames,
   parseRoomCode,
   QUICK_START_BOT_COUNT,
   readArena,
   readArenaIntermissionMs,
-  readArenaLineup,
   readArenaMaxRounds,
   readArenaMaxSpectators,
   readBotCount,
   readBotRetryMaxAttempts,
   readEnvBotReasoningEffort,
   readFixedBotDelayMs,
+  readLineup,
   readLlmBotTurnTimerMs,
-  readMatchBotCount,
   readQuickStart,
   readRoomClaimTtlMs,
   readRoomCode,
@@ -81,10 +79,9 @@ interface RoomCreateOptions extends JoinOptions {
   roomStatusClient: RoomStatusClient;
   gameActionClient: GameActionClient;
   botCount?: number;
-  matchBotCount?: number;
   /** true 建全 AI 竞技场房:3 个 LLM 席位对战,真人只能观战,局间自动推进。 */
   arena?: boolean;
-  /** 竞技场阵容:恰好 3 个 {provider, model}(不可信,逐项经注册表校验,非法即拒绝建房)。 */
+  /** 阵容:竞技场恰好 3 席;非竞技场给出即为挑战桌(1 真人 + 恰好 2 个 LLM 对手)。不可信,逐项经注册表校验,非法即拒绝建房。 */
   lineup?: unknown;
   /** 固定机器人延迟(ms)的测试/CI 逃生阀:设置则用此定值,不设置(undefined)则走 botTiming 的拟真区间 */
   botMoveDelayMs?: number | undefined;
@@ -120,9 +117,9 @@ export class DdzRoom extends Room {
   maxClients = 3;
   private readonly table = new GameTable();
   private readonly tasks = new SerialTaskQueue();
-  // 机器人大脑:onCreate 先按「建房 options + BOT_DECISION env 默认」解析；牌桌内 update_bot_settings 可热替换。
+  // 机器人大脑:onCreate 按「建房 options + BOT_DECISION env 默认」解析,建房即定局(无牌桌内热更)。
   // 决策一律在串行锁外执行(见 BotBrain 契约);选 LLM 但缺 key 直接报错(不回退)。
-  // botBrain 是当前房间级实例;botBrains 按 bot 逐个登记(P1 全部指向同一实例,竞技场将按席位挂不同模型)。
+  // botBrain 是房间级默认实例;botBrains 按 bot 逐个登记(lineup 房按席位挂独立模型大脑)。
   private botBrain: BotBrain = new RuleBotBrain();
   private botModel: ModelRef | null = null;
   private readonly botBrains = new Map<PlayerId, BotBrain>();
@@ -130,7 +127,6 @@ export class DdzRoom extends Room {
   private readonly botIdentities = new Map<PlayerId, ModelRef>();
   private botRegistry: BotProviderRegistry | null = null;
   private botBrainHooks: BotBrainHooks = {};
-  private botSettingsUpdatesEnabled = false;
   private aiBattleSlotReserved = false;
   // 建房时的决策配置(超时/思考强度),竞技场席位大脑与崩溃恢复重建大脑复用。
   private decisionConfig: ResolvedDecision | null = null;
@@ -224,9 +220,12 @@ export class DdzRoom extends Room {
     const registry = options.botRegistry ?? parseBotProviderRegistry(null);
     this.botRegistry = registry;
     const arena = readArena(options.arena);
-    // 竞技场阵容即赛事配置:建房时逐项校验(非法即拒,不回退默认),并禁用牌桌内热更命令。
-    const lineup = arena ? readArenaLineup(options.lineup, registry) : null;
-    this.botSettingsUpdatesEnabled = !arena && usesLlmBotDecision(options);
+    // 阵容即赛事配置,建房时逐项校验(非法即拒,不回退默认):竞技场 3 席全 AI;非竞技场给出 lineup 即挑战桌(2 个 LLM 对手)。
+    const lineup = arena
+      ? readLineup(options.lineup, registry, 3)
+      : options.lineup !== undefined
+        ? readLineup(options.lineup, registry, 2)
+        : null;
     // LLM 决策留证 sink:env 开关默认关;开启时把每手 trace 落成本房间的 JSONL。规则 bot 不产 trace。
     this.traceSink = createLlmTraceSink(process.env, this.roomCode);
     console.info(`[DdzRoom ${this.roomCode}] LLM decision trace: ${this.traceSink.file}`);
@@ -296,10 +295,12 @@ export class DdzRoom extends Room {
         // 全 AI 房:3 个席位按阵容各挂独立大脑;不在建房时 ready,开局走 readyBots 的完整 round_started 链路。
         this.addBots(3, { autoReady: false, lineup });
         this.maxClients = this.spectatorCapacity;
+      } else if (lineup) {
+        // 挑战桌:2 个 LLM 对手按阵容各挂独立大脑并就绪,唯一座位留给建桌真人。
+        this.addBots(lineup.length, { autoReady: true, lineup });
+        this.maxClients = 3 - lineup.length + this.spectatorCapacity;
       } else {
-        const matchBotCount = readMatchBotCount(options.matchBotCount);
-        const botCount =
-          matchBotCount ?? (readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount));
+        const botCount = readQuickStart(options.quickStart) ? QUICK_START_BOT_COUNT : readBotCount(options.botCount);
         this.maxClients = 3 - botCount + this.spectatorCapacity;
         this.addBots(botCount);
       }
@@ -425,8 +426,8 @@ export class DdzRoom extends Room {
   }
 
   private reserveAiBattleSlotIfNeeded(options: RoomCreateOptions): void {
-    // 竞技场(全 LLM 席位)与 LLM 决策房共用同一容量闸门
-    if (!readArena(options.arena) && !usesLlmBotDecision(options)) {
+    // 竞技场(全 LLM 席位)、挑战桌(lineup 对手)与 LLM 决策房共用同一容量闸门
+    if (!readArena(options.arena) && options.lineup === undefined && !usesLlmBotDecision(options)) {
       return;
     }
     reserveAiBattleSlot();
@@ -524,7 +525,6 @@ export class DdzRoom extends Room {
       // 恢复方可能只是普通观众(join options 无 arena 标记),以信封为准还原竞技场语义。
       this.ensureArenaDirector();
       this.autoDispose = false;
-      this.botSettingsUpdatesEnabled = false;
     }
     for (const [playerId, nickname] of Object.entries(state.nicknames)) {
       this.nicknames.set(playerId, nickname);
@@ -830,12 +830,6 @@ export class DdzRoom extends Room {
           this.table.pass(playerId);
           await this.afterPass(playerId);
           break;
-        case "leave_room":
-          client.leave();
-          break;
-        case "update_bot_settings":
-          this.handleBotSettingsUpdate(client, playerId, parsed.data);
-          break;
         case "retry_bot_turn":
           this.handleRetryBotTurn(playerId);
           break;
@@ -855,37 +849,6 @@ export class DdzRoom extends Room {
       throw new Error("只有房间内真人玩家可以重新请求 AI 出牌。");
     }
     this.botController.retryManually();
-  }
-
-  private handleBotSettingsUpdate(
-    client: Client,
-    playerId: PlayerId,
-    update: Extract<ClientCommand, { type: "update_bot_settings" }>
-  ): void {
-    if (!this.botRegistry) {
-      throw new Error("AI 配置更新失败: 服务端模型注册表未初始化。");
-    }
-    const player = this.table.snapshot().players.find((item) => item.id === playerId);
-    if (!player || player.kind !== "human") {
-      throw new Error("AI 配置只能由房间内真人玩家更新。");
-    }
-    if (!this.botSettingsUpdatesEnabled) {
-      throw new Error("当前房间不支持动态更新 AI 配置。");
-    }
-
-    // 语义:替换所有 bot 的大脑与身份(真人房的全部 bot 用同一模型;竞技场房禁用本命令)。
-    const resolved = resolveBotBrainUpdate(update, this.botRegistry, this.botBrainHooks);
-    this.botBrain = resolved.brain;
-    this.botModel = resolved.model;
-    for (const botId of this.botIds) {
-      this.registerBotBrain(botId);
-    }
-    client.send("event", {
-      type: "bot_settings_updated",
-      provider: update.provider,
-      model: update.model,
-      reasoningEffort: update.reasoningEffort
-    } satisfies GameEvent);
   }
 
   private async handleReady(playerId: PlayerId): Promise<void> {
@@ -1126,8 +1089,8 @@ export class DdzRoom extends Room {
     const lineup = opts?.lineup ?? null;
     // 竞技场:开局不在建房时 ready(交给 setupRoom 尾部的 readyBots 走完整 round_started 链路);真人房维持原语义
     const autoReady = opts?.autoReady ?? true;
-    // 昵称:竞技场直接用模型名(观赏性的一部分),真人房生成可辨认的机器人昵称(与房内已有昵称去重)
-    const names = lineup ? arenaBotNicknames(lineup) : pickBotNicknames(botCount, this.nicknames.values());
+    // 昵称:lineup 席位直接用模型名(观赏性的一部分),普通房生成可辨认的机器人昵称(与房内已有昵称去重)
+    const names = lineup ? lineupBotNicknames(lineup) : pickBotNicknames(botCount, this.nicknames.values());
     for (let index = 0; index < botCount; index += 1) {
       const botId = `bot:${this.roomCode}:${index + 1}`;
       this.table.addBot(botId);

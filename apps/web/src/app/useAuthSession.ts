@@ -92,3 +92,6 @@ export function useAuthSession() {
     logout
   };
 }
+
+/** 账号域状态包（api 除外），供 AuthScreen 等以单一道具接收 */
+export type AuthSession = Omit<ReturnType<typeof useAuthSession>, "api">;
